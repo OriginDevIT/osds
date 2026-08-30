@@ -35,32 +35,47 @@ export interface EventTenant {
 }
 
 /**
- * The event envelope. Facts, past tense, immutable - never retracted, only
- * followed by a corrective event. Delivery is at-least-once; adapters dedupe
- * on `id`.
+ * Fields common to every event. Facts, past tense, immutable - never retracted,
+ * only followed by a corrective event. Delivery is at-least-once; adapters
+ * dedupe on `id`.
  */
-export interface OsdsEvent {
+interface BaseEvent {
   /** ULID. Doubles as the idempotency key. */
   readonly id: string;
-  /** `<domain>.<past-tense-verb>`. Permanent - renaming means a new type. */
-  readonly type: EventType;
   /** Schema major version for this event type, not for OSDS as a whole. */
   readonly version: number;
   /** RFC 3339, UTC, millisecond precision. */
   readonly occurred_at: string;
   /** Primary entity. Ordering is guaranteed per `subject`, never globally. */
   readonly subject: string;
-
-  /** Always present except on `tenant.*` events, where the tenant is the subject. */
-  readonly tenant: EventTenant | null;
   readonly actor: EventActor;
   /** Adapter ID that caused this event via a command, or `null` if core-originated. Loop guard. */
   readonly origin: string | null;
   /** Propagates across command -> event -> command chains. */
   readonly trace_id: string;
-
   readonly data: Readonly<Record<string, unknown>>;
 }
+
+/**
+ * Every event except `tenant.*`. The `tenant` block is always present, so
+ * adapters never null-check it.
+ */
+export interface OsdsEvent extends BaseEvent {
+  /** `<domain>.<past-tense-verb>`. Permanent - renaming means a new type. */
+  readonly type: Exclude<EventType, TenantEventType>;
+  readonly tenant: EventTenant;
+}
+
+/**
+ * `tenant.*` events. The tenant is the subject, so the envelope carries no
+ * `tenant` block (§3.3).
+ */
+export interface TenantEvent extends BaseEvent {
+  readonly type: TenantEventType;
+}
+
+/** Either envelope shape - what the adapter runtime delivers to `handle`. */
+export type OsdsAnyEvent = OsdsEvent | TenantEvent;
 
 // ---------------------------------------------------------------------------
 // 3.3 Complete event catalogue
@@ -395,7 +410,7 @@ export interface InboundResult {
 export interface Adapter {
   manifest: AdapterManifest;
   init?(ctx: AdapterContext): Promise<void>;
-  handle(event: OsdsEvent, ctx: AdapterContext): Promise<HandleResult>;
+  handle(event: OsdsAnyEvent, ctx: AdapterContext): Promise<HandleResult>;
   actions?: Record<string, (input: unknown, ctx: AdapterContext) => Promise<unknown>>;
   inbound?(req: InboundRequest, ctx: AdapterContext): Promise<InboundResult>;
   health?(ctx: AdapterContext): Promise<{ ok: boolean; detail?: string }>;
