@@ -14,6 +14,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "typecheck": "tsc --build --force",
+    "migrate:dev": "pnpm --filter @osds/db migrate",
+    "db:codegen": "pnpm --filter @osds/db codegen",
     "infra:up": "docker compose up -d",
     "infra:down": "docker compose down",
     "infra:reset": "docker compose down -v && docker compose up -d"

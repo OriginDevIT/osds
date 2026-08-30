@@ -1,4 +1,4 @@
 {
   "files": [],
-  "references": [{ "path": "packages/adapter-kit" }]
+  "references": [{ "path": "packages/adapter-kit" }, { "path": "packages/db" }]
 }
