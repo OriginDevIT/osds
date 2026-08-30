@@ -22,6 +22,22 @@ extensions available on disk. The bundled `postgis/postgis` image
 The runner applies the whole batch in one transaction — a failure rolls back
 cleanly.
 
+## Dev seed
+
+    pnpm --filter @osds/db seed         # after `migrate`
+
+`src/seed.ts` populates one worked directory (`chicago-plumbers`, mode
+`single`) for local development and DB-backed tests: three tiers, six
+categories, twenty listings across four real Chicago localities with real
+lat/lon, and seven entitlements — one per row of the spec §6.5 rendering table
+(`active`, `trialing`, `past_due`, `grace`, `expired`, `canceled`, `comped`) —
+plus one `featured` slot pool (capacity 3, two slots occupied). It connects as
+the **table owner** via `DATABASE_URL_ADMIN` so forced RLS is not in the way.
+
+Every id is a fixed, deterministic ULID and every write is an upsert, so the
+seed is **idempotent** — re-running converges on the same rows and never
+duplicates (only `updated_at` advances). It writes nothing to `outbox`.
+
 ## Generated types
 
     pnpm --filter @osds/db codegen      # writes src/schema.ts from a migrated DB

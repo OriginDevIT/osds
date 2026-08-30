@@ -10,6 +10,7 @@
     "build": "tsc -b",
     "dev": "tsc -b --watch",
     "migrate": "tsx src/migrate.ts",
+    "seed": "tsx src/seed.ts",
     "codegen": "kysely-codegen --dialect postgres --out-file src/schema.ts"
   },
   "dependencies": {
