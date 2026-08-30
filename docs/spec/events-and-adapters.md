@@ -14,7 +14,9 @@ If you are implementing the paid tiers, section 5 is the whole job.
 - **§3.3 added: the complete event catalogue.** v0.3 restructured section 3 and in doing so lost the per-group event tables for `claim.*`, `billing.*`, `lead.*`, `call.*`, `moderation.*`, `compliance.*`, `agent.*`, `tenant.*`, `import.*` and `postal.*`, along with six of the ten `listing.*` events. §3.3 is now the single canonical list of every event type OSDS emits. Detailed payloads remain in their behavioural sections; §3.3 is the index and the source of truth for the type union.
 - `listing.owner_assigned` restored to the catalogue.
 - `listing.claimed` is **not** an event. It appeared only in the v0.2 envelope example and was never in a catalogue. The real sequence is `claim.approved` followed by `listing.owner_assigned`.
-- Section numbering below §3 is unchanged from v0.3 apart from the insertion of §3.3, so existing references in `CLAUDE.md` remain valid.
+- Section numbering below §3 shifted by one. Core entities moved 3→4,
+  reviews 4→5, entitlements 5→6, commands 6→7, adapter interface 7→8,
+  claim verification 8→9. The data-source position is now §4.1.1.
 
 ---
 

@@ -111,7 +111,7 @@ The bar for escalating is low on purpose.
 
 **Data-source connector proposed:**
 
-> Thanks for taking the time to build this. OSDS deliberately ships no connectors to external listing datasets - the reasoning is in `docs/spec/` §3.1.1 and `CONTRIBUTING.md`. It is a legal and design position rather than a gap in the roadmap, so this is not something we can merge. The import paths we do support are CSV upload, owner submission, and the write API, and improvements to any of those are very welcome.
+> Thanks for taking the time to build this. OSDS deliberately ships no connectors to external listing datasets - the reasoning is in `docs/spec/` §4.1.1 and `CONTRIBUTING.md`. It is a legal and design position rather than a gap in the roadmap, so this is not something we can merge. The import paths we do support are CSV upload, owner submission, and the write API, and improvements to any of those are very welcome.
 
 **Escalating:**
 
