@@ -14,7 +14,7 @@ from a single installation. Deploy with Docker.
 ## What it deliberately does not do
 OSDS ships no connectors to any external listing dataset. No scrapers, no imports
 from mapping providers, no plugin hook for one. The operator is responsible for the
-listings they publish. See `docs/spec/events-and-adapters.md` §3.1.1.
+listings they publish. See `docs/spec/events-and-adapters.md` §4.1.1.
 
 ## Documentation
 - [Specification](docs/spec/events-and-adapters.md)
