@@ -19,6 +19,7 @@
     "infra:reset": "docker compose down -v && docker compose up -d"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^26.4.0",
     "eslint": "^10.9.1",
     "prettier": "^3.3.0",
