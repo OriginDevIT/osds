@@ -15,7 +15,7 @@ every table carries `tenant_id`, and events are immutable past-tense facts.
 OSDS will not accept contributions that import listings from external datasets -
 mapping providers, scrapers, or a plugin interface enabling either. This is a legal
 and design position, not a roadmap gap. Reasoning in `docs/spec/events-and-adapters.md`
-§3.1.1. Supported population paths are manual entry, CSV upload, owner submission,
+§4.1.1. Supported population paths are manual entry, CSV upload, owner submission,
 and the write API; improvements to those are very welcome.
 
 ## Automation
