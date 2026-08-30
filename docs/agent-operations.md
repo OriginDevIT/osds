@@ -2,7 +2,7 @@
 
 Governs the Claude Code instance operating on this repository. This file is the authority on what the agent may do without a human. It is maintained by humans; the agent may not edit it.
 
-**Kill switch:** remove the `agent:enabled` repository variable. All automation halts. Any maintainer may do this without discussion or justification.
+**Kill switch:** remove the `AGENT_ENABLED` repository variable. All automation halts. Any maintainer may do this without discussion or justification.
 
 ---
 
