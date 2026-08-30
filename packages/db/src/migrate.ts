@@ -4,9 +4,14 @@
  * (DATABASE_URL_ADMIN, falling back to DATABASE_URL for single-URL setups).
  *
  *   pnpm --filter @osds/db migrate      # or, from the repo root: pnpm migrate:dev
+ *
+ * Loads the repo-root .env first, so it works from a clean shell with nothing
+ * exported. A real environment (CI, production) sets the vars directly and
+ * needs no .env.
  */
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { loadEnvFile } from "node:process";
 import { pathToFileURL } from "node:url";
 import {
   Kysely,
@@ -16,6 +21,15 @@ import {
   type MigrationProvider,
 } from "kysely";
 import { Pool } from "pg";
+
+// packages/db/src (or dist) -> repo root. Anchored to this file, not the cwd,
+// because `pnpm --filter` runs with the package as the working directory.
+const repoRootEnv = path.resolve(import.meta.dirname, "../../../.env");
+try {
+  loadEnvFile(repoRootEnv);
+} catch {
+  // No .env at the repo root - rely on the ambient environment.
+}
 
 const migrationFolder = path.join(import.meta.dirname, "migrations");
 
