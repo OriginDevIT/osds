@@ -4,7 +4,7 @@ import {
   IllegalTransitionError,
   type EntitlementStatus,
   type EntitlementTrigger,
-} from "./entitlement";
+} from "./entitlement.js";
 
 const ALL_STATUSES: readonly EntitlementStatus[] = [
   "none",

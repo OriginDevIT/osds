@@ -7,7 +7,7 @@
  * and full perks - most failed payments are involuntary - while `grace` and
  * `expired` drop to rank-0.
  */
-import type { EntitlementStatus } from "./entitlement";
+import type { EntitlementStatus } from "./entitlement.js";
 
 /** Whether the tier badge shows. */
 export type BadgeVisibility = "tier" | "none";

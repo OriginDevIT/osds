@@ -11,8 +11,8 @@
  *   Forward-only: no down().
  */
 import { sql } from "kysely";
-import type { MigrationDb } from "./types";
-import { touchUpdatedAt } from "./helpers";
+import type { MigrationDb } from "./types.js";
+import { touchUpdatedAt } from "./helpers.js";
 
 export async function up(db: MigrationDb): Promise<void> {
   await sql`

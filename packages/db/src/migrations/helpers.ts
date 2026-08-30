@@ -1,5 +1,5 @@
 import { sql } from "kysely";
-import type { MigrationDb } from "./types";
+import type { MigrationDb } from "./types.js";
 
 /**
  * Tenant isolation for every table except `tenants`: RLS enabled and forced (so

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolvePublicRender } from "./public-render";
+import { resolvePublicRender } from "./public-render.js";
 
 /** One assertion per row of the §6.5 table. */
 describe("§6.5 public page rendering by state", () => {

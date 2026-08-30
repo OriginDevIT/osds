@@ -1,6 +1,6 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "rootDir": "src", "outDir": "dist" },
-  "references": [{ "path": "../adapter-kit" }],
+  "references": [{ "path": "../adapter-kit" }, { "path": "../db" }],
   "include": ["src/**/*"]
 }
