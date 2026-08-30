@@ -11,6 +11,7 @@ import { Pool } from "pg";
 
 export { sql } from "kysely";
 export type { Kysely } from "kysely";
+export { migrateToLatest, migrationProvider } from "./migrator.js";
 
 /** Build a Kysely instance backed by a `pg` pool. Throws if `DATABASE_URL` is unset. */
 export function createKysely<DB = unknown>(

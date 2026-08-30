@@ -14,7 +14,7 @@
  *   (only once every later migration has been rolled back). Forward-only: no down().
  */
 import { sql } from "kysely";
-import type { MigrationDb } from "./types";
+import type { MigrationDb } from "./types.js";
 
 export async function up(db: MigrationDb): Promise<void> {
   await sql`create extension if not exists postgis`.execute(db);

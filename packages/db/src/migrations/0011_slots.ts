@@ -28,8 +28,8 @@
  *   Forward-only: no down().
  */
 import { sql } from "kysely";
-import type { MigrationDb } from "./types";
-import { enableTenantRls, touchUpdatedAt } from "./helpers";
+import type { MigrationDb } from "./types.js";
+import { enableTenantRls, touchUpdatedAt } from "./helpers.js";
 
 export async function up(db: MigrationDb): Promise<void> {
   await sql`

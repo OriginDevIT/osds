@@ -9,7 +9,7 @@ export {
   type EntitlementTriggerType,
   type EmittedEventType,
   type TransitionResult,
-} from "./entitlement";
+} from "./entitlement.js";
 
 export {
   resolvePublicRender,
@@ -17,4 +17,16 @@ export {
   type BadgeVisibility,
   type PerkLevel,
   type OwnerNotice,
-} from "./public-render";
+} from "./public-render.js";
+
+export {
+  handleCommand,
+  CommandRejected,
+  validationProblem,
+  scopeProblem,
+  parseCommand,
+  type ParsedCommand,
+  type PaymentOutcome,
+  type CommandContext,
+  type IdFactory,
+} from "./command/index.js";
