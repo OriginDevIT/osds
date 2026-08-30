@@ -692,12 +692,16 @@ export type HandleResult =
 export interface Adapter {
   manifest: AdapterManifest;
   init?(ctx: AdapterContext): Promise<void>;
-  handle(event: OsdsEvent, ctx: AdapterContext): Promise<HandleResult>;
+  handle(event: OsdsAnyEvent, ctx: AdapterContext): Promise<HandleResult>;
   actions?: Record<string, (input: unknown, ctx: AdapterContext) => Promise<unknown>>;
   inbound?(req: InboundRequest, ctx: AdapterContext): Promise<InboundResult>;
   health?(ctx: AdapterContext): Promise<{ ok: boolean; detail?: string }>;
 }
 ```
+
+`OsdsAnyEvent` is `OsdsEvent | TenantEvent`. `tenant.*` events carry no
+`tenant` block, so the envelope is split rather than making `tenant`
+nullable on every event.
 
 ### 8.1 Config and secrets hierarchy
 
