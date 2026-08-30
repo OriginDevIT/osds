@@ -1,4 +1,4 @@
-# OSDS — Open Source Directory Site
+# OSDS - Open Source Directory Site
 Self-hostable, multi-tenant directory website system. Run one directory or fifty
 from a single installation. Deploy with Docker.
 
