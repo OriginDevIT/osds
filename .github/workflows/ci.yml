@@ -9,6 +9,22 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: osds
+          POSTGRES_PASSWORD: osds
+          POSTGRES_DB: osds
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U osds"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -19,3 +35,6 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+        env:
+          # The DB-backed suites create a per-run scratch database from here.
+          OSDS_TEST_DATABASE_URL: postgresql://osds:osds@localhost:5432/postgres
