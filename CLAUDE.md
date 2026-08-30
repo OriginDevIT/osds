@@ -1,14 +1,19 @@
 # CLAUDE.md
+
 Guidance for Claude Code working in this repository. Read this before acting.
 
 ## What this is
+
 OSDS (Open Source Directory Site) is a self-hostable, multi-tenant directory website system. An operator installs it, defines one or more directories, populates listings, and sells upgraded placements. It integrates with outside systems - CRMs, payment providers, mail, SMS - through adapters, and functions fully with none of them beyond the bundled defaults.
 
 Apache-2.0. Steward: Origin Development & IT, Inc.
 
 **The specification is authoritative.** `docs/spec/` holds the current spec. When code and spec disagree, the spec wins unless a maintainer says otherwise in writing. If you believe the spec is wrong, open an issue proposing a change - do not resolve the contradiction in code.
 
+**Decisions in `docs/decisions.md` are settled.** Read it before proposing an architectural change. Reopening a decision requires new information, not a fresh opinion — argue it in an issue, don't relitigate in code.
+
 ## Non-negotiable invariants
+
 These are architectural commitments, not preferences. A change that violates one of these gets rejected regardless of how well it is written. If you are reviewing a PR, check these first.
 
 1. **Core never imports adapter code.** No vendor name - `stripe`, `gohighlevel`, `twilio` - may appear anywhere under `packages/core/`. Not in an import, not in a conditional, not in a type name. Core knows capability names only.
@@ -23,6 +28,7 @@ These are architectural commitments, not preferences. A change that violates one
 10. **Agent permissions are enforced by scope, not by prompt.** If a restriction on AI agents exists only in prompt text, it is not implemented.
 
 ## Repository layout
+
 ```
 packages/core/          Domain logic, entitlement engine, event emission, command validation
 packages/api/           HTTP surface: public API, admin API, adapter inbound routes
@@ -41,6 +47,7 @@ docs/adapters/          Adapter authoring guide
 An adapter directory may not import from `packages/core/` directly. It imports `packages/adapter-kit/` only.
 
 ## Conventions
+
 - TypeScript, strict mode. No `any` without a comment explaining why.
 - ULIDs for all IDs, prefixed by entity: `listing_`, `claim_`, `ent_`, `slot_`.
 - Timestamps are RFC 3339, UTC, millisecond precision. Store as `timestamptz`.
@@ -51,6 +58,7 @@ An adapter directory may not import from `packages/core/` directly. It imports `
 - Conventional Commits. `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`.
 
 ## Before writing code
+
 Ask three questions:
 
 1. **Does this belong in core or an adapter?** If it names a vendor, it is an adapter. If it defines a rule, it is core.
@@ -58,6 +66,7 @@ Ask three questions:
 3. **What event does this emit?** State changes that other systems care about emit events. If you cannot name the event, the design is probably incomplete.
 
 ## Commands
+
 ```bash
 pnpm install
 pnpm dev              # app + worker + postgres + minio via compose
@@ -72,6 +81,7 @@ pnpm adapter:verify   # run the conformance suite against an adapter
 Run `pnpm typecheck` and `pnpm test` before proposing any change. Do not open a PR that fails either.
 
 ## What requires a human
+
 Do not do these autonomously. Prepare the work, then stop and ask:
 
 - Anything touching `.github/workflows/`, CI configuration, or repository settings
@@ -86,4 +96,5 @@ Do not do these autonomously. Prepare the work, then stop and ask:
 Full policy in `docs/agent-operations.md`. Read it before acting on issues or PRs.
 
 ## Tone in public
+
 You are a visible participant in an open project. Be brief, concrete, and warm. Say what you checked and what you found. When declining something, cite the section that governs it and thank the person for the contribution. Never be curt with a first-time contributor, and never imply a maintainer decision you have not been given.
