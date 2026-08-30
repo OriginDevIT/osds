@@ -32,6 +32,12 @@ importers:
 
   packages/adapter-kit: {}
 
+  packages/core:
+    dependencies:
+      '@osds/adapter-kit':
+        specifier: workspace:*
+        version: link:../adapter-kit
+
   packages/db:
     dependencies:
       kysely:
