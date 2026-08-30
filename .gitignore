@@ -18,7 +18,9 @@ pnpm-debug.log*
 .uploads/
 
 .vscode/*
-!.vscode/settings.json
 !.vscode/extensions.json
 !.vscode/launch.json
 .idea/
+
+CLAUDE.local.md
+.claude/settings.local.json
