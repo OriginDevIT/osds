@@ -28,7 +28,6 @@ const stored: Listing = {
   slug: "hoffman-plumbing-lakeview",
   name: "Hoffman Plumbing",
   description: "Emergency plumbing in Lakeview.",
-  categories: ["plumbers", "emergency-plumbers"],
   location: {
     address_line1: "1422 W Belmont Ave",
     address_line2: null,
@@ -65,7 +64,6 @@ describe("listing.upsert - create", () => {
       command({
         slug: "acme-plumbing",
         name: "  Acme Plumbing  ",
-        categories: ["plumbers", "plumbers"],
         contact: { email: "HELLO@ACME.EXAMPLE", phone_e164: "+13125550188" },
       }),
       null,
@@ -89,7 +87,6 @@ describe("listing.upsert - create", () => {
       slug: "acme-plumbing",
       name: "Acme Plumbing",
       description: null,
-      categories: ["plumbers"],
       location: {
         address_line1: null,
         address_line2: null,
@@ -129,7 +126,6 @@ describe("listing.upsert - create", () => {
           slug: "acme-plumbing",
           name: "Acme",
           description: null,
-          categories: [],
           location: {
             address_line1: null,
             address_line2: null,
@@ -166,7 +162,6 @@ describe("listing.upsert - update", () => {
       command({
         slug: "hoffman-plumbing-lakeview",
         name: "Hoffman Plumbing & Heating",
-        categories: ["plumbers", "hvac"],
         location: { address_line2: "Suite 200", geo_precision: "street" },
       }),
       stored,
@@ -184,7 +179,6 @@ describe("listing.upsert - update", () => {
     expect(ok.event.type).toBe("listing.updated");
     expect(ok.event.subject).toBe(stored.id);
     expect(ok.event.data.changes).toEqual([
-      { op: "replace", path: "/categories", value: ["plumbers", "hvac"] },
       { op: "replace", path: "/location/address_line2", value: "Suite 200" },
       { op: "replace", path: "/location/geo_precision", value: "street" },
       { op: "replace", path: "/name", value: "Hoffman Plumbing & Heating" },
@@ -302,6 +296,24 @@ describe("listing.upsert - rejections", () => {
       command({ slug: "acme", name: "Acme", tier: null }),
       null,
     );
+    expect(res.outcome).toBe("rejected");
+  });
+
+  it("rejects a payload carrying categories (issue #42)", () => {
+    const res = handleListingUpsert(
+      command({ slug: "acme", name: "Acme", categories: ["plumbers"] }),
+      null,
+    );
+    expect(res.outcome).toBe("rejected");
+    if (res.outcome !== "rejected") throw new Error("unreachable");
+    expect(res.problem.status).toBe(422);
+    expect(res.problem.errors).toEqual([
+      "payload.categories is not accepted - core does not write listing_categories yet (issue #42)",
+    ]);
+  });
+
+  it("rejects categories even on an update against an existing listing", () => {
+    const res = handleListingUpsert(command({ categories: [] }), stored);
     expect(res.outcome).toBe("rejected");
   });
 

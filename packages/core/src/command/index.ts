@@ -1,11 +1,12 @@
-export { handleCommand } from "./handle.js";
+// The DB-touching handlers (handleCommand, persist*) and their CommandContext
+// live under "@osds/core/persist" so the root entrypoint stays free of kysely
+// and pg - see issue #26 and src/persist/index.ts.
 export { CommandRejected, validationProblem, scopeProblem } from "./problem.js";
 export {
   parseCommand,
   type ParsedCommand,
   type PaymentOutcome,
 } from "./validate.js";
-export type { CommandContext, IdFactory } from "./context.js";
 export {
   handleListingUpsert,
   withSubject,

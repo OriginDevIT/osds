@@ -11,6 +11,10 @@ export default defineConfig({
     // DB-backed suites create a scratch database and run every migration in a hook.
     hookTimeout: 60_000,
     testTimeout: 20_000,
+    // Run test files serially. Two suites migrating scratch databases at once
+    // race on the shared cluster-global `osds_app` role that migration 0013
+    // creates and grants ("tuple concurrently updated").
+    fileParallelism: false,
   },
   resolve: {
     // Resolve workspace packages to their source, so tests run against current

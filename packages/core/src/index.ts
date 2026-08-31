@@ -1,5 +1,9 @@
 /**
  * @osds/core - domain logic. Pure, no I/O.
+ *
+ * The DB-backed command layer (handleCommand, persistListingUpsert, ...) is
+ * exported from "@osds/core/persist", not here: this entrypoint must not pull
+ * kysely or pg into a consumer's bundle (issue #26).
  */
 export {
   transition,
@@ -20,15 +24,12 @@ export {
 } from "./public-render.js";
 
 export {
-  handleCommand,
   CommandRejected,
   validationProblem,
   scopeProblem,
   parseCommand,
   type ParsedCommand,
   type PaymentOutcome,
-  type CommandContext,
-  type IdFactory,
   handleListingUpsert,
   withSubject,
   jsonPatch,
