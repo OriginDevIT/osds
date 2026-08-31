@@ -214,12 +214,15 @@ function claimant(email: string, name = "Dana Hoffman") {
       });
     }
 
-    async function listingStatus(tenantId: string, id: string) {
+    async function listingRow(tenantId: string, id: string) {
       return asTenant(tenantId, async (trx) => {
-        const res = await sql<{ status: string }>`
-        select status from listings where id = ${id}
+        const res = await sql<{
+          status: string;
+          owner_user_id: string | null;
+        }>`
+        select status, owner_user_id from listings where id = ${id}
       `.execute(trx);
-        return res.rows[0]?.status ?? null;
+        return res.rows[0] ?? null;
       });
     }
 
@@ -416,7 +419,11 @@ function claimant(email: string, name = "Dana Hoffman") {
       expect(claimAfter.decided_by).toBe("usr_admin_4");
       expect(claimAfter.decided_at).not.toBeNull();
 
-      expect(await listingStatus("tnt_a", "listing_s4")).toBe("claimed");
+      // Ownership is projected onto the listing (issue #45).
+      expect(await listingRow("tnt_a", "listing_s4")).toEqual({
+        status: "claimed",
+        owner_user_id: ownerUserId,
+      });
     });
 
     it("replay: a two-event command re-runs to a single duplicate, writing nothing", async () => {
@@ -477,9 +484,12 @@ function claimant(email: string, name = "Dana Hoffman") {
       return [claims[0]!.id, claims[1]!.id];
     }
 
-    it("approve: a second claim on a now-owned listing is rejected (§9.4)", async () => {
+    it("approve: a second claim on a now-owned listing is rejected (§9.4), owner untouched", async () => {
       await seedUser("usr_admin_6", "tnt_a", "admin6@x.example", "Admin Six");
       const [c1, c2] = await twoClaimsOnListing("listing_s6", "hoffman-6");
+      const sittingOwner = (await claimsForListing("tnt_a", "listing_s6")).find(
+        (c) => c.id === c1,
+      )!.claimant_user_id;
 
       const r1 = await persistClaimApprove(
         db,
@@ -504,7 +514,12 @@ function claimant(email: string, name = "Dana Hoffman") {
         claims.filter((c) => c.status === "approved").map((c) => c.id),
       ).toEqual([c1]);
       expect(claims.find((c) => c.id === c2)!.status).toBe("verifying");
-      expect(await listingStatus("tnt_a", "listing_s6")).toBe("claimed");
+
+      // The rejected approval leaves the sitting owner in place.
+      expect(await listingRow("tnt_a", "listing_s6")).toEqual({
+        status: "claimed",
+        owner_user_id: sittingOwner,
+      });
 
       const assigned = (await outboxBySubject("tnt_a", "listing_s6")).filter(
         (e) => e.type === "listing.owner_assigned",
@@ -532,8 +547,14 @@ function claimant(email: string, name = "Dana Hoffman") {
       expect([r1.status, r2.status].sort()).toEqual(["approved", "rejected"]);
 
       const claims = await claimsForListing("tnt_a", "listing_s7");
+      const winner = claims.find((c) => c.status === "approved")!;
       expect(claims.filter((c) => c.status === "approved")).toHaveLength(1);
-      expect(await listingStatus("tnt_a", "listing_s7")).toBe("claimed");
+
+      // The listing's owner is exactly the one winning claim's claimant.
+      expect(await listingRow("tnt_a", "listing_s7")).toEqual({
+        status: "claimed",
+        owner_user_id: winner.claimant_user_id,
+      });
 
       const assigned = (await outboxBySubject("tnt_a", "listing_s7")).filter(
         (e) => e.type === "listing.owner_assigned",

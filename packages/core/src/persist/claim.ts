@@ -32,9 +32,11 @@
  * verification alone never moves ownership from a sitting owner: if an approved
  * claim already exists for the listing (or the listing is `claimed` with no
  * approved claim to explain it), the command is rejected and no
- * `listing.owner_assigned` is emitted. There is still no first-class owner
- * column on `listings` (schema, not this pass) - the approved `claims` row is
- * the record of ownership; `listing.status = 'claimed'` is its shadow.
+ * `listing.owner_assigned` is emitted. On success it writes
+ * `listings.owner_user_id` alongside `status = 'claimed'` (issue #45, migration
+ * 0015); the §9.4 check still reads the approved `claims` row via
+ * {@link approvedClaimFor}, not this column - that the two agree is asserted
+ * separately, not assumed here.
  *
  * Claim events carry no JSON Patch, so there is no path->column mapping to fail
  * the way listing-upsert's does; the loud-failure discipline survives as the
@@ -283,10 +285,12 @@ async function applyApprove(
     where tenant_id = ${command.tenant_id} and id = ${approved.data.claim.id}
   `.execute(trx);
 
-  // listing.owner_assigned: the listing is now claimed. Owner identity is the
-  // approved claim's claimant (carried on the event as owner_user_id).
+  // listing.owner_assigned: the listing is now claimed and owned by the
+  // approved claim's claimant (issue #45). Both columns in one UPDATE, on the
+  // row already held under the FOR UPDATE lock.
   await sql`
-    update listings set status = 'claimed'
+    update listings
+      set status = 'claimed', owner_user_id = ${assigned.data.owner_user_id}
     where tenant_id = ${command.tenant_id} and id = ${assigned.subject}
   `.execute(trx);
 
