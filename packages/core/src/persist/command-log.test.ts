@@ -12,10 +12,8 @@
  *
  * Skips cleanly when no database is reachable.
  */
-import { randomUUID } from "node:crypto";
-import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createKysely, migrateToLatest, sql } from "@osds/db";
+import { createKysely, sql } from "@osds/db";
 import type { OsdsCommand } from "@osds/adapter-kit";
 import type { ClaimMethod } from "../command/claim.js";
 import {
@@ -24,38 +22,18 @@ import {
   persistListingUpsert,
   type PersistDeps,
 } from "./index.js";
+import {
+  adminUrl,
+  createScratchDb,
+  dropScratchDb,
+  pgReachable,
+  type ScratchDb,
+} from "./scratch-db.js";
 
-const ADMIN_URL =
-  process.env.OSDS_TEST_DATABASE_URL ??
-  process.env.DATABASE_URL_ADMIN ??
-  "postgresql://osds:osds_dev_only@localhost:5432/postgres";
-const APP_URL =
-  process.env.DATABASE_URL ??
-  "postgresql://osds_app:osds_dev_only@localhost:5432/osds";
-
-const scratchName = `osds_cmdlog_test_${randomUUID().replace(/-/g, "")}`;
-const withDb = (url: string): string => {
-  const u = new URL(url);
-  u.pathname = `/${scratchName}`;
-  return u.toString();
-};
-const scratchAdminUrl = withDb(ADMIN_URL);
-const scratchAppUrl = withDb(APP_URL);
-
-async function pgReachable(): Promise<boolean> {
-  const client = new Client({ connectionString: ADMIN_URL });
-  try {
-    await client.connect();
-    await client.end();
-    return true;
-  } catch {
-    return false;
-  }
-}
 const available = await pgReachable();
 if (!available) {
   console.warn(
-    `[persist/command-log.test] Postgres not reachable at ${ADMIN_URL} - skipping`,
+    `[persist/command-log.test] Postgres not reachable at ${adminUrl()} - skipping`,
   );
 }
 
@@ -97,6 +75,7 @@ const SELECT_LOG = sql`
 `;
 
 (available ? describe : describe.skip)("command log (real Postgres)", () => {
+  let scratch: ScratchDb;
   let db: ReturnType<typeof createKysely>; // osds_app pool
   let owner: ReturnType<typeof createKysely>; // admin - seeding + owner reads
 
@@ -190,31 +169,22 @@ const SELECT_LOG = sql`
   }
 
   beforeAll(async () => {
-    const admin = new Client({ connectionString: ADMIN_URL });
-    await admin.connect();
-    await admin.query(`create database ${scratchName}`);
-    await admin.end();
+    scratch = await createScratchDb();
 
-    const { error } = await migrateToLatest(scratchAdminUrl);
-    if (error) throw error;
-
-    owner = createKysely(scratchAdminUrl);
+    owner = createKysely(scratch.ownerUrl);
     await sql`
       insert into tenants (id, slug, name) values
         ('tnt_a', 'tenant-a', 'Tenant A'),
         ('tnt_b', 'tenant-b', 'Tenant B')
     `.execute(owner);
 
-    db = createKysely(scratchAppUrl);
+    db = createKysely(scratch.appUrl);
   });
 
   afterAll(async () => {
     await db?.destroy();
     await owner?.destroy();
-    const admin = new Client({ connectionString: ADMIN_URL });
-    await admin.connect();
-    await admin.query(`drop database if exists ${scratchName} with (force)`);
-    await admin.end();
+    if (scratch) await dropScratchDb(scratch.name);
   });
 
   it("created: logs the attempt and concludes it", async () => {
