@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { resolvePublicRender } from "@osds/core";
 import { resolveTenantId } from "../../lib/tenant";
 import { getCategoryPage } from "../../lib/category";
+import { ListingRow } from "../../components/listing-row";
 
 // Depends on the Host header and a per-request database read - never prerendered.
 export const dynamic = "force-dynamic";
@@ -19,18 +20,14 @@ export default async function CategoryPage({ params }: PageProps) {
   const page = await getCategoryPage(tenantId, category);
   if (page === null) notFound();
 
-  // §6.5: the resolver owns featured placement and badge visibility. We only
-  // read its answer - featuredPlacement to group, badge to decide the label.
-  const rendered = page.listings.map((listing) => ({
-    listing,
-    render: resolvePublicRender(listing.entitlementStatus),
-  }));
-
-  // Featured placement first, then the rest. `page.listings` is already
-  // name-ordered, so each group stays alphabetical.
+  // §6.5: featured placement first, then the rest. `page.listings` is already
+  // name-ordered, so each group stays alphabetical. ListingRow calls the same
+  // resolver again for the badge.
+  const isFeatured = (status: (typeof page.listings)[number]["entitlementStatus"]) =>
+    resolvePublicRender(status).featuredPlacement;
   const ordered = [
-    ...rendered.filter((r) => r.render.featuredPlacement),
-    ...rendered.filter((r) => !r.render.featuredPlacement),
+    ...page.listings.filter((l) => isFeatured(l.entitlementStatus)),
+    ...page.listings.filter((l) => !isFeatured(l.entitlementStatus)),
   ];
 
   return (
@@ -41,13 +38,14 @@ export default async function CategoryPage({ params }: PageProps) {
         <p>No listings.</p>
       ) : (
         <ul>
-          {ordered.map(({ listing, render }) => (
-            <li key={listing.slug}>
-              <a href={`/${category}/${listing.slug}`}>{listing.name}</a>
-              {render.badge === "tier" && listing.tier !== null ? (
-                <span> {listing.tier}</span>
-              ) : null}
-            </li>
+          {ordered.map((listing) => (
+            <ListingRow
+              key={listing.slug}
+              href={`/${category}/${listing.slug}`}
+              name={listing.name}
+              entitlementStatus={listing.entitlementStatus}
+              tier={listing.tier}
+            />
           ))}
         </ul>
       )}
