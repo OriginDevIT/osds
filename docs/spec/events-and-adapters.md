@@ -629,6 +629,74 @@ Derive `idempotency_key` from the external system's identifiers so a webhook red
 
 **Every command is logged, including rejected and blocked ones** (§11.2).
 
+### 7.1 `listing.upsert`
+
+The write path for every population route in §4.1.1 — manual entry, CSV import, owner submission, and the write API. One command, one listing.
+
+```jsonc
+{
+  "command": "listing.upsert",
+  "idempotency_key": "csv:imp_01JBQ...:row_412",
+  "tenant_id": "tnt_01JBQ2K9",
+  "adapter_id": null,
+  "trace_id": "01JBQ7X2M4K8ZP3RVN6T9WGYHD",
+  "payload": {
+    "id": "listing_01JBQ...",          // optional — see matching
+    "slug": "hoffman-plumbing-lakeview",
+    "name": "Hoffman Plumbing",
+    "description": null,
+    "categories": ["plumbers", "emergency-plumbers"],
+    "location": { },                    // §4.1, partial
+    "contact": { }                      // §4.1, partial
+  }
+}
+```
+
+#### Matching
+
+`id` when present. Otherwise `(tenant_id, slug)`. **There is no third rule** — no fuzzy name match, no address heuristic, no `external_profiles` lookup. A caller wanting a different identity rule resolves it to an `id` before sending the command.
+
+`slug` is unique per tenant, not globally. The same slug in two tenants is two listings.
+
+Dedupe across population routes is a separate concern and belongs to the import pipeline (§4.1.1, §15.5), not to this command.
+
+#### The payload is partial desired state
+
+**An omitted field is left untouched on update and defaulted on create. An explicit `null` clears the field.**
+
+Stated because callers guess otherwise and do not all guess alike. A CSV file carrying only name and phone must not wipe every address it matches.
+
+The consequence belongs to whoever builds a form on top of this: a UI that omits empty inputs can never clear a field. Owner-facing edit surfaces send explicit `null`.
+
+Required on create: `slug`, `name`.
+
+#### Categories
+
+`categories` is an array of category slugs, resolved per tenant. Unknown slugs are rejected rather than created — categories are tenant configuration, not a side effect of a listing write.
+
+#### Rejected fields
+
+`tier` and `status` are refused when the key is present at all, even set to `null`.
+
+| Field | Why | Where it belongs |
+|---|---|---|
+| `tier` | Derived from entitlement | `entitlement.reportPayment`, `entitlement.grant` (§6) |
+| `status` | Moves through the claim flow | `claim.approve` (§9) |
+
+Rejection is a `422` naming the field. Silently ignoring them is worse — the caller believes the write landed.
+
+#### Outcomes
+
+| Outcome | Emits |
+|---|---|
+| Created | `listing.created` |
+| Updated | `listing.updated`, `changes` as a JSON Patch (§3.3) |
+| Unchanged | **Nothing.** An empty patch is not an event — design rule 2 |
+| Rejected | Nothing; `422` |
+| Replay of a seen `idempotency_key` | Nothing; `409` with the original event ID |
+
+An emitted event asserts a change the store made. A patch operation the store cannot apply is an error, not a dropped op.
+
 ---
 
 ## 8. Adapter interface
