@@ -40,22 +40,41 @@ Apache-2.0. Steward: Origin Development & IT, Inc. Repo: `OriginDevIT/osds`.
 | **Custom event envelope, not CloudEvents**                      | CloudEvents requires extension attributes to be lowercase-alphanumeric, producing `oditversion`/`odittenant`. The ugliness signalled a bad fit. Readability for adapter authors beat off-the-shelf routing tooling.                                              |
 | **Agent restrictions are scopes, not prompts**                  | No `command:entitlement`, no `compliance.*`, no deletion, mandatory transcript reference, global kill switch. A restriction that exists only in prompt text is not implemented. Core enforces; the adapter implements the conversation.                          |
 | **Three logs, three retentions**                                | Event log (envelope forever, payload nulled at 90 days), command log (forever, including rejected and blocked), access log (2 years, separate store). The payload is a second copy of personal data — the copy people forget when processing a deletion request. |
+| **`packages/api` is a library, not a server**                   | Next route handlers in `packages/web` call into it. No second HTTP process. §13 describes `osds-app` as one container: web, admin and API. Adapter inbound routes (§8.4) are route handlers like any other.                                                      |
 
 ### Implementation
 
-| Decision                                                                      | Reasoning                                                                                                                                                                                                                                                                                                                                                                                                               |
-| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Kysely + `pg` + hand-written SQL migrations**                               | Not Prisma (PostGIS is second-class, opinionated shadow-DB migrations), not Drizzle (codegen fights PostGIS/exclusion-constraints/FTS more than it helps), not TypeORM. The schema needs generated `tsvector` columns, GiST indexes, `FOR UPDATE SKIP LOCKED`, and RLS — all of which live in raw DDL. `kysely-codegen` derives types from the migrated database, so the database is the single source of schema truth. |
-| **`packages/db` owns schema, migrations, generated types**                    | The worker needs outbox tables without pulling in the entitlement engine.                                                                                                                                                                                                                                                                                                                                               |
-| **`nodenext` module resolution, not `bundler`**                               | `bundler` accepted extensionless relative imports that Node's ESM loader rejects in emitted output. It only surfaced when a test first consumed a sibling package's `dist`. `nodenext` makes TypeScript resolve exactly as Node does.                                                                                                                                                                                   |
-| **Slot allocation: one row per capacity unit, `FOR UPDATE SKIP LOCKED`**      | The row _is_ the lock. N racers each take a distinct row lock or get zero rows and fail fast. READ COMMITTED suffices — no SERIALIZABLE, no retry loop, no deadlock, no blocking between callers. Over-sell is impossible by construction. Rejected: counter columns (serialize a whole pool on one row), advisory locks (same, plus no slot identity), materialize-on-demand (`count(*) < capacity` races).            |
-| **`osds_app` non-owner role**                                                 | RLS is only enforced against a role that is neither the table owner nor `BYPASSRLS`. The app and worker connect as `osds_app` (`DATABASE_URL`); migrations run as the owner (`DATABASE_URL_ADMIN`). Tests that verify RLS as the owner prove nothing.                                                                                                                                                                   |
-| **Composite `(tenant_id, id)` foreign keys**                                  | Cross-tenant references become structurally impossible rather than policy-dependent.                                                                                                                                                                                                                                                                                                                                    |
-| **ULID text primary keys with entity prefixes**                               | `tnt_`, `cat_`, `usr_`, `listing_`, `claim_`, `ent_`, `pool_`, `slot_`, enforced by `starts_with()` CHECKs.                                                                                                                                                                                                                                                                                                             |
-| **Next.js App Router for `packages/web`**                                     | §12 requires server-rendered HTML and the §13 admin UI lands in the same package later. A hand-rolled server plus templates is lighter now and worse in three months. Server components only, no client JS, until something needs it.                                                                                                                                                                                   |
-| **The web layer connects as `osds_app` and sets `app.tenant_id` per request** | Tenancy is enforced by RLS, not by remembering to write a `where` clause. Every route sets the GUC inside the read transaction. Verified cross-tenant per route with a throwaway second tenant carrying colliding slugs.                                                                                                                                                                                                |
-| **No geocoder, ever**                                                         | `near` accepts `lat,lon` only; anything else is a 400. Same posture as §4.1.1 — resolving a postal code or place name to coordinates means shipping or calling a dataset with its own terms. An operator who wants it puts it in front of OSDS.                                                                                                                                                                         |
-| **pnpm overrides live in `pnpm-workspace.yaml`**                              | pnpm 11 no longer reads the `pnpm` field in `package.json`, and warns rather than failing, so an override placed there looks applied and is not.                                                                                                                                                                                                                                                                        |
+| Decision                                                                 | Reasoning                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Kysely + `pg` + hand-written SQL migrations**                          | Not Prisma (PostGIS is second-class, opinionated shadow-DB migrations), not Drizzle (codegen fights PostGIS/exclusion-constraints/FTS more than it helps), not TypeORM. The schema needs generated `tsvector` columns, GiST indexes, `FOR UPDATE SKIP LOCKED`, and RLS — all of which live in raw DDL. `kysely-codegen` derives types from the migrated database, so the database is the single source of schema truth. |
+| **`packages/db` owns schema, migrations, generated types**               | The worker needs outbox tables without pulling in the entitlement engine.                                                                                                                                                                                                                                                                                                                                               |
+| **Persistence lives in `packages/core`, behind `@osds/core/persist`**    | Applying a command atomically is a rule, so it belongs in core — but the root entrypoint must stay free of `kysely`, `pg` and `@osds/db` or `packages/web` bundles a database driver. A separate export path gives both. `handleCommand` moved off the root surface, where it was already leaking the driver.                                                                                                           |
+| **Command handlers are pure; persistence is a thin wrapper**             | The handler takes the current state and returns an outcome plus events. The persist function loads, calls it, and writes. Clock and id factory are injected, never imported, so the pure layer cannot quietly acquire either.                                                                                                                                                                                           |
+| **Multi-event commands stamp `idempotency_key` on the first event only** | The outbox index is unique on `(tenant_id, idempotency_key)`, so two events of one command would collide. A replay finds the first event's id and writes nothing — correct only because the original transaction wrote every event of that command, which is asserted by a test rather than assumed.                                                                                                                    |
+| **An event the store cannot fully apply is not emitted**                 | Design rule 2. An empty JSON Patch returns `unchanged` with no event; an unmapped or non-`replace` patch op throws and rolls back. Both existed as silent drops first, and both produced events asserting changes the database never made.                                                                                                                                                                              |
+| **`nodenext` module resolution, not `bundler`**                          | `bundler` accepted extensionless relative imports that Node's ESM loader rejects in emitted output. It only surfaced when a test first consumed a sibling package's `dist`. `nodenext` makes TypeScript resolve exactly as Node does.                                                                                                                                                                                   |
+| **Slot allocation: one row per capacity unit, `FOR UPDATE SKIP LOCKED`** | The row _is_ the lock. N racers each take a distinct row lock or get zero rows and fail fast. READ COMMITTED suffices — no SERIALIZABLE, no retry loop, no deadlock, no blocking between callers. Over-sell is impossible by construction. Rejected: counter columns, advisory locks, materialize-on-demand.                                                                                                            |
+| **`osds_app` non-owner role**                                            | RLS is only enforced against a role that is neither the table owner nor `BYPASSRLS`. The app and worker connect as `osds_app` (`DATABASE_URL`); migrations run as the owner (`DATABASE_URL_ADMIN`). **A persist function that needs the owner role changes the deployment contract and is wrong.** Tests that verify RLS as the owner prove nothing.                                                                    |
+| **Composite `(tenant_id, id)` foreign keys**                             | Cross-tenant references become structurally impossible rather than policy-dependent. FKs to `tenants` itself are single-column, since `tenants` has no `tenant_id`.                                                                                                                                                                                                                                                     |
+| **ULID text primary keys with entity prefixes**                          | `tnt_`, `cat_`, `usr_`, `listing_`, `claim_`, `ent_`, `pool_`, `slot_`, `cmd_`, enforced by `starts_with()` CHECKs.                                                                                                                                                                                                                                                                                                     |
+
+### The command log
+
+Spec §11.2. Migration 0016.
+
+- **Written before the command transaction opens, concluded after it settles**, each in its own independently-committed transaction. A log written inside a transaction that rolls back is not a log — and a rejected command is precisely the case the log exists for.
+- **A command that throws mid-apply leaves a row with a null outcome.** That is the record, not a gap.
+- **`tenant_id` is nullable — the one exception to invariant 3.** A command with an unresolvable tenant still has to leave a trace. Those rows are written already-concluded and are readable by the owner role only, so the app never needs to read or update one. Tracked for the CLAUDE.md wording in #49.
+- **A concluded row is frozen.** The UPDATE policy requires `concluded_at is null`. An audit trail the application can rewrite is not one.
+- **Written as `osds_app`, not the owner.** The first cut had no INSERT or UPDATE policy and passed CI only because the tests connected as a superuser.
+
+### Ownership
+
+`listings.owner_user_id`, migration 0015: nullable, composite `(tenant_id, owner_user_id)` FK to `users`, `on delete restrict`. Set in the same update that marks the listing claimed, under the existing row lock.
+
+Ownership was previously answerable only by joining `claims where status = 'approved'`, which meant every reader — owner dashboard, public page, `packages/web` — reimplemented that join. The §9.4 guard still reads the claims row deliberately; the two sources must agree and proving that is #48.
+
+**`claim.approve` locks the claim and listing rows and refuses to move ownership from a sitting owner.** Verification alone never transfers (§9.4). Without the lock, two concurrent approvals on one listing both succeeded and the second took the listing.
 
 ### Entitlement behaviour
 
@@ -78,9 +97,9 @@ Apache-2.0. Steward: Origin Development & IT, Inc. Repo: `OriginDevIT/osds`.
 
 - **Manual admin review is the default and always available.** Records `method_used`, `verified_by`, `verified_at`, and mandatory `notes` — an admin who cannot articulate how they verified has not verified.
 - **Phone OTP is the workhorse.** GBP OAuth is strongest but requires a separate approved Google Cloud project **per self-hoster**; optional adapter, never default. Domain email is weak. Postcard is strong for the address, costs the operator ~$1–2 per piece.
-- **Notify every existing contact channel on successful claim.** Catches what verification misses, costs almost nothing.
+- **Notify every existing contact channel on successful claim.** Catches what verification misses, costs almost nothing. `claim.notified_existing_contacts` is emitted by the adapter runtime, not by core.
 - **Mask contact details in the verification UI.** Otherwise the claim flow is a phone-number disclosure endpoint for every listing on the site.
-- **Disputes go to moderation, never auto-transfer.** Verification alone never moves ownership from a sitting owner.
+- **Disputes go to moderation, never auto-transfer.** A second claim on a `claimed` listing returns `disputed`; a claim against a `suspended` or non-existent listing is rejected.
 
 ### Deployment
 
@@ -92,59 +111,43 @@ Docker-first. Four containers: `osds-app`, `osds-worker`, `postgres`, `minio` �
 
 ### Repository
 
-`OriginDevIT/osds`, public, Apache-2.0. Branch protection on `main`: PR required, `build` status check required, force pushes blocked. Required approvals currently **0** — a solo maintainer cannot self-approve (issue #10 restores it to 1 when the agent account is active).
+`OriginDevIT/osds`, public, Apache-2.0. `main` at `33b15dd`. Branch protection on `main`: PR required, `build` status check required, force pushes blocked. Required approvals currently **0** — a solo maintainer cannot self-approve (issue #10 restores it to 1 when the agent account is active).
 
-CI runs `typecheck`, `lint`, `test` on `pull_request` with `permissions: contents: read` and a `postgis/postgis:16-3.4` service container. **`pull_request_target` is never used** — combined with checking out fork code it is the known route to repository compromise.
+CI runs `typecheck`, `lint`, `test` on `pull_request` with `permissions: contents: read` and a `postgis/postgis:16-3.4` service container. **`pull_request_target` is never used.**
 
-The fine-grained PAT is scoped to the `osds` repo and **cannot read Dependabot alerts**; use the browser at `/security/dependabot`.
+CI provides only an owner database URL. `osds_app` is created `NOLOGIN` with no password by migration 0013, so the test helper provisions a throwaway login after migrating — and only when `rolcanlogin` is false, so the suite never resets a cluster-global password it did not set.
 
 ### Packages
 
-| Package                           | State                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/adapter-kit`            | Complete for the current spec. Event envelope (`OsdsEvent`, `TenantEvent`, `OsdsAnyEvent`), 72 event types across 14 namespace unions, command envelope, adapter interface. Types only, zero dependencies                                                                                                                                                                                                                                   |
-| `packages/db`                     | Migrations 0001–0014. Tables: tenants, tiers, categories, listing_categories, users, listings, claims, entitlements, slot_pools, slots, outbox. Forced RLS everywhere except `tenants`, generated `tsvector` (GIN) and `geography` (GiST) on listings, `osds_app` role, outbox with `pg_notify` trigger and idempotency index. Plus `src/seed.ts` — one worked tenant, fixed ULIDs, idempotent, connects as owner, writes nothing to outbox |
-| `packages/core`                   | Entitlement state machine (§6.3) and public-render resolver (§6.5) as pure functions. Command validation layer for `entitlement.reportPayment` and `entitlement.grant`                                                                                                                                                                                                                                                                      |
-| `packages/web`                    | Next.js App Router, server components only, no client JS. Routes `/`, `/[category]`, `/[category]/[slug]`, `/search`. Tenant resolved from the Host header with an `OSDS_DEV_TENANT_SLUG` loopback fallback. One Edge middleware, matcher scoped to `/search`, returning 400 for a malformed `near` param — a server component cannot set an arbitrary status code                                                                          |
-| `packages/api`, `packages/worker` | Not started                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `adapters/*`                      | Not started                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Package                           | State                                                                                                                                                                                                                                         |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/adapter-kit`            | Complete for the current spec. Types only, zero dependencies                                                                                                                                                                                  |
+| `packages/db`                     | Migrations 0001–0016, including `listings.owner_user_id` (0015) and `command_log` (0016)                                                                                                                                                      |
+| `packages/core`                   | Entitlement state machine, public-render resolver, pure command handlers for entitlement, `listing.upsert`, `claim.submit` and `claim.approve`, a hand-written RFC 6902 patch generator, and the persistence layer under `@osds/core/persist` |
+| `packages/web`                    | Next.js App Router, server components only. `/`, `/[category]`, `/[category]/[slug]`, `/search`                                                                                                                                               |
+| `packages/api`, `packages/worker` | Not started. `api` is blocked on the admin auth decision                                                                                                                                                                                      |
+| `adapters/*`                      | Not started                                                                                                                                                                                                                                   |
 
-168 tests passing, including 11 against a real Postgres. **The directory is browsable** — every route renders against seeded data with RLS enforced as `osds_app`, cross-tenant isolation proved per route against a throwaway second tenant carrying colliding category and listing slugs.
+254 tests passing, including the db-backed suites against real Postgres.
 
 ### Spec
 
 `docs/spec/events-and-adapters.md`, currently **v0.4**. Authoritative — where code and spec disagree, the spec wins. Spec edits are a maintainer action, not an agent action.
 
-Section map: §2 envelope · §3 events (3.3 is the canonical catalogue) · §4 core entities · §5 reviews · §6 entitlements · §7 commands · §8 adapter interface · §9 claim verification · §10 GHL reference adapter · §11 transport and logging · §12 search and SEO · §13 deployment · §14 versioning · §15 open.
-
-### Open issues
-
-| #   | Title                                                | Notes                                                                                                                                                                      |
-| --- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 8   | adapter-kit version constant                         | `OSDS_API_VERSION` dropped during re-authoring. Decide when something imports it                                                                                           |
-| 10  | Restore required approvals to 1                      | When the Odin agent account is active                                                                                                                                      |
-| 20  | Clarify CLAUDE.md scope                              | The workflow-edit prohibition is aimed at the autonomous agent, not a supervised local session. Wording does not distinguish them                                          |
-| 26  | `packages/db` entrypoint re-exports migration loader | Evaluates `import.meta.dirname` at import time, so any bundler must externalise it. `packages/web/next.config.mjs` carries an explicit webpack externals function for this |
-| 31  | `search_tsv` uses the `simple` config                | No stemming — "plumber" does not match "Plumbers". Needs a migration; the config should probably be a tenant setting defaulting to `english`                               |
-| 34  | What belongs in `packages/web` middleware            | It exists now. Keep it narrow (status codes) or make it the tenant-resolution layer — deliberately, not by accumulation. Edge runtime, no database access                  |
+Seven open issues are spec gaps this session's code had to decide provisionally: #36, #38, #42, #44, #48, #49, #50. Each names the assumption the code makes and where it should be written down.
 
 ---
 
 ## 4. Next tasks, in order
 
-The browser-visible slice is complete. Toward the claim-and-pay loop:
-
-1. **Command handlers** for `listing.upsert`, `claim.submit`, `claim.approve`. The pattern is set by the existing validation layer; mostly mechanical.
-2. **`packages/api`.** HTTP surface, admin auth, tenant resolution from the host header.
-3. **Outbox consumer in `packages/worker`.** `LISTEN/NOTIFY` with polling fallback, exponential backoff (1s → 1h, 12 attempts), dead-letter queue, 30s handler timeout. **Nothing external fires until this exists.**
-4. **Bundled `smtp` and `webhook` adapters.** Without `smtp`, no claim verification code can be sent, so nobody can claim a listing. `webhook` is the universal escape hatch. Both ship enabled by default. This is also where the adapter runtime gets exercised for the first time.
+1. **Admin auth decision** — blocks `packages/api`. Cookie vs bearer token; deployment-level admin vs per-tenant staff against the same `users` table; password hashing, which is a new runtime dependency and therefore a stop-and-ask. Maintainer decision.
+2. **`packages/api`** — the request-handling library. Tenant resolution from the host header, command dispatch into `@osds/core/persist`, RFC 7807 responses, `409` on idempotency replay.
+3. **Outbox consumer in `packages/worker`.** `LISTEN/NOTIFY` with polling fallback, exponential backoff (1s → 1h, 12 attempts), dead-letter queue, 30s handler timeout. Nothing external fires until this exists.
+4. **Bundled `smtp` and `webhook` adapters.** Without `smtp`, no claim verification code can be sent, so nobody can claim a listing.
 5. **Claim flow end to end** — the first vertical slice touching every layer.
-6. **Slot allocator in `packages/core`**, wrapping the approved `FOR UPDATE SKIP LOCKED` SQL, including hold expiry and the waitlist notification trigger.
-7. **`stripe` adapter and checkout.**
+6. **Slot allocator** wrapping the approved `FOR UPDATE SKIP LOCKED` SQL.
 
-Smaller and unblocked: issue #31 (stemming migration), issue #26 (db entrypoint split), slot placement on the category page, pagination.
-
-Deferred until there is traffic: the Odin repo-watching agent (`docs/agent-operations.md` and the setup guide are written; the account and workflows are not).
+Deferred until there is traffic: the Odin repo-watching agent.
 
 ---
 
@@ -154,8 +157,9 @@ Deferred until there is traffic: the Odin repo-watching agent (`docs/agent-opera
 - `git commit -s` always. DCO is required by `CONTRIBUTING.md`.
 - Conventional Commits. One concern per PR.
 - `pnpm typecheck && pnpm lint && pnpm test` before opening a PR.
+- `gh issue create` takes `--label`; labels are not applied otherwise.
 - Windows/PowerShell 7. Here-strings (`@'...'@ | Set-Content -Encoding utf8`) for file creation — `>` produces UTF-16 and breaks everything downstream.
-- `.prettierignore` excludes `docs/spec/` so the spec does not reformat on save and bury real changes in whitespace churn.
+- `.prettierignore` excludes `docs/spec/` so the spec does not reformat on save.
 - Migrations are forward-only with a rollback note in each header comment.
 - Every entitlement state transition needs a test. That table is where this system rots if it rots.
 
@@ -163,8 +167,10 @@ Deferred until there is traffic: the Odin repo-watching agent (`docs/agent-opera
 
 Prompts must be short — long ones fail to paste. Give it the task, the spec section, and the constraint; let it read the rest.
 
-It reads `CLAUDE.md` automatically. Approve reads individually at first. Do not whitelist `git push`, `docker exec *`, or anything that writes outside the repo.
+**Ask "report, do not change" before accepting any layer that touches roles, locks, or event emission.** Three real bugs this session — a phantom JSON Patch op, a missing listing lock, and a persist layer that silently required the owner role — all surfaced from narrow read-only questions, not from reviewing the diff. None would have been caught by a green test run.
 
-**When it flags a deviation from the spec, take it seriously.** It has twice been right where the spec or the instruction was wrong: the incomplete event union in v0.3, and the claim that v0.4 renumbering left references valid. It correctly refused to invent event names not present in the spec.
+**When it flags a deviation from the spec, take it seriously.** It has been right six times where the spec or the instruction was wrong, and it correctly refuses to invent event names not present in the spec.
 
 **Push back on generated bulk-rewrite scripts.** When it proposed a regex rewrite of imports across 25 files, the right answer was to fix the compiler setting so `tsc` identified each site individually.
+
+Approve reads individually. Do not whitelist `git push`, `docker exec *`, or anything that writes outside the repo.
