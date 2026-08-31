@@ -915,7 +915,7 @@ A code is printed on a postcard and mailed to the listed address. Strong evidenc
 
 Implemented as a `postal.send` capability adapter. Print-and-mail APIs exist as a commercial service category; verify current pricing and availability independently. Expect roughly one to two dollars per piece and several days of delivery time.
 
-- Code is 6 digits, valid **21 days**, single use.
+- Code is 6 digits, single use. Lifetime is configurable per tenant within the bounds in §9.5; the default is 21 days.
 - One postcard per listing per 30 days, rate-limited so an attacker cannot generate mail volume at the operator's expense.
 - Emits `claim.verification_started` with `method: "postcard"`, then `postal.dispatched` on adapter confirmation.
 - **Cost falls on the operator**, so the admin UI must show per-piece cost at the point of enabling it.
@@ -949,6 +949,40 @@ A competitor or ex-employee claiming a listing takes control of that business's 
 **Never leak contact details through the verification UI.** "We'll text +1 (773) 555-0142" turns the claim flow into a phone-number disclosure endpoint for every listing on the site. Mask it: `+1 (773) •••-•142`, `d•••@hoffmanplumbing.example`.
 
 **Disputes go to moderation, never auto-transfer.** A second claim on an already-claimed listing emits `claim.disputed` and opens a `moderation.queued` item. Verification alone never moves ownership away from a sitting owner. Rate-limit claim attempts per IP and per account.
+
+### 9.5 Verification code lifetime
+
+**Core computes `expires_at`, never the caller.** A lifetime is a rule, and rules belong to core. `claim.verification_started` carries the computed value; an adapter that needs to tell a user when their code dies reads it from the event.
+
+Lifetime is tenant-configurable within bounds core enforces. A tenant may tune it to its own audience; it may not configure a lifetime that makes the method meaningless.
+
+| Method | Default | Minimum | Maximum |
+|---|---|---|---|
+| `phone_otp` | 10 minutes | 5 minutes | 60 minutes |
+| `domain_email` | 24 hours | 15 minutes | 48 hours |
+| `postcard` | 21 days | 7 days | 45 days |
+| `gbp_oauth` | — | — | — |
+| `manual` | — | — | — |
+
+`gbp_oauth` has no OSDS-side code; Google owns that session. `manual` has no code at all — an admin decides when they have seen enough.
+
+```jsonc
+// tenant configuration
+"claim_verification": {
+  "enabled_methods": ["manual", "phone_otp"],
+  "ttl": {
+    "phone_otp_minutes": 10,
+    "domain_email_minutes": 1440,
+    "postcard_days": 21
+  }
+}
+```
+
+A value outside the bounds is rejected at configuration time, not silently clamped at use. The admin UI shows the bounds at the point of entry, and says why the ceiling exists — a code that outlives the session it was sent for is a code someone else can find later.
+
+**Bounds are core's, not the tenant's.** They exist because a 48-hour SMS code and a 10-minute one are different security properties, and an operator tuning a form field is not making a security decision knowingly.
+
+Attempt limits are a separate concern and are not specified here — see §15.6. `claim.verification_failed` carries `attempt`, which currently has no defined ceiling.
 
 ---
 
@@ -1062,4 +1096,4 @@ minio          (bundled S3-compatible storage; overridable via S3_* vars)
 3. **Data model and migrations** — entitlement and slot tables are specified behaviourally, not yet as schema.
 4. **Owner dashboard scope** — what an owner can edit without re-verification, and what re-opens moderation.
 5. **Import pipeline detail** — CSV column mapping, dedupe strategy against `suppression_key`, batch rollback mechanics.
-6. **Rate limiting and abuse** — public API limits, claim attempt limits, review submission limits.
+6. **Rate limiting and abuse** — public API limits, claim attempt limits, review submission limits. Includes a ceiling for the attempt counter on claim.verification_failed (§9.5).
