@@ -30,11 +30,10 @@
  * emitting a `listing.updated` event the row change does not back (design rule
  * 2). Category membership (`listing_categories`) is not written yet, so
  * `handleListingUpsert` rejects the `categories` field outright (issue #42) -
- * no `/categories` op ever reaches here. Claim command persistence follows
- * separately.
+ * no `/categories` op ever reaches here. Claim command persistence lives in
+ * `./claim.ts`; the shared transaction/outbox plumbing is in `./shared.ts`.
  */
 import { sql } from "@osds/db";
-import type { Kysely } from "@osds/db";
 import type { OsdsCommand, ProblemDocument } from "@osds/adapter-kit";
 import {
   handleListingUpsert,
@@ -44,17 +43,16 @@ import {
   type Listing,
 } from "../command/listing-upsert.js";
 import type { JsonPatchOp } from "../command/json-patch.js";
+import {
+  findEventId,
+  isUniqueViolation,
+  withTenant,
+  writeOutboxEvents,
+  type Db,
+  type PersistDeps,
+} from "./shared.js";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- generated schema types are not wired up yet
-type Db = Kysely<any>;
-
-/** Injected effects. Never imported here - the pure resolver must stay pure. */
-export interface PersistDeps {
-  /** Wall clock, for the event's `occurred_at`. */
-  readonly now: () => Date;
-  /** ULID factory. The `listing_` prefix for a new listing id is added here. */
-  readonly newId: () => string;
-}
+export type { PersistDeps } from "./shared.js";
 
 export type PersistListingUpsertResult =
   | { readonly status: "created"; readonly event_id: string }
@@ -132,11 +130,9 @@ async function applyInTransaction(
     const listingId = `listing_${deps.newId()}`;
     const event = withSubject(result.event, listingId);
     await insertListing(trx, command.tenant_id, listingId, event.data.listing);
-    const eventId = await insertOutbox(trx, command, deps, {
-      type: "listing.created",
-      subject: listingId,
-      data: event.data,
-    });
+    const eventId = await writeOutboxEvents(trx, command, deps, [
+      { type: "listing.created", subject: listingId, data: event.data },
+    ]);
     return { status: "created", event_id: eventId };
   }
 
@@ -146,11 +142,13 @@ async function applyInTransaction(
     result.event.subject,
     result.event.data.changes,
   );
-  const eventId = await insertOutbox(trx, command, deps, {
-    type: "listing.updated",
-    subject: result.event.subject,
-    data: result.event.data,
-  });
+  const eventId = await writeOutboxEvents(trx, command, deps, [
+    {
+      type: "listing.updated",
+      subject: result.event.subject,
+      data: result.event.data,
+    },
+  ]);
   return { status: "updated", event_id: eventId };
 }
 
@@ -248,19 +246,6 @@ function matchKeys(command: OsdsCommand): {
   return { ...(id ? { id } : {}), ...(slug ? { slug } : {}) };
 }
 
-async function findEventId(
-  trx: Db,
-  tenantId: string,
-  idempotencyKey: string,
-): Promise<string | null> {
-  const res = await sql<{ id: string }>`
-    select id from outbox
-    where tenant_id = ${tenantId} and idempotency_key = ${idempotencyKey}
-    limit 1
-  `.execute(trx);
-  return res.rows[0]?.id ?? null;
-}
-
 // --- writes ---------------------------------------------------------
 
 async function insertListing(
@@ -325,60 +310,4 @@ export async function applyListingUpdate(
     update listings set ${sql.join(assignments, sql`, `)}
     where tenant_id = ${tenantId} and id = ${listingId}
   `.execute(trx);
-}
-
-async function insertOutbox(
-  trx: Db,
-  command: OsdsCommand,
-  deps: PersistDeps,
-  event: {
-    readonly type: "listing.created" | "listing.updated";
-    readonly subject: string;
-    readonly data: unknown;
-  },
-): Promise<string> {
-  const id = deps.newId();
-  const actor = JSON.stringify({ type: "adapter", id: command.adapter_id });
-
-  await sql`
-    insert into outbox (
-      id, tenant_id, type, version, occurred_at, subject,
-      actor, origin, trace_id, data, idempotency_key
-    ) values (
-      ${id}, ${command.tenant_id}, ${event.type}, 1, ${deps.now().toISOString()}, ${event.subject},
-      ${actor}::jsonb, ${command.adapter_id}, ${command.trace_id},
-      ${JSON.stringify(event.data)}::jsonb, ${command.idempotency_key}
-    )
-  `.execute(trx);
-
-  return id;
-}
-
-// --- plumbing -----------------------------------------------------
-
-/**
- * Run `fn` in one transaction as `osds_app` (so RLS is enforced - the role is
- * NOBYPASSRLS and not the table owner) with `app.tenant_id` set for its
- * duration. Both settings are transaction-local and reset on commit/rollback.
- */
-function withTenant<T>(
-  db: Db,
-  tenantId: string,
-  fn: (trx: Db) => Promise<T>,
-): Promise<T> {
-  return db.transaction().execute(async (trx) => {
-    await sql`set local role osds_app`.execute(trx);
-    await sql`select set_config('app.tenant_id', ${tenantId}, true)`.execute(
-      trx,
-    );
-    return fn(trx);
-  });
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    (err as { code?: string }).code === "23505"
-  );
 }
