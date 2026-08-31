@@ -22,3 +22,27 @@ export {
   type GeoPrecision,
 } from "./listing-upsert.js";
 export { jsonPatch, deepEqual, type JsonPatchOp } from "./json-patch.js";
+export {
+  handleClaimSubmit,
+  handleClaimApprove,
+  withClaimId,
+  type ClaimSubmitResult,
+  type ClaimApproveResult,
+  type ClaimMethod,
+  type ClaimStatus,
+  type ManualMethodUsed,
+  type ClaimListing,
+  type ClaimRecord,
+  type ClaimantData,
+  type ConsentEntry,
+  type ConsentMap,
+  type ManualVerification,
+  type ClaimSubmittedEvent,
+  type ClaimSubmittedDraft,
+  type ClaimDisputedEvent,
+  type ClaimDisputedDraft,
+  type ClaimVerificationStartedEvent,
+  type ClaimApprovedEvent,
+  type ListingOwnerAssignedEvent,
+  type EmittedClaimEvent,
+} from "./claim.js";
