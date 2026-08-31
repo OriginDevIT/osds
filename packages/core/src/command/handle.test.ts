@@ -12,7 +12,7 @@ import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createKysely, migrateToLatest, sql } from "@osds/db";
 import type { OsdsCommand, Scope } from "@osds/adapter-kit";
-import { handleCommand, type CommandContext } from "../index.js";
+import { handleCommand, type CommandContext } from "../persist/index.js";
 
 const ADMIN_URL =
   process.env.OSDS_TEST_DATABASE_URL ??

@@ -20,11 +20,13 @@
  * untouched on update and take their defaults on create. Fields it sets to
  * `null` are cleared.
  *
- * Two fields are refused outright (§7): `tier` is derived from entitlement
- * (§6, there is no `listing.setTier`), and `status` moves through the claim
- * flow (§9). Envelope assembly - `id`, `occurred_at`, `actor`, `origin` - is
- * the persistence layer's job; idempotency and the 409 replay path land there
- * too and are out of scope here.
+ * Three fields are refused outright (§7): `tier` is derived from entitlement
+ * (§6, there is no `listing.setTier`); `status` moves through the claim flow
+ * (§9); and `categories` is refused until core actually writes
+ * `listing_categories` (issue #42) - accepting it would make every emitted
+ * event assert a membership the database does not have. Envelope assembly -
+ * `id`, `occurred_at`, `actor`, `origin` - is the persistence layer's job;
+ * idempotency and the 409 replay path land there too and are out of scope here.
  *
  * Matching rule (§7): when the payload carries an `id`, that is the identity;
  * otherwise it is `(tenant_id, slug)`. No other matching rule exists. The caller
@@ -59,12 +61,17 @@ export interface ListingContact {
   readonly website: string | null;
 }
 
-/** The mutable content of a listing - what `listing.updated` diffs over. */
+/**
+ * The mutable content of a listing - what `listing.updated` diffs over.
+ *
+ * `categories` is deliberately absent: core does not write `listing_categories`
+ * yet (issue #42), so a category change has no backing state and must not
+ * appear in a `changes` patch. `listing.upsert` rejects the field outright.
+ */
 export interface ListingContent {
   readonly slug: string;
   readonly name: string;
   readonly description: string | null;
-  readonly categories: readonly string[];
   readonly location: ListingLocation;
   readonly contact: ListingContact;
 }
@@ -227,6 +234,11 @@ export function handleListingUpsert(
       "payload.status is not accepted - status moves through the claim flow (§9)",
     );
   }
+  if (has(p, "categories")) {
+    derived.push(
+      "payload.categories is not accepted - core does not write listing_categories yet (issue #42)",
+    );
+  }
   if (derived.length > 0) {
     return reject(
       validationProblem(
@@ -258,7 +270,6 @@ export function handleListingUpsert(
       slug: input.slug as string,
       name: input.name as string,
       description: input.description ?? null,
-      categories: input.categories ?? [],
       location: overlay(DEFAULT_LOCATION, input.location),
       contact: overlay(DEFAULT_CONTACT, input.contact),
     };
@@ -276,7 +287,6 @@ export function handleListingUpsert(
     description: has(input, "description")
       ? (input.description ?? null)
       : before.description,
-    categories: input.categories ?? before.categories,
     location: overlay(before.location, input.location),
     contact: overlay(before.contact, input.contact),
   };
@@ -300,7 +310,6 @@ interface ParsedInput {
   readonly slug?: string;
   readonly name?: string;
   readonly description?: string | null;
-  readonly categories?: readonly string[];
   readonly location?: Partial<ListingLocation>;
   readonly contact?: Partial<ListingContact>;
 }
@@ -356,7 +365,6 @@ function parseInput(
     slug?: string;
     name?: string;
     description?: string | null;
-    categories?: readonly string[];
     location?: Partial<ListingLocation>;
     contact?: Partial<ListingContact>;
   } = {};
@@ -373,20 +381,6 @@ function parseInput(
       out.description = d.trim().length > 0 ? d.trim() : null;
     } else {
       errors.push("payload.description must be a string or null");
-    }
-  }
-
-  if (has(p, "categories")) {
-    const c = p["categories"];
-    if (
-      Array.isArray(c) &&
-      c.every((x) => typeof x === "string" && KEY_SLUG.test(x))
-    ) {
-      out.categories = [...new Set(c as string[])];
-    } else {
-      errors.push(
-        "payload.categories must be an array of lowercase kebab-case strings",
-      );
     }
   }
 
@@ -530,7 +524,6 @@ function contentOf(listing: Listing): ListingContent {
     slug: listing.slug,
     name: listing.name,
     description: listing.description,
-    categories: listing.categories,
     location: listing.location,
     contact: listing.contact,
   };

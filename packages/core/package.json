@@ -5,7 +5,10 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./persist": { "types": "./dist/persist/index.d.ts", "default": "./dist/persist/index.js" }
+  },
   "scripts": { "build": "tsc -b", "dev": "tsc -b --watch" },
   "dependencies": {
     "@osds/adapter-kit": "workspace:*",
