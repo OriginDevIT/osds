@@ -3,3 +3,5 @@ packages:
   - "adapters/*"
 allowBuilds:
   esbuild: true
+overrides:
+  "postcss@<8.4.49": "^8.4.49"
