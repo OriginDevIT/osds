@@ -56,6 +56,8 @@ import {
 } from "../command/claim.js";
 import { validationProblem } from "../command/problem.js";
 import {
+  beginCommandLog,
+  concludeCommandLog,
   findEventId,
   isUniqueViolation,
   withTenant,
@@ -79,6 +81,21 @@ export type PersistClaimApproveResult =
 // --- claim.submit -------------------------------------------------
 
 export async function persistClaimSubmit(
+  db: Db,
+  command: OsdsCommand,
+  deps: PersistDeps,
+  enabledMethods: readonly ClaimMethod[],
+): Promise<PersistClaimSubmitResult> {
+  const log = await beginCommandLog(db, command, deps);
+  if (log.kind === "closed")
+    return { status: "rejected", problem: log.problem };
+
+  const result = await runClaimSubmit(db, command, deps, enabledMethods);
+  await concludeCommandLog(db, log.handle, deps, result);
+  return result;
+}
+
+async function runClaimSubmit(
   db: Db,
   command: OsdsCommand,
   deps: PersistDeps,
@@ -180,6 +197,20 @@ async function applySubmit(
 // --- claim.approve ----------------------------------------------
 
 export async function persistClaimApprove(
+  db: Db,
+  command: OsdsCommand,
+  deps: PersistDeps,
+): Promise<PersistClaimApproveResult> {
+  const log = await beginCommandLog(db, command, deps);
+  if (log.kind === "closed")
+    return { status: "rejected", problem: log.problem };
+
+  const result = await runClaimApprove(db, command, deps);
+  await concludeCommandLog(db, log.handle, deps, result);
+  return result;
+}
+
+async function runClaimApprove(
   db: Db,
   command: OsdsCommand,
   deps: PersistDeps,

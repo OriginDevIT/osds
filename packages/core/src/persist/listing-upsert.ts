@@ -44,6 +44,8 @@ import {
 } from "../command/listing-upsert.js";
 import type { JsonPatchOp } from "../command/json-patch.js";
 import {
+  beginCommandLog,
+  concludeCommandLog,
   findEventId,
   isUniqueViolation,
   withTenant,
@@ -81,6 +83,23 @@ const COLUMN_FOR_PATH: Readonly<Record<string, string>> = {
 };
 
 export async function persistListingUpsert(
+  db: Db,
+  command: OsdsCommand,
+  deps: PersistDeps,
+): Promise<PersistListingUpsertResult> {
+  // §11.2: log the attempt first, in its own committed transaction. An
+  // unresolvable tenant is logged already-concluded and there is nothing to
+  // run; a command that throws below leaves the row with a null outcome.
+  const log = await beginCommandLog(db, command, deps);
+  if (log.kind === "closed")
+    return { status: "rejected", problem: log.problem };
+
+  const result = await applyListingUpsert(db, command, deps);
+  await concludeCommandLog(db, log.handle, deps, result);
+  return result;
+}
+
+async function applyListingUpsert(
   db: Db,
   command: OsdsCommand,
   deps: PersistDeps,
