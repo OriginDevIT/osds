@@ -24,14 +24,16 @@
  * `deps` ({@link PersistDeps}) supplies the clock and the id factory - injected,
  * never imported, so the resolver stays pure and this layer stays testable.
  *
- * On the `updated` branch every JSON Patch op must map to a `listings` column
- * SET: an op whose path is not in {@link COLUMN_FOR_PATH}, an op that is not a
- * `replace`, or an empty assignment list is a bug and throws rather than
- * emitting a `listing.updated` event the row change does not back (design rule
- * 2). Category membership (`listing_categories`) is not written yet, so
- * `handleListingUpsert` rejects the `categories` field outright (issue #42) -
- * no `/categories` op ever reaches here. Claim command persistence lives in
- * `./claim.ts`; the shared transaction/outbox plumbing is in `./shared.ts`.
+ * On the `updated` branch every column JSON Patch op must map to a `listings`
+ * column SET: an op whose path is not in {@link COLUMN_FOR_PATH}, an op that is
+ * not a `replace`, or a change set that assigns nothing at all is a bug and
+ * throws rather than emitting a `listing.updated` event the row change does not
+ * back (design rule 2). The one non-column op is `replace /categories` (§7.1):
+ * {@link applyListingUpdate} routes it to `listing_categories`, rewrites the
+ * membership set from the op's slug array, and bumps `listings.updated_at`
+ * itself when the category set is the only thing that changed (sitemap
+ * lastmod). Claim command persistence lives in `./claim.ts`; the shared
+ * transaction/outbox plumbing is in `./shared.ts`.
  */
 import { sql } from "@osds/db";
 import type { OsdsCommand, ProblemDocument } from "@osds/adapter-kit";
@@ -136,7 +138,12 @@ async function applyInTransaction(
   if (replayId !== null) return { status: "duplicate", event_id: replayId };
 
   const current = await loadListing(trx, command);
-  const result = handleListingUpsert(command, current);
+  // Only the tenant's category list is needed, and only when the payload names
+  // categories at all - the resolver is the single place the slugs are checked.
+  const knownCategorySlugs = payloadHasKey(command, "categories")
+    ? await loadCategorySlugs(trx, command.tenant_id)
+    : [];
+  const result = handleListingUpsert(command, current, knownCategorySlugs);
 
   if (result.outcome === "rejected") {
     return { status: "rejected", problem: result.problem };
@@ -149,6 +156,12 @@ async function applyInTransaction(
     const listingId = `listing_${deps.newId()}`;
     const event = withSubject(result.event, listingId);
     await insertListing(trx, command.tenant_id, listingId, event.data.listing);
+    await writeListingCategories(
+      trx,
+      command.tenant_id,
+      listingId,
+      event.data.listing.categories,
+    );
     const eventId = await writeOutboxEvents(trx, command, deps, [
       { type: "listing.created", subject: listingId, data: event.data },
     ]);
@@ -228,12 +241,22 @@ async function loadListing(
   const row = rows[0];
   if (row === undefined) return null;
 
+  const cats = await sql<{ slug: string }>`
+    select c.slug
+    from listing_categories lc
+    join categories c
+      on c.tenant_id = lc.tenant_id and c.id = lc.category_id
+    where lc.tenant_id = ${command.tenant_id} and lc.listing_id = ${row.id}
+    order by c.slug
+  `.execute(trx);
+
   return {
     id: row.id,
     tenant_id: row.tenant_id,
     slug: row.slug,
     name: row.name,
     description: row.description,
+    categories: cats.rows.map((r) => r.slug),
     location: {
       address_line1: row.address_line1,
       address_line2: row.address_line2,
@@ -251,6 +274,16 @@ async function loadListing(
       website: row.contact_website,
     },
   };
+}
+
+/** Whether the raw command payload carries `key` at all - shape validation is the resolver's. */
+function payloadHasKey(command: OsdsCommand, key: string): boolean {
+  const p = command.payload;
+  return (
+    typeof p === "object" &&
+    p !== null &&
+    Object.prototype.hasOwnProperty.call(p, key)
+  );
 }
 
 /** The §7 matching key straight off the payload - the resolver owns validation. */
@@ -291,8 +324,18 @@ async function insertListing(
 }
 
 /**
- * Apply an `updated` result's JSON Patch to the `listings` row. Exported for
- * the guard tests below; not part of the `@osds/core/persist` surface.
+ * Apply an `updated` result's JSON Patch. Exported for the guard tests below;
+ * not part of the `@osds/core/persist` surface.
+ *
+ * Two kinds of op:
+ *   - a column op - a `replace` whose path is in {@link COLUMN_FOR_PATH} -
+ *     becomes one `SET` on the `listings` row;
+ *   - the single `replace /categories` op (§7.1) rewrites `listing_categories`.
+ *
+ * An op that is not a `replace`, a column path we cannot map, or a change set
+ * that touches neither columns nor categories is a bug: the `listing.updated`
+ * event would assert a change the store did not make (design rule 2), so it
+ * throws rather than dropping the op.
  */
 export async function applyListingUpdate(
   trx: Db,
@@ -300,11 +343,19 @@ export async function applyListingUpdate(
   listingId: string,
   changes: readonly JsonPatchOp[],
 ): Promise<void> {
-  // Every op must project to a column SET. A path we cannot map, or an op that
-  // is not a `replace`, means the `listing.updated` event would assert a change
-  // the row does not carry - fail loudly instead of dropping it (design rule 2).
   const assignments: unknown[] = [];
+  let categorySlugs: readonly string[] | null = null;
+
   for (const op of changes) {
+    if (op.path === "/categories") {
+      if (op.op !== "replace") {
+        throw new Error(
+          `listing.upsert persistence: unexpected JSON Patch op "${op.op}" at "/categories"`,
+        );
+      }
+      categorySlugs = op.value as readonly string[];
+      continue;
+    }
     if (op.op !== "replace") {
       throw new Error(
         `listing.upsert persistence: unexpected JSON Patch op "${op.op}" at "${op.path}"`,
@@ -318,15 +369,79 @@ export async function applyListingUpdate(
     }
     assignments.push(sql`${sql.ref(column)} = ${op.value}`);
   }
-  if (assignments.length === 0) {
+
+  if (assignments.length === 0 && categorySlugs === null) {
     throw new Error(
-      "listing.upsert persistence: an updated result produced no column assignments",
+      "listing.upsert persistence: an updated result changed nothing",
     );
   }
 
-  // The listings_touch_updated_at trigger maintains updated_at.
-  await sql`
-    update listings set ${sql.join(assignments, sql`, `)}
-    where tenant_id = ${tenantId} and id = ${listingId}
+  if (assignments.length > 0) {
+    // The listings_touch_updated_at trigger maintains updated_at.
+    await sql`
+      update listings set ${sql.join(assignments, sql`, `)}
+      where tenant_id = ${tenantId} and id = ${listingId}
+    `.execute(trx);
+  } else {
+    // Categories-only change: the SET path did not run, so bump the row's
+    // updated_at explicitly - sitemap lastmod depends on it.
+    await sql`
+      update listings set updated_at = now()
+      where tenant_id = ${tenantId} and id = ${listingId}
+    `.execute(trx);
+  }
+
+  if (categorySlugs !== null) {
+    await sql`
+      delete from listing_categories
+      where tenant_id = ${tenantId} and listing_id = ${listingId}
+    `.execute(trx);
+    await writeListingCategories(trx, tenantId, listingId, categorySlugs);
+  }
+}
+
+/** All category slugs defined for the tenant - the resolver validates against these (§7.1). */
+async function loadCategorySlugs(trx: Db, tenantId: string): Promise<string[]> {
+  const res = await sql<{ slug: string }>`
+    select slug from categories where tenant_id = ${tenantId} order by slug
   `.execute(trx);
+  return res.rows.map((r) => r.slug);
+}
+
+/**
+ * Insert one `listing_categories` row per slug. The slugs are resolver-checked
+ * against the same tenant's categories and canonical, so any that resolves to
+ * no row was removed between validation and here - a race, and a loud failure,
+ * never a silently dropped membership (design rule 2). The caller issues the
+ * `delete` first on the update path; rows are immutable so a set change is
+ * delete-then-reinsert.
+ */
+async function writeListingCategories(
+  trx: Db,
+  tenantId: string,
+  listingId: string,
+  slugs: readonly string[],
+): Promise<void> {
+  if (slugs.length === 0) return;
+
+  const res = await sql<{ id: string; slug: string }>`
+    select id, slug from categories
+    where tenant_id = ${tenantId} and slug = any(${slugs}::text[])
+  `.execute(trx);
+
+  if (res.rows.length !== slugs.length) {
+    const found = new Set(res.rows.map((r) => r.slug));
+    const missing = slugs.filter((s) => !found.has(s));
+    throw new Error(
+      `listing.upsert persistence: category slug(s) "${missing.join('", "')}" ` +
+        "resolved to no row between validation and apply",
+    );
+  }
+
+  for (const { id } of res.rows) {
+    await sql`
+      insert into listing_categories (tenant_id, listing_id, category_id)
+      values (${tenantId}, ${listingId}, ${id})
+    `.execute(trx);
+  }
 }
