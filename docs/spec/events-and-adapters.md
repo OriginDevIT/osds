@@ -87,6 +87,7 @@ Ordering is guaranteed per `subject`. Nothing is guaranteed across subjects. Do 
 |---|---|
 | `listing.*` | The listing record and its published state |
 | `claim.*` | Acquiring a verified human owner |
+| `user.*` | People who hold or seek ownership of a listing |
 | `billing.*` | Money, as reported by a payment adapter |
 | `entitlement.*` | Tier and period state, as decided by core |
 | `slot.*` | Capacity-limited premium placement |
@@ -130,6 +131,15 @@ Ordering is guaranteed per `subject`. Nothing is guaranteed across subjects. Do 
 | `claim.abandoned` | Idle past threshold; `last_step`, `idle_for_hours` | §9 |
 | `claim.notified_existing_contacts` | Anti-hijack notice sent to contacts already on the listing | §9.4 |
 | `claim.disputed` | Second claimant on a claimed listing; opens moderation | §9.4 |
+
+#### `user.*`
+
+| Type | When | Payload detail |
+|---|---|---|
+| `user.created` | A user row was minted, on any path | §4.3 |
+
+A user is a person who owns or seeks to own a listing. Staff and deployment
+operators are not users and live in their own table — see §4.3.
 
 #### `billing.*`
 
@@ -348,6 +358,69 @@ Core does not hardcode `free`/`featured`/`premium`. A tenant defines an ordered 
 ```
 
 `rank 0` is the fallback tier. A tenant may define **no rank-0 tier**, meaning there is no free listing — this changes downgrade behaviour (§6.4).
+
+### 4.3 User
+
+A person who owns, or is seeking to own, a listing. Tenant-scoped like
+everything else.
+
+```jsonc
+{
+  "id": "usr_01JBQ5T2",
+  "tenant_id": "tnt_01JBQ2K9",
+  "email": "dana@hoffmanplumbing.example",   // lowercased before storage
+  "name": "Dana Hoffman",
+  "phone_e164": "+17735550142",
+  "created_at": "2026-08-28T14:22:10Z"
+}
+```
+
+**Users are not staff.** A directory's administrators and the deployment
+operator are a different kind of principal with a different lifecycle, and
+they live in their own table. One person may administer many tenants; a user
+belongs to exactly one. Do not merge them because both have an email address.
+
+#### Creation
+
+**There is no `user.create` command.** A user row is minted as part of the
+command that first needs one — today that is `claim.submit`, in the same
+transaction, so a claim can never reference a user that does not exist.
+
+Matching is on `(tenant_id, email)`, lowercased. An existing row is reused; an
+absent one is minted with the `usr_` prefix.
+
+**Core emits `user.created` when it mints one.** A new person entering the
+system is a fact other systems act on — a CRM adapter creates a contact, a
+mail adapter starts a welcome sequence. A creation that emitted nothing would
+be a state change adapters could only discover by polling.
+
+`user.created` is emitted before the event of the command that caused it, in
+the same transaction, so the ordering per subject is unambiguous. No event is
+emitted when an existing row is reused.
+
+```jsonc
+// user.created data
+{
+  "user": {
+    "id": "usr_01JBQ5T2",
+    "email": "dana@hoffmanplumbing.example",
+    "name": "Dana Hoffman",
+    "phone_e164": "+17735550142"
+  },
+  "created_by": "claim.submit"
+}
+```
+
+Reusing a row on an email match is correct while a user row carries no
+credentials. It stops being correct the moment a user can log in, because a
+new claimant would inherit a row a previous person verified. Revisit with the
+owner authentication decision.
+
+#### Authentication
+
+**Undefined.** A claimant proves control of an email or phone during
+verification (§9) but never sets a credential, and §6.5 requires owners to
+reach a dashboard. How an owner authenticates is not specified here.
 
 ---
 
@@ -889,6 +962,9 @@ Methods are enabled per tenant in the setup wizard. **At least one must be enabl
   }
 }
 ```
+
+`claimant.id` refers to a `users` row that `claim.submit` created or matched in
+the same transaction (§4.3). The claim command is the only path that mints one.
 
 ### 9.0 Consent is a required field
 
