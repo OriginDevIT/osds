@@ -23,5 +23,10 @@ export {
   type PersistClaimApproveResult,
 } from "./claim.js";
 
+export {
+  resolveVerificationTtl,
+  type VerificationTtlConfig,
+} from "../command/verification-ttl.js";
+
 export { handleCommand } from "../command/handle.js";
 export type { CommandContext, IdFactory } from "../command/context.js";

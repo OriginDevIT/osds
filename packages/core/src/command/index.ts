@@ -47,3 +47,7 @@ export {
   type ListingOwnerAssignedEvent,
   type EmittedClaimEvent,
 } from "./claim.js";
+export {
+  resolveVerificationTtl,
+  type VerificationTtlConfig,
+} from "./verification-ttl.js";

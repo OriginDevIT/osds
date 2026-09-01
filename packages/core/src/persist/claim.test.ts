@@ -271,9 +271,10 @@ function claimant(email: string, name = "Dana Hoffman") {
       const claimantUserId = claims[0]!.claimant_user_id!;
       expect(claimantUserId.startsWith("usr_")).toBe(true);
       expect(claims[0]!.consent).toEqual(consent);
+      // §9.5: core-computed deadline, FIXED_NOW + phone_otp default 10 min.
       expect(claims[0]!.verification).toEqual({
         method: "phone_otp",
-        expires_at: null,
+        expires_at: "2026-08-31T12:10:00.000Z",
       });
 
       const users = await usersByEmail("tnt_a", "dana@new.example");
@@ -307,7 +308,7 @@ function claimant(email: string, name = "Dana Hoffman") {
       });
       expect(events[1]!.data).toEqual({
         method: "phone_otp",
-        expires_at: null,
+        expires_at: "2026-08-31T12:10:00.000Z",
       });
     });
 

@@ -41,7 +41,16 @@ function approveCommand(
   };
 }
 
-const ENABLED: readonly ClaimMethod[] = ["manual", "phone_otp", "domain_email"];
+const ENABLED: readonly ClaimMethod[] = [
+  "manual",
+  "phone_otp",
+  "domain_email",
+  "gbp_oauth",
+];
+
+/** Fixed injected clock. phone_otp default TTL is 10 min (§9.5). */
+const NOW = new Date("2026-08-28T14:22:10.000Z");
+const PHONE_OTP_DEADLINE = "2026-08-28T14:32:10.000Z";
 
 const consent = {
   marketing_email: {
@@ -110,6 +119,7 @@ describe("claim.submit", () => {
       submitCommand(validSubmit),
       unclaimed,
       ENABLED,
+      NOW,
     );
 
     expect(res.outcome).toBe("submitted");
@@ -131,14 +141,30 @@ describe("claim.submit", () => {
     });
     expect(submitted.data.claimant.email).toBe("dana@hoffmanplumbing.example");
     expect(submitted.data.consent).toEqual(consent);
+    // §9.5: core computes the deadline from the phone_otp default TTL (10 min).
     expect(verification).toEqual({
       type: "claim.verification_started",
       subject: "listing_hoffman",
-      data: { method: "phone_otp", expires_at: null },
+      data: { method: "phone_otp", expires_at: PHONE_OTP_DEADLINE },
     });
   });
 
-  it("relays a caller-supplied verification deadline", () => {
+  it("computes expires_at from an in-bounds tenant TTL override (§9.5)", () => {
+    const res = handleClaimSubmit(
+      submitCommand(validSubmit),
+      unclaimed,
+      ENABLED,
+      NOW,
+      { phone_otp_minutes: 30 },
+    );
+    if (res.outcome !== "submitted") throw new Error("unreachable");
+    expect(res.events[1]?.data).toEqual({
+      method: "phone_otp",
+      expires_at: "2026-08-28T14:52:10.000Z",
+    });
+  });
+
+  it("ignores a caller-supplied verification_expires_at", () => {
     const res = handleClaimSubmit(
       submitCommand({
         ...validSubmit,
@@ -146,12 +172,39 @@ describe("claim.submit", () => {
       }),
       unclaimed,
       ENABLED,
+      NOW,
     );
     if (res.outcome !== "submitted") throw new Error("unreachable");
     expect(res.events[1]?.data).toEqual({
       method: "phone_otp",
-      expires_at: "2026-08-29T14:22:10.000Z",
+      expires_at: PHONE_OTP_DEADLINE,
     });
+  });
+
+  it("emits expires_at: null for gbp_oauth (no OSDS-side code, §9.5)", () => {
+    const res = handleClaimSubmit(
+      submitCommand({ ...validSubmit, method: "gbp_oauth" }),
+      unclaimed,
+      ENABLED,
+      NOW,
+    );
+    if (res.outcome !== "submitted") throw new Error("unreachable");
+    expect(res.events.map((e) => e.type)).toEqual([
+      "claim.submitted",
+      "claim.verification_started",
+    ]);
+    expect(res.events[1]?.data).toEqual({
+      method: "gbp_oauth",
+      expires_at: null,
+    });
+  });
+
+  it("throws when the stored tenant TTL is outside the §9.5 bounds", () => {
+    expect(() =>
+      handleClaimSubmit(submitCommand(validSubmit), unclaimed, ENABLED, NOW, {
+        phone_otp_minutes: 120,
+      }),
+    ).toThrow(/bounds/);
   });
 
   it("emits only claim.submitted for the manual method", () => {
@@ -159,13 +212,14 @@ describe("claim.submit", () => {
       submitCommand({ ...validSubmit, method: "manual" }),
       unclaimed,
       ENABLED,
+      NOW,
     );
     if (res.outcome !== "submitted") throw new Error("unreachable");
     expect(res.events.map((e) => e.type)).toEqual(["claim.submitted"]);
   });
 
   it("a claim on an already-claimed listing is a dispute, not a submission (§9.4)", () => {
-    const res = handleClaimSubmit(submitCommand(validSubmit), claimed, ENABLED);
+    const res = handleClaimSubmit(submitCommand(validSubmit), claimed, ENABLED, NOW);
 
     expect(res.outcome).toBe("disputed");
     if (res.outcome !== "disputed") throw new Error("unreachable");
@@ -186,7 +240,7 @@ describe("claim.submit", () => {
       method: "phone_otp",
       claimant,
     };
-    const res = handleClaimSubmit(submitCommand(noConsent), unclaimed, ENABLED);
+    const res = handleClaimSubmit(submitCommand(noConsent), unclaimed, ENABLED, NOW);
 
     expect(res.outcome).toBe("rejected");
     if (res.outcome !== "rejected") throw new Error("unreachable");
@@ -202,6 +256,7 @@ describe("claim.submit", () => {
       }),
       unclaimed,
       ENABLED,
+      NOW,
     );
     expect(res.outcome).toBe("rejected");
     if (res.outcome !== "rejected") throw new Error("unreachable");
@@ -226,6 +281,7 @@ describe("claim.submit", () => {
       }),
       unclaimed,
       ENABLED,
+      NOW,
     );
     expect(res.outcome).toBe("rejected");
     if (res.outcome !== "rejected") throw new Error("unreachable");
@@ -250,6 +306,7 @@ describe("claim.submit", () => {
       }),
       unclaimed,
       ENABLED,
+      NOW,
     );
     expect(res.outcome).toBe("submitted");
   });
@@ -259,6 +316,7 @@ describe("claim.submit", () => {
       submitCommand({ ...validSubmit, method: "postcard" }),
       unclaimed,
       ENABLED,
+      NOW,
     );
     expect(res.outcome).toBe("rejected");
     if (res.outcome !== "rejected") throw new Error("unreachable");
@@ -270,12 +328,13 @@ describe("claim.submit", () => {
       submitCommand({ ...validSubmit, method: "carrier_pigeon" }),
       unclaimed,
       ENABLED,
+      NOW,
     );
     expect(res.outcome).toBe("rejected");
   });
 
   it("rejects when the listing does not exist", () => {
-    const res = handleClaimSubmit(submitCommand(validSubmit), null, ENABLED);
+    const res = handleClaimSubmit(submitCommand(validSubmit), null, ENABLED, NOW);
     expect(res.outcome).toBe("rejected");
     if (res.outcome !== "rejected") throw new Error("unreachable");
     expect(JSON.stringify(res.problem.errors)).toContain("does not exist");
@@ -286,6 +345,7 @@ describe("claim.submit", () => {
       submitCommand(validSubmit),
       { ...unclaimed, status: "suspended" },
       ENABLED,
+      NOW,
     );
     expect(res.outcome).toBe("rejected");
     if (res.outcome !== "rejected") throw new Error("unreachable");
@@ -297,6 +357,7 @@ describe("claim.submit", () => {
       submitCommand(validSubmit, { trace_id: "" }),
       unclaimed,
       ENABLED,
+      NOW,
     );
     expect(res.outcome).toBe("rejected");
     if (res.outcome !== "rejected") throw new Error("unreachable");
@@ -308,6 +369,7 @@ describe("claim.submit", () => {
       submitCommand(validSubmit, { command: "claim.approve" }),
       unclaimed,
       ENABLED,
+      NOW,
     );
     expect(res.outcome).toBe("rejected");
   });
@@ -319,6 +381,7 @@ describe("withClaimId", () => {
       submitCommand(validSubmit),
       unclaimed,
       ENABLED,
+      NOW,
     );
     if (res.outcome !== "submitted") throw new Error("unreachable");
 
@@ -341,14 +404,14 @@ describe("withClaimId", () => {
     expect(events[1]).toEqual({
       type: "claim.verification_started",
       subject: "listing_hoffman",
-      data: { method: "phone_otp", expires_at: null },
+      data: { method: "phone_otp", expires_at: PHONE_OTP_DEADLINE },
     });
     // Draft not mutated.
     expect("id" in res.events[0].data.claim).toBe(false);
   });
 
   it("fills the claim id on a disputed draft", () => {
-    const res = handleClaimSubmit(submitCommand(validSubmit), claimed, ENABLED);
+    const res = handleClaimSubmit(submitCommand(validSubmit), claimed, ENABLED, NOW);
     if (res.outcome !== "disputed") throw new Error("unreachable");
 
     const [disputed] = withClaimId(res, "claim_minted_10");

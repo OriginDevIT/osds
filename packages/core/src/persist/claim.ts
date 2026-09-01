@@ -26,6 +26,13 @@
  * only the `claim.disputed` event; the moderation flow (not built here) owns
  * the dispute record.
  *
+ * `claim.verification_started.expires_at` is core-computed (§9.5): the resolver
+ * takes the injected clock (`deps.now()`) and the tenant's
+ * `claim_verification.ttl`, threaded in as `ttlConfig` next to `enabledMethods`
+ * (no schema home for it yet - separate issue). A stored TTL outside the §9.5
+ * bounds throws out of the command transaction, leaving a null-outcome command
+ * log row like any other mid-apply fault (§11.2).
+ *
  * `claim.approve` locks its claim and its listing row with `SELECT ... FOR
  * UPDATE` (cf. `lockListing` in command/handle.ts) so concurrent approvals of
  * different claims on one listing serialize. Under that lock it enforces §9.4 -
@@ -54,6 +61,7 @@ import {
   type ClaimRecord,
   type ClaimStatus,
 } from "../command/claim.js";
+import type { VerificationTtlConfig } from "../command/verification-ttl.js";
 import { validationProblem } from "../command/problem.js";
 import {
   beginCommandLog,
@@ -85,12 +93,13 @@ export async function persistClaimSubmit(
   command: OsdsCommand,
   deps: PersistDeps,
   enabledMethods: readonly ClaimMethod[],
+  ttlConfig?: VerificationTtlConfig,
 ): Promise<PersistClaimSubmitResult> {
   const log = await beginCommandLog(db, command, deps);
   if (log.kind === "closed")
     return { status: "rejected", problem: log.problem };
 
-  const result = await runClaimSubmit(db, command, deps, enabledMethods);
+  const result = await runClaimSubmit(db, command, deps, enabledMethods, ttlConfig);
   await concludeCommandLog(db, log.handle, deps, result);
   return result;
 }
@@ -100,10 +109,11 @@ async function runClaimSubmit(
   command: OsdsCommand,
   deps: PersistDeps,
   enabledMethods: readonly ClaimMethod[],
+  ttlConfig: VerificationTtlConfig | undefined,
 ): Promise<PersistClaimSubmitResult> {
   try {
     return await withTenant(db, command.tenant_id, (trx) =>
-      applySubmit(trx, command, deps, enabledMethods),
+      applySubmit(trx, command, deps, enabledMethods, ttlConfig),
     );
   } catch (err) {
     if (isUniqueViolation(err)) {
@@ -121,6 +131,7 @@ async function applySubmit(
   command: OsdsCommand,
   deps: PersistDeps,
   enabledMethods: readonly ClaimMethod[],
+  ttlConfig: VerificationTtlConfig | undefined,
 ): Promise<PersistClaimSubmitResult> {
   const replayId = await findEventId(
     trx,
@@ -134,7 +145,13 @@ async function applySubmit(
     command.tenant_id,
     readPayloadId(command, "listing_id"),
   );
-  const result = handleClaimSubmit(command, listing, enabledMethods);
+  const result = handleClaimSubmit(
+    command,
+    listing,
+    enabledMethods,
+    deps.now(),
+    ttlConfig,
+  );
 
   if (result.outcome === "rejected") {
     return { status: "rejected", problem: result.problem };

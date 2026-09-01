@@ -68,4 +68,6 @@ export {
   type ClaimApprovedEvent,
   type ListingOwnerAssignedEvent,
   type EmittedClaimEvent,
+  resolveVerificationTtl,
+  type VerificationTtlConfig,
 } from "./command/index.js";
