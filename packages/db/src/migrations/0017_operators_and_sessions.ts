@@ -43,10 +43,10 @@
  *     that treats membership as *authorization* (not mere visibility) requires
  *     `status = 'active'`.
  *
- * Three request-scoped GUCs, each read by a helper that mirrors
- * `osds_current_tenant_id()` (0001) - `nullif(current_setting(x, true), '')`,
- * so an unset GUC is NULL and `col = NULL` makes every policy default-deny.
- * `osds_operator_admins_current_tenant()` and
+ * Four request-scoped GUCs, each read by a helper that mirrors
+ * `osds_current_tenant_id()` (0001) - `nullif(current_setting(x, true), '')`
+ * (session_host also lowercases), so an unset GUC is NULL and `col = NULL`
+ * makes every policy default-deny. `osds_operator_admins_current_tenant()` and
  * `osds_current_operator_is_superadmin()` fold them into the two
  * write-authorization predicates.
  *
@@ -60,11 +60,18 @@
  *                            hashes it before it reaches Postgres; the raw token
  *                            never enters a GUC or a column. `operator_sessions.
  *                            id` is a `ses_` ULID handle, not the secret.
+ *   app.session_host         the host the request arrived at, set beside
+ *                            app.session_token_hash. A session is bound to the
+ *                            host it was issued for (#80); a token replayed to
+ *                            another host resolves to nothing. See "Cross-host
+ *                            sessions" below. `osds_current_session_host()`
+ *                            lowercases - an uppercase Host header is ordinary.
  *
- * Request order: no GUC -> set app.session_token_hash from the cookie hash ->
- * SELECT the session -> set app.operator_id from the row -> (only for
- * tenant-scoped work, after the staff_memberships authorization check) set
- * app.tenant_id. `packages/web` renders public pages as `osds_app` with only
+ * Request order: no GUC -> set app.session_token_hash + app.session_host from
+ * the cookie hash and the request host -> SELECT the session -> set
+ * app.operator_id from the row -> (only for tenant-scoped work, after the
+ * staff_memberships authorization check) set app.tenant_id. `packages/web`
+ * renders public pages as `osds_app` with only
  * app.tenant_id set and no operator, so every policy branch that keys on a
  * tenant is additionally gated on `osds_current_operator_id() is not null`: a
  * public render can neither read a membership nor pass a session delete.
@@ -167,12 +174,28 @@
  *     admin or superadmin write, `old.status` must be `pending`, `new.status`
  *     `active`, and role and tenant unchanged. Everything else raises.
  *
+ * Cross-host sessions (#80, decisions.md "Admin surfaces"). Two hosts exist: a
+ * tenant's own domain, where `/admin` lives and which resolves to that tenant,
+ * and the console host, which resolves to no tenant. One operator may hold a
+ * session on each, independently - different cookies, different rows, same
+ * table. `operator_sessions.issued_for_host` records which host a row was
+ * issued for. `__Host-` keeps a browser from sending a cookie to the wrong
+ * host; the row is bound too, so a token surfacing at a host it was not issued
+ * for (a leaked log, a proxy, curl) resolves to nothing. The bind is on the
+ * token-hash resolution branch only - `log out everywhere` runs on the
+ * operator branch and must span every host.
+ *
  * operator_sessions - RLS forced. Rows are immutable: absolute `expires_at`, no
  *   sliding refresh, no UPDATE grant, no UPDATE policy.
- *   operator_sessions_self           the session whose token_hash the request
- *     presented (resolution, logout), or every session of the authenticated
- *     operator (session list, log-out-everywhere) - independent of any
- *     membership or its status, since a session is not tenant data.
+ *   operator_sessions_self           USING: the session whose token_hash the
+ *     request presented AND whose issued_for_host matches app.session_host
+ *     (resolution, logout on the current host), OR every session of the
+ *     authenticated operator across all hosts (session list,
+ *     log-out-everywhere) - the operator branch is host-blind on purpose.
+ *     Independent of any membership or its status, since a session is not
+ *     tenant data. WITH CHECK (INSERT - login): the row's operator_id is the
+ *     acting operator and its issued_for_host is app.session_host, so a row
+ *     cannot claim a host it was not issued for.
  *   operator_sessions_tenant_revoke  DELETE only: `tenant.suspended` deletes
  *     every session of every operator with an ACTIVE membership in
  *     app.tenant_id in one statement, as `osds_app`, gated on there being an
@@ -186,6 +209,7 @@
  * Rollback:
  *   drop policy if exists operator_sessions_tenant_revoke on operator_sessions;
  *   drop policy if exists operator_sessions_self on operator_sessions;
+ *   drop function if exists osds_current_session_host();
  *   drop trigger if exists staff_memberships_guard_self_accept on staff_memberships;
  *   drop function if exists osds_guard_staff_membership_self_accept();
  *   drop policy if exists staff_memberships_purge on staff_memberships;
@@ -231,6 +255,15 @@ export async function up(db: MigrationDb): Promise<void> {
       language sql
       stable
       as $$ select nullif(current_setting('app.session_token_hash', true), '') $$
+  `.execute(db);
+  // Lowercased: an uppercase Host header is ordinary, and with the lower()
+  // CHECK on issued_for_host a case mismatch would let login succeed and
+  // resolution silently fail - a bounce to /login with nothing to debug (#80).
+  await sql`
+    create function osds_current_session_host() returns text
+      language sql
+      stable
+      as $$ select nullif(lower(current_setting('app.session_host', true)), '') $$
   `.execute(db);
 
   // --- operators ----------------------------------------------------------
@@ -451,11 +484,12 @@ export async function up(db: MigrationDb): Promise<void> {
   // --- operator_sessions ----------------------------------------------
   await sql`
     create table operator_sessions (
-      id           text primary key check (starts_with(id, 'ses_')),
-      operator_id  text not null references operators (id) on delete cascade,
-      token_hash   text not null unique,
-      expires_at   timestamptz not null,
-      created_at   timestamptz not null default now()
+      id              text primary key check (starts_with(id, 'ses_')),
+      operator_id     text not null references operators (id) on delete cascade,
+      token_hash      text not null unique,
+      issued_for_host text not null check (issued_for_host = lower(issued_for_host)),
+      expires_at      timestamptz not null,
+      created_at      timestamptz not null default now()
     )
   `.execute(db);
 
@@ -473,14 +507,25 @@ export async function up(db: MigrationDb): Promise<void> {
   await sql`alter table operator_sessions enable row level security`.execute(db);
   await sql`alter table operator_sessions force row level security`.execute(db);
 
+  // The token-hash branch is host-bound (#80): a token resolves only at the
+  // host it was issued for. The operator branch is deliberately host-blind -
+  // "log out everywhere" lists and deletes across every host. WITH CHECK binds
+  // the row to app.session_host at creation, so a login cannot mint a session
+  // claiming a host it did not arrive at.
   await sql`
     create policy operator_sessions_self on operator_sessions
       for all
         using (
-          token_hash = osds_current_session_token_hash()
+          (
+            token_hash = osds_current_session_token_hash()
+            and issued_for_host = osds_current_session_host()
+          )
           or operator_id = osds_current_operator_id()
         )
-        with check (operator_id = osds_current_operator_id())
+        with check (
+          operator_id = osds_current_operator_id()
+          and issued_for_host = osds_current_session_host()
+        )
   `.execute(db);
   await sql`
     create policy operator_sessions_tenant_revoke on operator_sessions
