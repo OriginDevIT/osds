@@ -200,6 +200,7 @@ Deferred until there is traffic: the Odin repo-watching agent.
 - `.prettierignore` excludes `docs/spec/` so the spec does not reformat on save.
 - Migrations are forward-only with a rollback note in each header comment.
 - Every entitlement state transition needs a test. That table is where this system rots if it rots.
+- **`git checkout main; git pull` before every `git checkout -b`.** Branching off a feature branch let migration 0017 ride into `main` under a docs commit message in #70.
 
 ### Prompting Claude Code
 
