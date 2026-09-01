@@ -1,7 +1,7 @@
 # OSDS — Event Schema, Adapter Interface & Entitlements
 
 **Open Source Directory Site**
-**Status:** Draft v0.4 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
+**Status:** Draft v0.5 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
 **Audience:** core maintainers, adapter authors
 
 This document defines the contract between the OSDS core and everything outside it. The core is a multi-tenant directory engine. It knows nothing about email providers, CRMs, payment gateways, or messaging platforms. It emits facts and accepts commands. Adapters translate.
@@ -9,14 +9,12 @@ This document defines the contract between the OSDS core and everything outside 
 If you are writing an adapter, sections 3, 7 and 8 are the ones you need.
 If you are implementing the paid tiers, section 5 is the whole job.
 
-### Changes from v0.3
+### Changes from v0.4
 
-- **§3.3 added: the complete event catalogue.** v0.3 restructured section 3 and in doing so lost the per-group event tables for `claim.*`, `billing.*`, `lead.*`, `call.*`, `moderation.*`, `compliance.*`, `agent.*`, `tenant.*`, `import.*` and `postal.*`, along with six of the ten `listing.*` events. §3.3 is now the single canonical list of every event type OSDS emits. Detailed payloads remain in their behavioural sections; §3.3 is the index and the source of truth for the type union.
-- `listing.owner_assigned` restored to the catalogue.
-- `listing.claimed` is **not** an event. It appeared only in the v0.2 envelope example and was never in a catalogue. The real sequence is `claim.approved` followed by `listing.owner_assigned`.
-- Section numbering below §3 shifted by one. Core entities moved 3→4,
-  reviews 4→5, entitlements 5→6, commands 6→7, adapter interface 7→8,
-  claim verification 8→9. The data-source position is now §4.1.1.
+- **§7.1 added.** `listing.upsert` payload, match key, partial-state semantics, rejected fields.
+- **§9.5 added.** Verification code lifetime per method, tenant-configurable within core-enforced bounds. §9.2's flat 21 days becomes the postcard default.
+- **§4.3 added**, plus the `user.*` namespace in §3.2 and §3.3. There is no `user.create` command; a row is minted inside the command that needs one and `user.created` is emitted.
+- **§11.2 expanded.** The command log is written outside the command transaction, and `command_log`'s nullable `tenant_id` is stated as a bounded exception rather than a violation.
 
 ---
 
@@ -1110,6 +1108,26 @@ No message broker, no extra container, survives restarts, inspectable with SQL. 
 The envelope is small and free of personal data, so keeping it indefinitely is a cheap permanent audit trail. The payload holds phone numbers, emails and message bodies — a second copy of personal data with its own retention obligation, and the copy people forget when processing a deletion request. Nulling at 90 days keeps the debugging value without accumulating a shadow PII database. Replay older than 90 days reconstructs from current state.
 
 The command log exists because a rejected command otherwise leaves no trace. "The agent attempted to delete a listing and was blocked" is precisely the record worth having.
+
+#### The command log is written outside the command transaction
+
+The attempt is recorded **before** the command transaction opens, and concluded **after** it settles, each in its own independently-committed transaction.
+
+A log written inside the transaction it is logging disappears when that transaction rolls back — which is exactly the case the log exists for. A command that throws mid-apply leaves a row with a null outcome. That is the record, not a gap.
+
+A concluded row is never rewritten. An audit trail the application can edit is not one.
+
+#### Nullable `tenant_id`
+
+Design rule 4 makes every event tenant-scoped, and every table carries `tenant_id`. **`command_log` is the exception:** a command may be malformed, or name a tenant that does not exist, and that attempt still has to leave a trace. A row that cannot be written because its tenant could not be resolved is the specific failure the log is for.
+
+The exception is narrow, and a table qualifies for it only when all three hold:
+
+1. It records an **attempt**, not a state change. Attempts can fail before a tenant is resolvable; state changes cannot.
+2. Rows with a null `tenant_id` are **unreadable by the application role**. The tenant-scoped policy matches no null row, so `osds_app` never sees another party's malformed payload.
+3. Those rows are written **already concluded**, so the application never needs to read one back to update it. `UPDATE ... WHERE id` still consults the SELECT policy; a row the session cannot read is a row it cannot update.
+
+**A new exception is a maintainer decision, recorded in `docs/decisions.md`.** The rule is general enough to be argued into, which is why claiming it is not self-service. Today `command_log` is the only table that holds it.
 
 ---
 
