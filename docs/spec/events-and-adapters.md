@@ -420,6 +420,120 @@ owner authentication decision.
 verification (§9) but never sets a credential, and §6.5 requires owners to
 reach a dashboard. How an owner authenticates is not specified here.
 
+### 4.4 Principals
+
+OSDS has two kinds of person and one kind of link between them. They differ in
+what they span, not in what they are permitted to do.
+
+**A user owns a listing. An operator administers directories. A staff
+membership is what connects an operator to one directory.**
+
+#### User
+
+A person who owns, or seeks to own, a listing. Belongs to exactly one tenant.
+Minted by `claim.submit`, never by an administrator. Their reach is the listing
+they own. Table: `users`. §4.3.
+
+#### Operator
+
+A person who administers OSDS. Belongs to no tenant. One row is one login:
+an email unique across the installation, a password hash, and nothing
+tenant-shaped. Table: `operators`.
+
+**An operator with no membership has access to nothing.** The row is an
+identity, not a permission.
+
+One property lives on the operator rather than on a membership:
+
+`is_superadmin` — installation scope. May create, suspend and delete tenants,
+elevate another operator to superadmin, and delete an operator. These are
+operations that happen outside any tenant, so no membership can authorise them.
+
+A superadmin **does not implicitly reach tenant data.** To act inside a
+directory they add themselves a membership at a stated role, which emits
+`staff.invited` like any other grant. Nothing prevents them doing so — anyone
+who can assign memberships can assign their own. The requirement is not a
+barrier; it is what makes the access a fact on the record rather than an
+invisible capability. Support work is then done at the role the situation
+calls for, seeing what that role sees.
+
+#### Staff membership
+
+`staff_memberships (operator_id, tenant_id, role, status)`. One row per
+operator-tenant pair. No row means no access to that tenant, whatever the
+operator holds elsewhere.
+
+**"Staff" is the collective noun for every operator with a membership on a
+tenant.** It is not a permission level.
+
+`status` is `pending` or `active`. A membership granted to an operator who
+already exists starts `pending` and confers nothing until that operator accepts
+it. An operator must not find a directory they never agreed to administer
+attached to their account. A membership created together with the operator row
+it points at — an invitation to someone with no account yet — becomes `active`
+on password set, since accepting the invitation and accepting the membership
+are the same act.
+
+#### Role
+
+The permission level within one membership. Ordered ranks, each a superset of
+the one below.
+
+| Rank | Role | Adds |
+|---|---|---|
+| 4 | `admin` | Invite and remove operators, change roles, tenant settings, domain, tiers and pricing |
+| 3 | `manager` | Slot capacity, comps, entitlement overrides, refund approval, lead export |
+| 2 | `editor` | Approve claims, edit listing content, respond to reviews as the directory |
+| 1 | `moderator` | Act on the moderation queue, mark leads as spam |
+| 0 | `support` | Read only. Sees the directory, changes nothing |
+
+Role is per membership. The same operator may be `admin` on one directory and
+`support` on another. There is no installation-wide role except
+`is_superadmin`.
+
+Two cuts carry most of the weight. **Between 3 and 2 is money and personal
+data** — a directory with thirty editors working claims should not have thirty
+people who can comp a Featured listing or export every lead in the database.
+**Between 2 and 1 is authority over other people's property** — approving a
+claim transfers ownership of a business's public page (§9.4), and responding to
+a review speaks publicly as the directory. A contractor working a queue needs
+neither.
+
+Ranks are ordered so authorization is a comparison rather than a matrix. A
+capability table is the right shape when roles are configurable; these are not.
+
+#### Adding a role later
+
+Adding a rank is a CHECK constraint change. **Re-meaning an existing rank after
+it has rows is a data migration plus every policy that references it.** Prefer
+a new rank to widening an old one.
+
+#### Invitation
+
+An invitation names an email address. Two paths, and confusing them is an
+account-takeover bug:
+
+- **The email matches an existing operator.** Insert a `staff_memberships` row
+  with `status: pending`. **The `operators` row is not touched** — not the
+  password hash, not the name, not anything. The person logs in with the
+  credentials they already have.
+- **No match.** Mint the operator and the membership together, and send a
+  set-password invitation.
+
+**The response must not differ between the two paths.** An invitation form that
+reveals whether an address already has an account is an oracle for which of
+your clients administer other directories on the same installation.
+
+#### Reading `actor.type`
+
+| `actor.type` | Principal |
+|---|---|
+| `owner` | A user with an approved claim |
+| `staff` | An operator with an active membership below `admin` |
+| `admin` | An operator with an active `admin` membership, or a superadmin |
+| `visitor` | No principal |
+| `system`, `agent`, `adapter` | Not people |
+
 ---
 
 ## 5. Reviews
