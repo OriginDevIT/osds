@@ -105,6 +105,20 @@ Ownership was previously answerable only by joining `claims where status = 'appr
 
 Docker-first. Four containers: `osds-app`, `osds-worker`, `postgres`, `minio` — the last two replaceable by managed services through environment variables alone. First-run browser wizard, never config files. Named Docker volumes on Windows, not bind mounts.
 
+### Authentication
+
+Decided; not implemented. Blocks `packages/api`.
+
+| Decision             | Value                                                                                                                                                                              | Reasoning                                                                                                                                                                                                                                                                                              |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Principals**       | Two tables. `operators` holds the deployment operator and tenant staff, with a `staff_memberships (operator_id, tenant_id, role)` join. `users` holds listing owners and claimants | One login may administer many tenants; a user belongs to one. Both have an email address, which is not a reason to merge them. Spec §4.3                                                                                                                                                               |
+| **Transport**        | Cookie. HttpOnly, Secure, SameSite=Lax, `__Host-` prefix                                                                                                                           | `packages/web` is server components with no client JS, so a bearer token has nothing to attach it and localStorage is XSS-readable. Machine auth is already HMAC per §8.4                                                                                                                              |
+| **Session state**    | A sessions table, not a stateless signed token                                                                                                                                     | Revocation is a delete, and `tenant.suspended` kills every session for a tenant in one statement. A stateless token needs a denylist, which is a table with extra steps. An admin panel does single-digit requests per second                                                                          |
+| **Password hashing** | Node's `crypto.scrypt`                                                                                                                                                             | Zero dependencies, no native build, no Windows toolchain, no stop-and-ask. Weaker than argon2id against GPU attackers, but a legitimate KDF at OWASP parameters. Store parameters in the hash string so raising them is a rehash-on-login. `maxmem` must be raised explicitly or it throws at high `N` |
+| **First-run wizard** | Setup token printed to container logs, plus the route disappearing once `operators` is non-empty                                                                                   | §13 targets someone who rents a server. The gap between `docker compose up` and opening a browser is a real window on a public IP, and the count check alone does not cover it                                                                                                                         |
+
+**Owner authentication is not decided.** A claimant proves control of an email or phone during verification but never sets a credential, and §6.5 requires owners to reach a dashboard. The proposal on the table is no owner passwords at all — an expiring one-time code to the address on the `users` row. Issue #56. The deployment operator keeps a password regardless, because the wizard runs before mail is necessarily configured.
+
 ---
 
 ## 3. Current state
@@ -132,20 +146,25 @@ CI provides only an owner database URL. `osds_app` is created `NOLOGIN` with no 
 
 ### Spec
 
-`docs/spec/events-and-adapters.md`, currently **v0.4**. Authoritative — where code and spec disagree, the spec wins. Spec edits are a maintainer action, not an agent action.
+`docs/spec/events-and-adapters.md`, currently **v0.5**. Authoritative — where code and spec disagree, the spec wins. Spec edits are a maintainer action, not an agent action.
 
-Seven open issues are spec gaps this session's code had to decide provisionally: #36, #38, #42, #44, #48, #49, #50. Each names the assumption the code makes and where it should be written down.
+v0.5 closed the four gaps the command layer opened: §7.1 (`listing.upsert` payload and match key), §9.5 (verification code lifetime per method), §4.3 (the user entity and how a claimant row is created), §11.2 (the command log's write discipline and its nullable `tenant_id`).
+
+Three of those left the code behind the spec, deliberately and tracked: #42 (`categories` accepted by §7.1, rejected by the handler), #54 (TTL relayed rather than computed), #58 (`user.created` specified but neither emitted nor typed).
 
 ---
 
 ## 4. Next tasks, in order
 
-1. **Admin auth decision** — blocks `packages/api`. Cookie vs bearer token; deployment-level admin vs per-tenant staff against the same `users` table; password hashing, which is a new runtime dependency and therefore a stop-and-ask. Maintainer decision.
-2. **`packages/api`** — the request-handling library. Tenant resolution from the host header, command dispatch into `@osds/core/persist`, RFC 7807 responses, `409` on idempotency replay.
-3. **Outbox consumer in `packages/worker`.** `LISTEN/NOTIFY` with polling fallback, exponential backoff (1s → 1h, 12 attempts), dead-letter queue, 30s handler timeout. Nothing external fires until this exists.
-4. **Bundled `smtp` and `webhook` adapters.** Without `smtp`, no claim verification code can be sent, so nobody can claim a listing.
-5. **Claim flow end to end** — the first vertical slice touching every layer.
-6. **Slot allocator** wrapping the approved `FOR UPDATE SKIP LOCKED` SQL.
+1. **#20** — CLAUDE.md scope wording, supervised local session versus the autonomous Odin agent.
+2. **#54 and #58 together** — bring the claim submit path in line with v0.5. One code path, one PR.
+3. **#42** — `persistListingUpsert` writes `listing_categories`.
+4. **Admin auth** — the rulings above, implemented. Blocks everything below it.
+5. **`packages/api`** — the request-handling library. Tenant resolution, command dispatch into `@osds/core/persist`, RFC 7807 responses, `409` on idempotency replay.
+6. **Outbox consumer in `packages/worker`.** `LISTEN/NOTIFY` with polling fallback, exponential backoff (1s → 1h, 12 attempts), dead-letter queue, 30s handler timeout. Nothing external fires until this exists.
+7. **Bundled `smtp` and `webhook` adapters.** Without `smtp`, no claim verification code can be sent, so nobody can claim a listing.
+8. **Claim flow end to end** — the first vertical slice touching every layer.
+9. **Slot allocator** wrapping the approved `FOR UPDATE SKIP LOCKED` SQL.
 
 Deferred until there is traffic: the Odin repo-watching agent.
 
