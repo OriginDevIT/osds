@@ -2,7 +2,7 @@
  * @osds/adapter-kit - the contract between OSDS core and adapter code.
  *
  * Types only, no dependencies. Core emits events and accepts commands;
- * adapters translate. Tracks docs/spec/events-and-adapters.md v0.4,
+ * adapters translate. Tracks docs/spec/events-and-adapters.md v0.5,
  * sections 2 (envelope), 3.3 (event catalogue), 7 (commands) and 8 (adapter
  * interface).
  */
@@ -110,6 +110,11 @@ export type ClaimEventType =
   | "claim.notified_existing_contacts"
   | "claim.disputed";
 
+/** `user.*` - people who hold or seek ownership of a listing. There is no
+ *  `user.create` command; a row is minted inside the command that needs one
+ *  (today `claim.submit`) and `user.created` is emitted. Payload detail §4.3. */
+export type UserEventType = "user.created";
+
 /** `billing.*` - money, as reported by a payment adapter. Never sets tier directly. */
 export type BillingEventType =
   | "billing.checkout_started"
@@ -202,6 +207,7 @@ export type PostalEventType =
 export type EventType =
   | ListingEventType
   | ClaimEventType
+  | UserEventType
   | BillingEventType
   | EntitlementEventType
   | SlotEventType

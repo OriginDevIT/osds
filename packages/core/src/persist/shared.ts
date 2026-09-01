@@ -63,11 +63,16 @@ export interface OutboxEvent {
 
 /**
  * Insert every event of one command into the outbox, in emission order so
- * per-subject ordering holds (§3.1). `command.idempotency_key` goes on the
- * FIRST row only; the rest get `null`, because the unique index is
- * `(tenant_id, idempotency_key)` and a second non-null copy would collide
- * (see `writeOutbox` in command/handle.ts). Returns the first row's id - the
- * one a replay lookup resolves to.
+ * per-subject ordering holds (§3.1). `command.idempotency_key` goes on exactly
+ * one row - the event at `keyIndex` (default 0, the first) - and the rest get
+ * `null`, because the unique index is `(tenant_id, idempotency_key)` and a
+ * second non-null copy would collide (see `writeOutbox` in command/handle.ts).
+ * Returns that row's id - the one a replay lookup resolves to.
+ *
+ * `keyIndex` is non-zero only when an earlier event is emitted ahead of the
+ * command's headline fact: `claim.submit` emits `user.created` before
+ * `claim.submitted` (§4.3), but the idempotency key and the returned id stay on
+ * `claim.submitted`.
  *
  * Throws on an empty list: an accepted command that produced no event is a bug,
  * not a silent no-op (cf. the empty-assignment guard in listing-upsert.ts).
@@ -77,10 +82,16 @@ export async function writeOutboxEvents(
   command: OsdsCommand,
   deps: PersistDeps,
   events: readonly OutboxEvent[],
+  keyIndex = 0,
 ): Promise<string> {
   if (events.length === 0) {
     throw new Error(
       `${command.command} persistence: an accepted command produced no events`,
+    );
+  }
+  if (keyIndex < 0 || keyIndex >= events.length) {
+    throw new Error(
+      `${command.command} persistence: keyIndex ${keyIndex} out of range for ${events.length} events`,
     );
   }
 
@@ -90,7 +101,7 @@ export async function writeOutboxEvents(
   let primaryId = "";
   for (const [i, event] of events.entries()) {
     const id = deps.newId();
-    if (i === 0) primaryId = id;
+    if (i === keyIndex) primaryId = id;
 
     await sql`
       insert into outbox (
@@ -100,7 +111,7 @@ export async function writeOutboxEvents(
         ${id}, ${command.tenant_id}, ${event.type}, 1, ${occurredAt}, ${event.subject},
         ${actor}::jsonb, ${command.adapter_id}, ${command.trace_id},
         ${JSON.stringify(event.data)}::jsonb,
-        ${i === 0 ? command.idempotency_key : null}
+        ${i === keyIndex ? command.idempotency_key : null}
       )
     `.execute(trx);
   }

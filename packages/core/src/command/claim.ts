@@ -13,6 +13,10 @@
  *     with no way to opt out to simplify a fixture.
  *   - Normally emits `claim.submitted`, then `claim.verification_started` for
  *     every method except `manual` (which goes straight to admin review).
+ *   - `claim.verification_started.expires_at` is computed here (§9.5), never
+ *     relayed from the caller: `resolveVerificationTtl` for the method plus the
+ *     injected clock. `manual` and `gbp_oauth` have no code, so it is `null`.
+ *     A stored TTL outside the §9.5 bounds throws - it is not clamped.
  *   - A submission against a listing that is already `claimed` emits
  *     `claim.disputed` instead and opens moderation (§9.4). Verification never
  *     moves ownership away from a sitting owner, so core never auto-transfers.
@@ -35,6 +39,10 @@
  */
 import type { OsdsCommand, ProblemDocument } from "@osds/adapter-kit";
 import { validationProblem } from "./problem.js";
+import {
+  resolveVerificationTtl,
+  type VerificationTtlConfig,
+} from "./verification-ttl.js";
 
 // --- vocabulary ----------------------------------------------------------
 
@@ -167,7 +175,11 @@ export interface ClaimVerificationStartedEvent {
   readonly subject: string;
   readonly data: {
     readonly method: ClaimMethod;
-    /** Deadline for the method's challenge. Core has no clock; the caller supplies it or it is null. */
+    /**
+     * Deadline for the method's challenge. Core computes it (§9.5) from the
+     * method's TTL and the injected clock; `null` for `manual` / `gbp_oauth`,
+     * which have no OSDS-side code.
+     */
     readonly expires_at: string | null;
   };
 }
@@ -188,6 +200,28 @@ export interface ListingOwnerAssignedEvent {
   readonly data: {
     readonly owner_user_id: string;
     readonly claim_id: string;
+  };
+}
+
+/**
+ * §4.3: emitted when `claim.submit` mints a fresh `users` row, before
+ * `claim.submitted` and in the same transaction. Not emitted when an existing
+ * row is reused. The pure resolver cannot tell mint from reuse - that is a
+ * database fact - so the persistence layer builds this from the claimant data
+ * and the minted id.
+ */
+export interface UserCreatedEvent {
+  readonly type: "user.created";
+  /** The new `usr_` id. `user.*` is its own subject, not the listing. */
+  readonly subject: string;
+  readonly data: {
+    readonly user: {
+      readonly id: string;
+      readonly email: string;
+      readonly name: string;
+      readonly phone_e164: string | null;
+    };
+    readonly created_by: "claim.submit";
   };
 }
 
@@ -274,11 +308,19 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * Validate a `claim.submit` command against the listing and the tenant's
  * enabled verification methods. Returns the events to emit (as drafts - the
  * claim id is minted downstream, see {@link withClaimId}) or a 422 problem.
+ *
+ * `now` is the injected clock (a resolved instant, never read here) and
+ * `ttlConfig` is the tenant's §9.5 `claim_verification.ttl`, threaded like
+ * `enabledMethods`; together they fix `claim.verification_started.expires_at`.
+ * A TTL outside the §9.5 bounds throws out of this call - it is an operator
+ * misconfiguration, not a 422.
  */
 export function handleClaimSubmit(
   command: OsdsCommand,
   listing: ClaimListing | null,
   enabledMethods: readonly ClaimMethod[],
+  now: Date,
+  ttlConfig?: VerificationTtlConfig,
 ): ClaimSubmitResult {
   if (command.command !== "claim.submit") {
     return reject(
@@ -363,6 +405,12 @@ export function handleClaimSubmit(
     return { outcome: "submitted", events: [submitted] };
   }
 
+  // §9.5: core computes the deadline. `resolveVerificationTtl` throws on a
+  // stored TTL outside the bounds - deliberately not caught here.
+  const ttlMs = resolveVerificationTtl(parsed.method, ttlConfig);
+  const expiresAt =
+    ttlMs === null ? null : new Date(now.getTime() + ttlMs).toISOString();
+
   return {
     outcome: "submitted",
     events: [
@@ -370,7 +418,7 @@ export function handleClaimSubmit(
       {
         type: "claim.verification_started",
         subject: listing.id,
-        data: { method: parsed.method, expires_at: parsed.expiresAt },
+        data: { method: parsed.method, expires_at: expiresAt },
       },
     ],
   };
@@ -381,7 +429,6 @@ interface ParsedSubmit {
   readonly method: ClaimMethod;
   readonly claimant: ClaimantData;
   readonly consent: ConsentMap;
-  readonly expiresAt: string | null;
 }
 
 function parseSubmit(
@@ -395,7 +442,8 @@ function parseSubmit(
   const method = parseMethod(p["method"], errors);
   const claimant = parseClaimant(p["claimant"], errors);
   const consent = parseConsent(p["consent"], errors);
-  const expiresAt = parseOptionalInstant(p, "verification_expires_at", errors);
+  // `verification_expires_at` is no longer read: core computes the deadline
+  // from the tenant TTL (§9.5). A stray value in the payload is ignored.
 
   if (method !== undefined && !enabledMethods.includes(method)) {
     errors.push(
@@ -413,7 +461,7 @@ function parseSubmit(
     return null;
   }
 
-  return { listingId, method, claimant, consent, expiresAt: expiresAt ?? null };
+  return { listingId, method, claimant, consent };
 }
 
 // --- claim.approve -----------------------------------------------
@@ -794,17 +842,6 @@ function parseMethod(v: unknown, errors: string[]): ClaimMethod | undefined {
   errors.push(
     'payload.method must be one of "manual", "phone_otp", "domain_email", "gbp_oauth", "postcard"',
   );
-  return undefined;
-}
-
-function parseOptionalInstant(
-  p: Record<string, unknown>,
-  key: string,
-  errors: string[],
-): string | undefined {
-  if (!has(p, key) || p[key] === null) return undefined;
-  if (isIsoInstant(p[key])) return p[key] as string;
-  errors.push(`payload.${key}, if present, must be an RFC 3339 timestamp`);
   return undefined;
 }
 
