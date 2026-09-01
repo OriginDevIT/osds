@@ -45,6 +45,7 @@ export {
   type ClaimVerificationStartedEvent,
   type ClaimApprovedEvent,
   type ListingOwnerAssignedEvent,
+  type UserCreatedEvent,
   type EmittedClaimEvent,
 } from "./claim.js";
 export {

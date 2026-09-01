@@ -251,7 +251,7 @@ function claimant(email: string, name = "Dana Hoffman") {
       await admin.end();
     });
 
-    it("submit: mints a new claimant user and writes both events, key on the first only", async () => {
+    it("submit: mints a new claimant user, emits user.created ahead of claim.submitted (§4.3), key on claim.submitted", async () => {
       await seedListing("listing_s1", "tnt_a", "hoffman-1");
       const cmd = submitCmd({
         listing_id: "listing_s1",
@@ -285,15 +285,31 @@ function claimant(email: string, name = "Dana Hoffman") {
 
       const events = await outboxByTrace("tnt_a", cmd.trace_id);
       expect(events.map((e) => e.type)).toEqual([
+        "user.created",
         "claim.submitted",
         "claim.verification_started",
       ]);
-      expect(events[0]!.id).toBe(eventId);
-      expect(events[0]!.subject).toBe("listing_s1");
-      expect(events[0]!.idempotency_key).toBe(cmd.idempotency_key);
-      expect(events[1]!.idempotency_key).toBeNull();
+
+      // §4.3: user.created first, its own subject, no claim/consent.
+      expect(events[0]!.subject).toBe(claimantUserId);
+      expect(events[0]!.idempotency_key).toBeNull();
       expect(events[0]!.origin).toBe("gohighlevel");
-      expect(events[0]!.data).toMatchObject({
+      expect(events[0]!.data).toEqual({
+        user: {
+          id: claimantUserId,
+          email: "dana@new.example",
+          name: "Dana",
+          phone_e164: "+17735550142",
+        },
+        created_by: "claim.submit",
+      });
+
+      // The command's returned id and its idempotency key sit on claim.submitted.
+      expect(events[1]!.id).toBe(eventId);
+      expect(events[1]!.subject).toBe("listing_s1");
+      expect(events[1]!.idempotency_key).toBe(cmd.idempotency_key);
+      expect(events[2]!.idempotency_key).toBeNull();
+      expect(events[1]!.data).toMatchObject({
         claim: {
           id: claims[0]!.id,
           listing_id: "listing_s1",
@@ -306,13 +322,32 @@ function claimant(email: string, name = "Dana Hoffman") {
         },
         consent,
       });
-      expect(events[1]!.data).toEqual({
+      expect(events[2]!.data).toEqual({
         method: "phone_otp",
         expires_at: "2026-08-31T12:10:00.000Z",
       });
     });
 
-    it("submit: reuses an existing user on the same (tenant, lowercased email)", async () => {
+    it("submit: exactly one non-null idempotency_key across the command's rows, on claim.submitted", async () => {
+      await seedListing("listing_s1b", "tnt_a", "hoffman-1b");
+      const cmd = submitCmd({
+        listing_id: "listing_s1b",
+        method: "phone_otp",
+        claimant: claimant("keycheck@x.example"),
+        consent,
+      });
+
+      await persistClaimSubmit(db, cmd, deps, ENABLED);
+
+      const events = await outboxByTrace("tnt_a", cmd.trace_id);
+      expect(events).toHaveLength(3);
+      const keyed = events.filter((e) => e.idempotency_key !== null);
+      expect(keyed).toHaveLength(1);
+      expect(keyed[0]!.type).toBe("claim.submitted");
+      expect(keyed[0]!.idempotency_key).toBe(cmd.idempotency_key);
+    });
+
+    it("submit: reuses an existing user on the same (tenant, lowercased email), emits no user.created", async () => {
       await seedListing("listing_s2", "tnt_a", "hoffman-2");
       await seedUser("usr_existing_2", "tnt_a", "reuse@x.example", "Old Name");
 
@@ -324,6 +359,7 @@ function claimant(email: string, name = "Dana Hoffman") {
       });
       const res = await persistClaimSubmit(db, cmd, deps, ENABLED);
       expect(res.status).toBe("submitted");
+      const eventId = res.status === "submitted" ? res.event_id : "";
 
       const users = await usersByEmail("tnt_a", "reuse@x.example");
       expect(users).toHaveLength(1);
@@ -335,6 +371,13 @@ function claimant(email: string, name = "Dana Hoffman") {
       expect(claims[0]!.claimant_user_id).toBe("usr_existing_2");
 
       const events = await outboxByTrace("tnt_a", cmd.trace_id);
+      // §4.3: nothing is emitted when an existing row is reused.
+      expect(events.map((e) => e.type)).toEqual([
+        "claim.submitted",
+        "claim.verification_started",
+      ]);
+      expect(events[0]!.id).toBe(eventId);
+      expect(events[0]!.idempotency_key).toBe(cmd.idempotency_key);
       expect(events[0]!.data).toMatchObject({
         claimant: { id: "usr_existing_2" },
       });
@@ -427,7 +470,7 @@ function claimant(email: string, name = "Dana Hoffman") {
       });
     });
 
-    it("replay: a two-event command re-runs to a single duplicate, writing nothing", async () => {
+    it("replay: a multi-event command re-runs to a single duplicate, writing nothing", async () => {
       await seedListing("listing_s5", "tnt_a", "hoffman-5");
       const cmd = submitCmd({
         listing_id: "listing_s5",
@@ -443,17 +486,22 @@ function claimant(email: string, name = "Dana Hoffman") {
       const firstId = first.status === "submitted" ? first.event_id : "";
       expect(second).toEqual({ status: "duplicate", event_id: firstId });
 
-      // The replay is only safe because the first transaction wrote BOTH events:
-      // exactly two rows, the trailing one keyed null, still present.
+      // The replay is only safe because the first transaction wrote ALL THREE
+      // events: user.created + claim.submitted + claim.verification_started,
+      // one key on claim.submitted, still present.
       const events = await outboxByTrace("tnt_a", cmd.trace_id);
-      expect(events).toHaveLength(2);
+      expect(events).toHaveLength(3);
       expect(events.map((e) => e.type)).toEqual([
+        "user.created",
         "claim.submitted",
         "claim.verification_started",
       ]);
-      expect(events[0]!.id).toBe(firstId);
-      expect(events[0]!.idempotency_key).toBe(cmd.idempotency_key);
-      expect(events[1]!.idempotency_key).toBeNull();
+      expect(events[1]!.type).toBe("claim.submitted");
+      expect(events[1]!.id).toBe(firstId);
+      expect(events[1]!.idempotency_key).toBe(cmd.idempotency_key);
+      expect(
+        events.filter((e) => e.idempotency_key !== null),
+      ).toHaveLength(1);
 
       // And no second claim / user from the replay.
       expect(await claimsForListing("tnt_a", "listing_s5")).toHaveLength(1);
@@ -605,9 +653,11 @@ function claimant(email: string, name = "Dana Hoffman") {
       expect(bUsers[0]!.name).toBe("B Person");
 
       // A's tenant-scoped session never sees B's claim rows or events; B's does.
+      // B mints a fresh user, so its trace carries three rows (user.created +
+      // claim.submitted + claim.verification_started).
       expect(await claimsForListing("tnt_a", "listing_xb")).toHaveLength(0);
       expect(await outboxByTrace("tnt_a", bCmd.trace_id)).toHaveLength(0);
-      expect(await outboxByTrace("tnt_b", bCmd.trace_id)).toHaveLength(2);
+      expect(await outboxByTrace("tnt_b", bCmd.trace_id)).toHaveLength(3);
     });
   },
 );

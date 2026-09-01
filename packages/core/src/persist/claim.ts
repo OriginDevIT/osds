@@ -22,9 +22,13 @@
  * `(tenant_id, lower(email))`, minting `usr_<newId>` when absent, `role`
  * defaulted to `owner`. This is provisional pending issue #44 (proper account
  * linking / invite flow); it is the minimum `claim.approve` needs to have a
- * user to assign ownership to. The `disputed` path changes no state - it writes
- * only the `claim.disputed` event; the moderation flow (not built here) owns
- * the dispute record.
+ * user to assign ownership to. When the row is freshly minted, `user.created`
+ * (§4.3) is emitted ahead of `claim.submitted` in the same transaction; a
+ * reused row emits nothing. `writeOutboxEvents` keeps the idempotency key and
+ * the returned event id on `claim.submitted` via `keyIndex`. The `disputed`
+ * path changes no state and never reaches the claimant upsert - it writes only
+ * the `claim.disputed` event; the moderation flow (not built here) owns the
+ * dispute record.
  *
  * `claim.verification_started.expires_at` is core-computed (§9.5): the resolver
  * takes the injected clock (`deps.now()`) and the tenant's
@@ -170,7 +174,7 @@ async function applySubmit(
   const verificationStarted = result.events[1];
   const method = submitted.data.claim.method;
 
-  const claimantUserId = await upsertClaimant(
+  const { id: claimantUserId, inserted: userMinted } = await upsertClaimant(
     trx,
     command.tenant_id,
     submitted.data.claimant,
@@ -193,7 +197,7 @@ async function applySubmit(
   });
 
   // Fold the minted claim id and the resolved claimant id back onto the events.
-  const events: OutboxEvent[] = withClaimId(result, claimId).map(
+  const claimEvents: OutboxEvent[] = withClaimId(result, claimId).map(
     (event): OutboxEvent =>
       event.type === "claim.submitted"
         ? {
@@ -207,7 +211,31 @@ async function applySubmit(
         : { type: event.type, subject: event.subject, data: event.data },
   );
 
-  const eventId = await writeOutboxEvents(trx, command, deps, events);
+  // §4.3: a freshly minted user emits `user.created` ahead of `claim.submitted`,
+  // in this transaction. A reused row emits nothing. The idempotency key and the
+  // returned id stay on `claim.submitted` (keyIndex).
+  const claimant = submitted.data.claimant;
+  const events: OutboxEvent[] = userMinted
+    ? [
+        {
+          type: "user.created",
+          subject: claimantUserId,
+          data: {
+            user: {
+              id: claimantUserId,
+              email: claimant.email,
+              name: claimant.name,
+              phone_e164: claimant.phone_e164,
+            },
+            created_by: "claim.submit",
+          },
+        },
+        ...claimEvents,
+      ]
+    : claimEvents;
+  const keyIndex = userMinted ? 1 : 0;
+
+  const eventId = await writeOutboxEvents(trx, command, deps, events, keyIndex);
   return { status: "submitted", event_id: eventId };
 }
 
@@ -452,22 +480,33 @@ async function lockClaim(
 
 /**
  * Provisional claimant resolution (issue #44): key on `(tenant_id, email)`,
- * mint `usr_<newId>` when there is no row. `do update set email = excluded.email`
- * is a no-op that forces `returning` to yield the row on a conflict.
+ * mint `usr_<newId>` when there is no row, reuse it otherwise.
+ *
+ * `do update set email = excluded.email` is a no-op write, kept for its lock
+ * behaviour: `ON CONFLICT DO UPDATE` *blocks* on a concurrent uncommitted
+ * insert of the same key and then returns the surviving row, so `returning`
+ * always yields a row and a racing `claim.submit` resolves to the same user.
+ * `DO NOTHING` would instead skip on conflict, return nothing, and force a
+ * follow-up `SELECT` that cannot see the other transaction's uncommitted row -
+ * the two submits would mint two users, or deadlock.
+ *
+ * `xmax = 0` on the returned row is true only for a genuine INSERT; a row that
+ * came back via the DO UPDATE branch carries the locking txid. That is how we
+ * tell a freshly minted user (emit `user.created`, §4.3) from a reused one.
  */
 async function upsertClaimant(
   trx: Db,
   tenantId: string,
   claimant: ClaimantData,
   deps: PersistDeps,
-): Promise<string> {
-  const res = await sql<{ id: string }>`
+): Promise<{ id: string; inserted: boolean }> {
+  const res = await sql<{ id: string; inserted: boolean }>`
     insert into users (id, tenant_id, email, name, role)
     values (
       ${`usr_${deps.newId()}`}, ${tenantId}, ${claimant.email}, ${claimant.name}, 'owner'
     )
     on conflict (tenant_id, email) do update set email = excluded.email
-    returning id
+    returning id, (xmax = 0) as inserted
   `.execute(trx);
   const row = res.rows[0];
   if (row === undefined) {
@@ -475,7 +514,7 @@ async function upsertClaimant(
       "claim.submit persistence: claimant upsert returned no row",
     );
   }
-  return row.id;
+  return { id: row.id, inserted: row.inserted };
 }
 
 interface ClaimInsert {

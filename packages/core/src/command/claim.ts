@@ -203,6 +203,28 @@ export interface ListingOwnerAssignedEvent {
   };
 }
 
+/**
+ * §4.3: emitted when `claim.submit` mints a fresh `users` row, before
+ * `claim.submitted` and in the same transaction. Not emitted when an existing
+ * row is reused. The pure resolver cannot tell mint from reuse - that is a
+ * database fact - so the persistence layer builds this from the claimant data
+ * and the minted id.
+ */
+export interface UserCreatedEvent {
+  readonly type: "user.created";
+  /** The new `usr_` id. `user.*` is its own subject, not the listing. */
+  readonly subject: string;
+  readonly data: {
+    readonly user: {
+      readonly id: string;
+      readonly email: string;
+      readonly name: string;
+      readonly phone_e164: string | null;
+    };
+    readonly created_by: "claim.submit";
+  };
+}
+
 // --- results ---------------------------------------------------------
 
 export type ClaimSubmitResult =
