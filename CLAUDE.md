@@ -12,6 +12,28 @@ Apache-2.0. Steward: Origin Development & IT, Inc.
 
 **Decisions in `docs/decisions.md` are settled.** Read it before proposing an architectural change. Reopening a decision requires new information, not a fresh opinion — argue it in an issue, don't relitigate in code.
 
+## Who is reading this
+
+Two agents read this file, under different supervision.
+
+- **A supervised local session.** Claude Code in a maintainer's editor. A human
+  approves every shell command as it is proposed and reads the diff before it is
+  committed. Nothing you write reaches the public repository unless the
+  maintainer pushes it.
+- **The Odin agent.** An autonomous account that watches this repository —
+  triaging issues, reviewing pull requests, and opening its own. Nobody is at
+  the keyboard, and what it writes is public the moment it writes it.
+
+Every rule in this file applies to both. Where they differ it is in the
+_mechanism_ of stopping, never the threshold: a supervised session stops in the
+chat and waits, Odin stops by opening an issue that describes the work and
+leaves it unwritten. **An autonomous agent does not lower the bar because a
+human would probably have said yes.**
+
+Odin carries further restrictions that do not apply to a supervised session.
+They live in `docs/agent-operations.md`, and for Odin that file governs where
+it is stricter than this one.
+
 ## Non-negotiable invariants
 
 These are architectural commitments, not preferences. A change that violates one of these gets rejected regardless of how well it is written. If you are reviewing a PR, check these first.
@@ -85,7 +107,9 @@ Run `pnpm typecheck` and `pnpm test` before proposing any change. Do not open a 
 
 ## What requires a human
 
-Do not do these autonomously. Prepare the work, then stop and ask:
+Do not do these autonomously. Prepare the work, then stop: in a supervised
+session, say what you would do and wait; as Odin, open an issue describing the
+change and do not write it.
 
 - Anything touching `.github/workflows/`, CI configuration, or repository settings
 - Anything touching secrets, credentials, authentication, authorization, or cryptography
@@ -96,7 +120,9 @@ Do not do these autonomously. Prepare the work, then stop and ask:
 - Releases, version bumps, publishing, tagging
 - Adding a new runtime dependency
 
-Full policy in `docs/agent-operations.md`. Read it before acting on issues or PRs.
+Full policy in `docs/agent-operations.md`. Odin reads it before acting on any
+issue or pull request; a supervised session should read it before acting on
+one on the maintainer's behalf.
 
 ## Tone in public
 
