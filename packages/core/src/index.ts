@@ -24,6 +24,13 @@ export {
 } from "./public-render.js";
 
 export {
+  hash as hashPassword,
+  verify as verifyPassword,
+  needsRehash as passwordNeedsRehash,
+  InvalidPasswordHashError,
+} from "./password.js";
+
+export {
   CommandRejected,
   validationProblem,
   scopeProblem,
