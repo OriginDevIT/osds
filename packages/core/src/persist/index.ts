@@ -28,5 +28,15 @@ export {
   type VerificationTtlConfig,
 } from "../command/verification-ttl.js";
 
+export {
+  createSession,
+  resolveSession,
+  revokeSession,
+  revokeAllForOperator,
+  authenticateOperator,
+  type Session,
+  type ResolvedSession,
+} from "./session.js";
+
 export { handleCommand } from "../command/handle.js";
 export type { CommandContext, IdFactory } from "../command/context.js";

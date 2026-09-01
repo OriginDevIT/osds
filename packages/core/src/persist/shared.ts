@@ -41,6 +41,53 @@ export function withTenant<T>(
   });
 }
 
+/**
+ * Request-scoped GUCs a NON-tenant persist transaction may set (operator auth,
+ * sessions - the console host has no tenant at all). An omitted key is left
+ * unset: its 0017 resolver returns NULL, and every policy branch reading it
+ * default-denies, so a missing GUC fails closed rather than widening.
+ */
+export interface AppGucs {
+  readonly operatorId?: string;
+  readonly loginEmail?: string;
+  readonly sessionTokenHash?: string;
+  readonly sessionHost?: string;
+}
+
+const APP_GUC_NAME: Readonly<Record<keyof AppGucs, string>> = {
+  operatorId: "app.operator_id",
+  loginEmail: "app.login_email",
+  sessionTokenHash: "app.session_token_hash",
+  sessionHost: "app.session_host",
+};
+
+/**
+ * {@link withTenant} without the tenant: one transaction as `osds_app` with the
+ * given request-scoped GUCs set transaction-local. Four lines overlap with
+ * `withTenant` on purpose - the command path is not worth touching to share
+ * them. GUC *names* are fixed here; only the values come from the caller, so
+ * `set_config` (which takes the name as a value, not an identifier) cannot be
+ * steered.
+ */
+export function withAppRole<T>(
+  db: Db,
+  gucs: AppGucs,
+  fn: (trx: Db) => Promise<T>,
+): Promise<T> {
+  return db.transaction().execute(async (trx) => {
+    await sql`set local role osds_app`.execute(trx);
+    for (const key of Object.keys(APP_GUC_NAME) as (keyof AppGucs)[]) {
+      const value = gucs[key];
+      if (value !== undefined) {
+        await sql`select set_config(${APP_GUC_NAME[key]}, ${value}, true)`.execute(
+          trx,
+        );
+      }
+    }
+    return fn(trx);
+  });
+}
+
 /** The first outbox row id for `idempotency_key` in this tenant, or `null`. */
 export async function findEventId(
   trx: Db,
