@@ -19,6 +19,9 @@ These are architectural commitments, not preferences. A change that violates one
 1. **Core never imports adapter code.** No vendor name - `stripe`, `gohighlevel`, `twilio` - may appear anywhere under `packages/core/`. Not in an import, not in a conditional, not in a type name. Core knows capability names only.
 2. **Core owns entitlement; adapters own money.** Adapters report payment outcomes. Core decides tier consequences. There is no command that sets a listing's tier directly.
 3. **Every table carries `tenant_id`.** Every query is tenant-scoped. Single-directory mode is a UI toggle, never a different data model. A migration that adds a table without `tenant_id` is wrong.
+
+   One table has a **nullable** `tenant_id`: `command_log`, because a command naming an unresolvable tenant still has to leave a trace. The three conditions a table must meet to qualify are in `docs/spec/` §11.2, and a new exception is a maintainer decision recorded in `docs/decisions.md` - do not claim it yourself.
+
 4. **No data-source connectors.** OSDS ships no importer, scraper, hook, or plugin interface for any external listing dataset. This is a legal position, not a missing feature. See `docs/spec/` §4.1.1 and `CONTRIBUTING.md`. Contributions adding one are declined on sight - say so politely and link the section.
 5. **Events are facts, past tense, immutable.** `listing.claimed`, never `claim_listing`. Event type names are permanent; renaming means adding a new type and deprecating the old.
 6. **Commands are validated at the core boundary.** Adapters never write to the database. They send commands; core validates, applies, emits.
