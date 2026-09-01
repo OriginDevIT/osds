@@ -15,6 +15,7 @@ If you are implementing the paid tiers, section 5 is the whole job.
 - **§9.5 added.** Verification code lifetime per method, tenant-configurable within core-enforced bounds. §9.2's flat 21 days becomes the postcard default.
 - **§4.3 added**, plus the `user.*` namespace in §3.2 and §3.3. There is no `user.create` command; a row is minted inside the command that needs one and `user.created` is emitted.
 - **§11.2 expanded.** The command log is written outside the command transaction, and `command_log`'s nullable `tenant_id` is stated as a bounded exception rather than a violation.
+- **`staff.*` added** to §3.2 and §3.3, plus the events subsection in §4.4. Membership changes emit events; `subject` is the operator id. Superadmin elevation stays command-log-only — it is installation-scoped and fits neither envelope.
 
 ---
 
@@ -85,6 +86,7 @@ Ordering is guaranteed per `subject`. Nothing is guaranteed across subjects. Do 
 |---|---|
 | `listing.*` | The listing record and its published state |
 | `claim.*` | Acquiring a verified human owner |
+| `staff.*` | An operator's membership of one directory |
 | `user.*` | People who hold or seek ownership of a listing |
 | `billing.*` | Money, as reported by a payment adapter |
 | `entitlement.*` | Tier and period state, as decided by core |
@@ -138,6 +140,29 @@ Ordering is guaranteed per `subject`. Nothing is guaranteed across subjects. Do 
 
 A user is a person who owns or seeks to own a listing. Staff and deployment
 operators are not users and live in their own table — see §4.3.
+
+#### `staff.*`
+
+An operator's relationship to one tenant. Tenant-scoped like everything else —
+the tenant block names the directory the membership concerns, and `subject` is
+the operator's id.
+
+| Type | When | Payload detail |
+|---|---|---|
+| `staff.invited` | A membership row was created, at any status | §4.4 |
+| `staff.accepted` | A pending membership became active | §4.4 |
+| `staff.role_changed` | An active membership's role moved; `from_role`, `to_role` | §4.4 |
+| `staff.removed` | A membership row was deleted; `removed_by` (`admin` \| `self`) | §4.4 |
+
+A membership created together with the operator it points at is `active` on
+password set, so that path emits `staff.invited` then `staff.accepted`. A
+membership on an existing operator emits `staff.invited` at creation and
+`staff.accepted` only if the invitee accepts.
+
+**Superadmin elevation emits no event.** It is installation-scoped, so it fits
+neither envelope — `OsdsAnyEvent` is `OsdsEvent | TenantEvent`, and a tenant
+block would be a lie. The command log records it permanently (§11.2), which is
+the audit trail that matters. Revisit if an adapter ever needs to react to it.
 
 #### `billing.*`
 
@@ -533,6 +558,38 @@ your clients administer other directories on the same installation.
 | `admin` | An operator with an active `admin` membership, or a superadmin |
 | `visitor` | No principal |
 | `system`, `agent`, `adapter` | Not people |
+
+#### Events
+
+Every membership change emits a `staff.*` event (§3.3). `subject` is the
+operator's id: an adapter reacting to a grant cares about the person who
+gained access, and the directory is already on the envelope.
+
+```jsonc
+// staff.invited data
+{
+  "membership": {
+    "operator_id": "op_01JBQ5T2",
+    "role": "editor",
+    "status": "pending"
+  },
+  "operator": {
+    "email": "dana@example.test",
+    "existing": true            // whether the operators row already existed
+  },
+  "granted_by": "op_01JBQ2K9"
+}
+```
+
+`operator.existing` is for adapters, not for the invitation response — §4.4
+requires the response to be identical either way. An event reaching an
+already-installed adapter is not the same disclosure as an HTTP response to a
+form submission.
+
+**A superadmin granting themselves a membership emits `staff.invited` like any
+other grant**, with `granted_by` equal to `operator_id`. That the two match is
+what makes hosting-side access visible in the log rather than
+indistinguishable from ordinary staffing.
 
 ---
 
