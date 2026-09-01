@@ -44,6 +44,12 @@ These are architectural commitments, not preferences. A change that violates one
 
    One table has a **nullable** `tenant_id`: `command_log`, because a command naming an unresolvable tenant still has to leave a trace. The three conditions a table must meet to qualify are in `docs/spec/` §11.2, and a new exception is a maintainer decision recorded in `docs/decisions.md` - do not claim it yourself.
 
+   Invariant 3 governs **tenant data**. Principal and structural tables sit outside it:
+   `tenants` carries no `tenant_id` and never did, and neither do `operators` or
+   `operator_sessions` — an operator spans tenants by design. `staff_memberships` carries
+   one because it _is_ the tenant relationship. This is a scope clarification, not an
+   exception, and it does not license omitting `tenant_id` from anything holding tenant data.
+
 4. **No data-source connectors.** OSDS ships no importer, scraper, hook, or plugin interface for any external listing dataset. This is a legal position, not a missing feature. See `docs/spec/` §4.1.1 and `CONTRIBUTING.md`. Contributions adding one are declined on sight - say so politely and link the section.
 5. **Events are facts, past tense, immutable.** `listing.claimed`, never `claim_listing`. Event type names are permanent; renaming means adding a new type and deprecating the old.
 6. **Commands are validated at the core boundary.** Adapters never write to the database. They send commands; core validates, applies, emits.
