@@ -105,6 +105,20 @@ if (!available) {
       });
     }
 
+    async function listingCategorySlugs(tenantId: string, listingId: string) {
+      return asTenant(tenantId, async (trx) => {
+        const res = await sql<{ slug: string }>`
+          select c.slug
+          from listing_categories lc
+          join categories c
+            on c.tenant_id = lc.tenant_id and c.id = lc.category_id
+          where lc.tenant_id = ${tenantId} and lc.listing_id = ${listingId}
+          order by c.slug
+        `.execute(trx);
+        return res.rows.map((r) => r.slug);
+      });
+    }
+
     async function outboxRows(tenantId: string, subject: string) {
       return asTenant(tenantId, async (trx) => {
         const res = await sql<{
@@ -138,6 +152,13 @@ if (!available) {
       insert into tenants (id, slug, name) values
         ('tnt_a', 'tenant-a', 'Tenant A'),
         ('tnt_b', 'tenant-b', 'Tenant B')
+    `.execute(db);
+      await sql`
+      insert into categories (id, tenant_id, slug, name) values
+        ('cat_a_plumbers',   'tnt_a', 'plumbers',           'Plumbers'),
+        ('cat_a_emergency',  'tnt_a', 'emergency-plumbers', 'Emergency Plumbers'),
+        ('cat_a_hvac',       'tnt_a', 'hvac',               'HVAC'),
+        ('cat_b_plumbers',   'tnt_b', 'plumbers',           'Plumbers')
     `.execute(db);
     });
 
@@ -280,11 +301,11 @@ if (!available) {
       expect(orphan).toBe(0);
     });
 
-    it("rejected: a payload carrying categories writes nothing (issue #42)", async () => {
+    it("rejected: an unknown category slug writes nothing and names the slug (§7.1)", async () => {
       const cmd = command({
         slug: "cats-co",
         name: "Cats Co",
-        categories: ["plumbers"],
+        categories: ["plumbers", "plumberz"],
       });
 
       const res = await persistListingUpsert(db, cmd, deps);
@@ -292,7 +313,9 @@ if (!available) {
       expect(res.status).toBe("rejected");
       if (res.status === "rejected") {
         expect(res.problem.status).toBe(422);
-        expect(JSON.stringify(res.problem.errors)).toContain("issue #42");
+        expect(res.problem.errors).toContain(
+          'payload.categories contains unknown slug "plumberz"',
+        );
       }
 
       const rows = (await listingRows("tnt_a")).filter(
@@ -306,6 +329,166 @@ if (!available) {
         return r.rows[0]!.n;
       });
       expect(orphan).toBe(0);
+      const catRows = await asTenant("tnt_a", async (trx) => {
+        const r = await sql<{ n: number }>`
+        select count(*)::int as n from listing_categories
+      `.execute(trx);
+        return r.rows[0]!.n;
+      });
+      expect(catRows).toBe(0);
+    });
+
+    it("create with categories: writes the join rows and carries the set on the event", async () => {
+      const cmd = command({
+        slug: "categorised-co",
+        name: "Categorised Co",
+        categories: ["plumbers", "emergency-plumbers", "plumbers"],
+      });
+
+      const res = await persistListingUpsert(db, cmd, deps);
+      expect(res.status).toBe("created");
+
+      const listingId = (await listingRows("tnt_a")).find(
+        (r) => r.slug === "categorised-co",
+      )!.id;
+
+      expect(await listingCategorySlugs("tnt_a", listingId)).toEqual([
+        "emergency-plumbers",
+        "plumbers",
+      ]);
+
+      const events = await outboxRows("tnt_a", listingId);
+      expect(events).toHaveLength(1);
+      expect(events[0]!.data).toMatchObject({
+        listing: { categories: ["emergency-plumbers", "plumbers"] },
+      });
+    });
+
+    it("update: a category-set change is one replace /categories op and bumps updated_at", async () => {
+      await persistListingUpsert(
+        db,
+        command({ slug: "recat-co", name: "Recat Co", categories: ["plumbers"] }),
+        deps,
+      );
+      const before = (await listingRows("tnt_a")).find(
+        (r) => r.slug === "recat-co",
+      )!;
+
+      const res = await persistListingUpsert(
+        db,
+        command({
+          slug: "recat-co",
+          name: "Recat Co",
+          categories: ["hvac", "plumbers"],
+        }),
+        deps,
+      );
+      expect(res.status).toBe("updated");
+
+      expect(await listingCategorySlugs("tnt_a", before.id)).toEqual([
+        "hvac",
+        "plumbers",
+      ]);
+
+      const events = await outboxRows("tnt_a", before.id);
+      expect(events.map((e) => e.type)).toEqual([
+        "listing.created",
+        "listing.updated",
+      ]);
+      expect(events[1]!.data).toEqual({
+        changes: [
+          { op: "replace", path: "/categories", value: ["hvac", "plumbers"] },
+        ],
+      });
+
+      // Categories-only change: the SET path did not run, so updated_at is
+      // bumped explicitly - sitemap lastmod depends on it.
+      const after = (await listingRows("tnt_a")).find(
+        (r) => r.slug === "recat-co",
+      )!;
+      expect(after.updated_at.getTime()).toBeGreaterThan(
+        before.updated_at.getTime(),
+      );
+    });
+
+    it("update: clearing categories with [] removes every join row", async () => {
+      await persistListingUpsert(
+        db,
+        command({
+          slug: "declassify-co",
+          name: "Declassify Co",
+          categories: ["plumbers", "hvac"],
+        }),
+        deps,
+      );
+      const listingId = (await listingRows("tnt_a")).find(
+        (r) => r.slug === "declassify-co",
+      )!.id;
+      expect(await listingCategorySlugs("tnt_a", listingId)).toHaveLength(2);
+
+      const res = await persistListingUpsert(
+        db,
+        command({ slug: "declassify-co", name: "Declassify Co", categories: [] }),
+        deps,
+      );
+      expect(res.status).toBe("updated");
+      expect(await listingCategorySlugs("tnt_a", listingId)).toEqual([]);
+
+      const events = await outboxRows("tnt_a", listingId);
+      expect(events[1]!.data).toEqual({
+        changes: [{ op: "replace", path: "/categories", value: [] }],
+      });
+    });
+
+    it("unchanged: a reordered / repeated category set is not a change and does not touch updated_at", async () => {
+      await persistListingUpsert(
+        db,
+        command({
+          slug: "steady-co",
+          name: "Steady Co",
+          categories: ["plumbers", "emergency-plumbers"],
+        }),
+        deps,
+      );
+      const before = (await listingRows("tnt_a")).find(
+        (r) => r.slug === "steady-co",
+      )!;
+
+      const res = await persistListingUpsert(
+        db,
+        command({
+          slug: "steady-co",
+          name: "Steady Co",
+          categories: ["emergency-plumbers", "plumbers", "plumbers"],
+        }),
+        deps,
+      );
+      expect(res).toEqual({ status: "unchanged" });
+
+      const after = (await listingRows("tnt_a")).find(
+        (r) => r.slug === "steady-co",
+      )!;
+      expect(after.updated_at.getTime()).toBe(before.updated_at.getTime());
+      const events = await outboxRows("tnt_a", before.id);
+      expect(events.map((e) => e.type)).toEqual(["listing.created"]);
+    });
+
+    it("cross-tenant: a slug known to tnt_a is unknown to tnt_b", async () => {
+      // tnt_b defines 'plumbers' but not 'hvac'.
+      const res = await persistListingUpsert(
+        db,
+        command(
+          { slug: "b-cats", name: "B Cats", categories: ["hvac"] },
+          { tenant_id: "tnt_b" },
+        ),
+        deps,
+      );
+      expect(res.status).toBe("rejected");
+      if (res.status === "rejected") {
+        expect(res.problem.errors).toContain(
+          'payload.categories contains unknown slug "hvac"',
+        );
+      }
     });
 
     it("idempotent replay: the second call returns the original event id and re-emits nothing", async () => {
@@ -394,18 +577,24 @@ if (!available) {
 
       it("throws on a patch path that maps to no listings column", async () => {
         await expect(
-          run([{ op: "replace", path: "/categories", value: ["plumbers"] }]),
+          run([{ op: "replace", path: "/bogus", value: "x" }]),
         ).rejects.toThrow(/maps to no listings column/);
       });
 
-      it("throws on an op that is not a replace", async () => {
+      it("throws on a column op that is not a replace", async () => {
         await expect(run([{ op: "remove", path: "/name" }])).rejects.toThrow(
           /unexpected JSON Patch op "remove" at "\/name"/,
         );
       });
 
-      it("throws when the change set produces no column assignments", async () => {
-        await expect(run([])).rejects.toThrow(/no column assignments/);
+      it("throws on a /categories op that is not a replace", async () => {
+        await expect(
+          run([{ op: "remove", path: "/categories" }]),
+        ).rejects.toThrow(/unexpected JSON Patch op "remove" at "\/categories"/);
+      });
+
+      it("throws when the change set changes nothing", async () => {
+        await expect(run([])).rejects.toThrow(/changed nothing/);
       });
     });
   },

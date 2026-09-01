@@ -22,12 +22,16 @@ function command(
   };
 }
 
+/** The tenant's defined category slugs, passed to every handleListingUpsert call. */
+const KNOWN: readonly string[] = ["emergency-plumbers", "hvac", "plumbers"];
+
 const stored: Listing = {
   id: "listing_01JBQ6YW8TFN2H5CKXQ4V3ZDAE",
   tenant_id: "tnt_chicago",
   slug: "hoffman-plumbing-lakeview",
   name: "Hoffman Plumbing",
   description: "Emergency plumbing in Lakeview.",
+  categories: ["emergency-plumbers", "plumbers"],
   location: {
     address_line1: "1422 W Belmont Ave",
     address_line2: null,
@@ -67,6 +71,7 @@ describe("listing.upsert - create", () => {
         contact: { email: "HELLO@ACME.EXAMPLE", phone_e164: "+13125550188" },
       }),
       null,
+      KNOWN,
     );
 
     const ok = expectEvent(res);
@@ -103,6 +108,7 @@ describe("listing.upsert - create", () => {
         email: "hello@acme.example",
         website: null,
       },
+      categories: [],
     });
   });
 
@@ -110,6 +116,7 @@ describe("listing.upsert - create", () => {
     const res = handleListingUpsert(
       command({ slug: "acme-plumbing", name: "Acme" }),
       null,
+      KNOWN,
     );
     const ok = expectEvent(res);
     if (ok.outcome !== "created") throw new Error("unreachable");
@@ -138,6 +145,7 @@ describe("listing.upsert - create", () => {
             geo_precision: "none",
           },
           contact: { phone_e164: null, email: null, website: null },
+          categories: [],
         },
       },
     });
@@ -150,6 +158,7 @@ describe("listing.upsert - create", () => {
     const res = handleListingUpsert(
       command({ id: "listing_seed_1", slug: "acme-plumbing", name: "Acme" }),
       null,
+      KNOWN,
     );
     const ok = expectEvent(res);
     expect(ok.match).toEqual({ by: "id", id: "listing_seed_1" });
@@ -165,6 +174,7 @@ describe("listing.upsert - update", () => {
         location: { address_line2: "Suite 200", geo_precision: "street" },
       }),
       stored,
+      KNOWN,
     );
 
     const ok = expectEvent(res);
@@ -189,6 +199,7 @@ describe("listing.upsert - update", () => {
     const res = handleListingUpsert(
       command({ description: null, contact: { website: null } }),
       stored,
+      KNOWN,
     );
     const ok = expectEvent(res);
     if (ok.outcome !== "updated") throw new Error("unreachable");
@@ -202,6 +213,7 @@ describe("listing.upsert - update", () => {
     const res = handleListingUpsert(
       command({ id: stored.id, name: "Renamed" }),
       stored,
+      KNOWN,
     );
     const ok = expectEvent(res);
     expect(ok.match).toEqual({ by: "id", id: stored.id });
@@ -214,6 +226,7 @@ describe("listing.upsert - unchanged", () => {
     const res = handleListingUpsert(
       command({ slug: stored.slug, name: stored.name }),
       stored,
+      KNOWN,
     );
     expect(res.outcome).toBe("unchanged");
     expect(res).toEqual({
@@ -227,8 +240,76 @@ describe("listing.upsert - unchanged", () => {
     const res = handleListingUpsert(
       command({ contact: { email: "OFFICE@HOFFMANPLUMBING.EXAMPLE" } }),
       stored,
+      KNOWN,
     );
     expect(res.outcome).toBe("unchanged");
+  });
+});
+
+describe("listing.upsert - categories (§7.1)", () => {
+  it("create carries the canonical slug set on data.listing.categories", () => {
+    const res = handleListingUpsert(
+      command({
+        slug: "acme",
+        name: "Acme",
+        categories: ["plumbers", "emergency-plumbers", "plumbers"],
+      }),
+      null,
+      KNOWN,
+    );
+    const ok = expectEvent(res);
+    if (ok.outcome !== "created") throw new Error("unreachable");
+    expect(ok.event.data.listing.categories).toEqual([
+      "emergency-plumbers",
+      "plumbers",
+    ]);
+  });
+
+  it("a set change is one wholesale replace op at /categories", () => {
+    const res = handleListingUpsert(
+      command({ categories: ["plumbers", "hvac"] }),
+      stored,
+      KNOWN,
+    );
+    const ok = expectEvent(res);
+    if (ok.outcome !== "updated") throw new Error("unreachable");
+    expect(ok.event.data.changes).toEqual([
+      { op: "replace", path: "/categories", value: ["hvac", "plumbers"] },
+    ]);
+  });
+
+  it("clears the set with [] and with null", () => {
+    for (const value of [[], null]) {
+      const ok = expectEvent(
+        handleListingUpsert(command({ categories: value }), stored, KNOWN),
+      );
+      if (ok.outcome !== "updated") throw new Error("unreachable");
+      expect(ok.event.data.changes).toEqual([
+        { op: "replace", path: "/categories", value: [] },
+      ]);
+    }
+  });
+
+  it("a reorder or a repeat of the current set is not a change", () => {
+    const res = handleListingUpsert(
+      command({ categories: ["plumbers", "emergency-plumbers", "plumbers"] }),
+      stored,
+      KNOWN,
+    );
+    expect(res.outcome).toBe("unchanged");
+  });
+
+  it("omitting categories leaves the set untouched - no /categories op", () => {
+    const res = handleListingUpsert(
+      command({ name: "Hoffman Plumbing & Heating" }),
+      stored,
+      KNOWN,
+    );
+    const ok = expectEvent(res);
+    if (ok.outcome !== "updated") throw new Error("unreachable");
+    expect(ok.event.data.changes.map((c) => c.path)).not.toContain(
+      "/categories",
+    );
   });
 });
 
@@ -241,6 +322,7 @@ describe("listing.upsert - email is lowercased", () => {
         contact: { email: "Sales@Acme.Example" },
       }),
       null,
+      KNOWN,
     );
     const ok = expectEvent(res);
     if (ok.outcome !== "created") throw new Error("unreachable");
@@ -251,6 +333,7 @@ describe("listing.upsert - email is lowercased", () => {
     const res = handleListingUpsert(
       command({ contact: { email: "NEW.OFFICE@Hoffmanplumbing.Example" } }),
       stored,
+      KNOWN,
     );
     const ok = expectEvent(res);
     if (ok.outcome !== "updated") throw new Error("unreachable");
@@ -269,6 +352,7 @@ describe("listing.upsert - rejections", () => {
     const res = handleListingUpsert(
       command({ slug: "acme", name: "Acme", tier: "featured" }),
       null,
+      KNOWN,
     );
     expect(res.outcome).toBe("rejected");
     if (res.outcome !== "rejected") throw new Error("unreachable");
@@ -282,6 +366,7 @@ describe("listing.upsert - rejections", () => {
     const res = handleListingUpsert(
       command({ slug: "acme", name: "Acme", status: "claimed" }),
       null,
+      KNOWN,
     );
     expect(res.outcome).toBe("rejected");
     if (res.outcome !== "rejected") throw new Error("unreachable");
@@ -295,32 +380,47 @@ describe("listing.upsert - rejections", () => {
     const res = handleListingUpsert(
       command({ slug: "acme", name: "Acme", tier: null }),
       null,
+      KNOWN,
     );
     expect(res.outcome).toBe("rejected");
   });
 
-  it("rejects a payload carrying categories (issue #42)", () => {
+  it("rejects a categories entry that is not a known tenant slug, naming it (§7.1)", () => {
     const res = handleListingUpsert(
-      command({ slug: "acme", name: "Acme", categories: ["plumbers"] }),
+      command({
+        slug: "acme",
+        name: "Acme",
+        categories: ["plumbers", "plumberz"],
+      }),
       null,
+      KNOWN,
     );
     expect(res.outcome).toBe("rejected");
     if (res.outcome !== "rejected") throw new Error("unreachable");
     expect(res.problem.status).toBe(422);
-    expect(res.problem.errors).toEqual([
-      "payload.categories is not accepted - core does not write listing_categories yet (issue #42)",
-    ]);
+    expect(res.problem.errors).toContain(
+      'payload.categories contains unknown slug "plumberz"',
+    );
   });
 
-  it("rejects categories even on an update against an existing listing", () => {
-    const res = handleListingUpsert(command({ categories: [] }), stored);
+  it("rejects a categories value that is not an array or null", () => {
+    const res = handleListingUpsert(
+      command({ slug: "acme", name: "Acme", categories: "plumbers" }),
+      null,
+      KNOWN,
+    );
     expect(res.outcome).toBe("rejected");
+    if (res.outcome !== "rejected") throw new Error("unreachable");
+    expect(JSON.stringify(res.problem.errors)).toContain(
+      "payload.categories must be an array",
+    );
   });
 
   it("rejects a create that is missing required fields", () => {
     const res = handleListingUpsert(
       command({ description: "no name or slug" }),
       null,
+      KNOWN,
     );
     expect(res.outcome).toBe("rejected");
     if (res.outcome !== "rejected") throw new Error("unreachable");
@@ -335,6 +435,7 @@ describe("listing.upsert - rejections", () => {
     const res = handleListingUpsert(
       command({ slug: "acme", name: "Acme" }, { tenant_id: "", trace_id: "" }),
       null,
+      KNOWN,
     );
     expect(res.outcome).toBe("rejected");
     if (res.outcome !== "rejected") throw new Error("unreachable");
@@ -345,6 +446,7 @@ describe("listing.upsert - rejections", () => {
     const res = handleListingUpsert(
       command({ slug: "acme", name: "Acme", location: { city: "Chicago" } }),
       null,
+      KNOWN,
     );
     expect(res.outcome).toBe("rejected");
     if (res.outcome !== "rejected") throw new Error("unreachable");
@@ -359,6 +461,7 @@ describe("listing.upsert - rejections", () => {
         contact: { phone_e164: "773-555-0142" },
       }),
       null,
+      KNOWN,
     );
     expect(res.outcome).toBe("rejected");
   });
@@ -372,6 +475,7 @@ describe("listing.upsert - tenant scoping", () => {
         { tenant_id: "tnt_a" },
       ),
       null,
+      KNOWN,
     );
     const b = handleListingUpsert(
       command(
@@ -379,6 +483,7 @@ describe("listing.upsert - tenant scoping", () => {
         { tenant_id: "tnt_b" },
       ),
       null,
+      KNOWN,
     );
 
     const okA = expectEvent(a);

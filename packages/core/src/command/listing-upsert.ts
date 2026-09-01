@@ -20,12 +20,15 @@
  * untouched on update and take their defaults on create. Fields it sets to
  * `null` are cleared.
  *
- * Three fields are refused outright (§7): `tier` is derived from entitlement
- * (§6, there is no `listing.setTier`); `status` moves through the claim flow
- * (§9); and `categories` is refused until core actually writes
- * `listing_categories` (issue #42) - accepting it would make every emitted
- * event assert a membership the database does not have. Envelope assembly -
- * `id`, `occurred_at`, `actor`, `origin` - is the persistence layer's job;
+ * Two fields are refused outright (§7): `tier` is derived from entitlement
+ * (§6, there is no `listing.setTier`) and `status` moves through the claim flow
+ * (§9). `categories` (§7.1) is accepted: an array of tenant category slugs,
+ * validated against `knownCategorySlugs` - an unknown slug is a 422 that names
+ * it, never a created category. Omitted leaves the set untouched; `null` or an
+ * empty array clears it. A set change is one wholesale `replace /categories` op
+ * in the `listing.updated` patch, which the persistence layer routes to
+ * `listing_categories` rather than a column. Envelope assembly - `id`,
+ * `occurred_at`, `actor`, `origin` - is the persistence layer's job;
  * idempotency and the 409 replay path land there too and are out of scope here.
  *
  * Matching rule (§7): when the payload carries an `id`, that is the identity;
@@ -64,9 +67,11 @@ export interface ListingContact {
 /**
  * The mutable content of a listing - what `listing.updated` diffs over.
  *
- * `categories` is deliberately absent: core does not write `listing_categories`
- * yet (issue #42), so a category change has no backing state and must not
- * appear in a `changes` patch. `listing.upsert` rejects the field outright.
+ * `categories` is the tenant category slug set. It is kept canonical
+ * (de-duplicated, sorted) on both sides of the diff, so a change over it is a
+ * single wholesale `replace /categories` op and a reorder is never a change
+ * (§7.1). It is membership in `listing_categories`, not a `listings` column;
+ * the persistence layer routes the op accordingly.
  */
 export interface ListingContent {
   readonly slug: string;
@@ -74,6 +79,7 @@ export interface ListingContent {
   readonly description: string | null;
   readonly location: ListingLocation;
   readonly contact: ListingContact;
+  readonly categories: readonly string[];
 }
 
 /** A stored listing, as handed to {@link handleListingUpsert}. */
@@ -196,11 +202,14 @@ const DEFAULT_CONTACT: ListingContact = {
 /**
  * Validate a `listing.upsert` command and resolve it to the event to emit, or
  * to a 422 problem document. `current` is the listing the §7 matching rule
- * selects, or `null` if none exists in the tenant.
+ * selects, or `null` if none exists in the tenant. `knownCategorySlugs` is the
+ * tenant's defined category slugs (§7.1); a `categories` entry outside that set
+ * is a 422 naming the slug, never a created category.
  */
 export function handleListingUpsert(
   command: OsdsCommand,
   current: Listing | null,
+  knownCategorySlugs: readonly string[],
 ): ListingUpsertResult {
   if (command.command !== COMMAND_NAME) {
     return reject(
@@ -234,11 +243,6 @@ export function handleListingUpsert(
       "payload.status is not accepted - status moves through the claim flow (§9)",
     );
   }
-  if (has(p, "categories")) {
-    derived.push(
-      "payload.categories is not accepted - core does not write listing_categories yet (issue #42)",
-    );
-  }
   if (derived.length > 0) {
     return reject(
       validationProblem(
@@ -249,7 +253,7 @@ export function handleListingUpsert(
   }
 
   const errors: string[] = [];
-  const input = parseInput(p, current, errors);
+  const input = parseInput(p, current, knownCategorySlugs, errors);
   if (errors.length > 0 || input === null) {
     return reject(validationProblem("invalid listing.upsert payload", errors));
   }
@@ -272,6 +276,7 @@ export function handleListingUpsert(
       description: input.description ?? null,
       location: overlay(DEFAULT_LOCATION, input.location),
       contact: overlay(DEFAULT_CONTACT, input.contact),
+      categories: input.categories ?? [],
     };
     return {
       outcome: "created",
@@ -289,6 +294,9 @@ export function handleListingUpsert(
       : before.description,
     location: overlay(before.location, input.location),
     contact: overlay(before.contact, input.contact),
+    categories: has(input, "categories")
+      ? (input.categories as readonly string[])
+      : before.categories,
   };
 
   const changes = jsonPatch(before, after);
@@ -312,6 +320,8 @@ interface ParsedInput {
   readonly description?: string | null;
   readonly location?: Partial<ListingLocation>;
   readonly contact?: Partial<ListingContact>;
+  /** Present iff the payload carried `categories`; canonical (unique, sorted). */
+  readonly categories?: readonly string[];
 }
 
 type Mutable<T> = { -readonly [K in keyof T]?: T[K] };
@@ -325,6 +335,7 @@ type Mutable<T> = { -readonly [K in keyof T]?: T[K] };
 function parseInput(
   p: Record<string, unknown>,
   current: Listing | null,
+  knownCategorySlugs: readonly string[],
   errors: string[],
 ): ParsedInput | null {
   let id: string | undefined;
@@ -367,6 +378,7 @@ function parseInput(
     description?: string | null;
     location?: Partial<ListingLocation>;
     contact?: Partial<ListingContact>;
+    categories?: readonly string[];
   } = {};
 
   if (id !== undefined) out.id = id;
@@ -390,8 +402,49 @@ function parseInput(
   const contact = parseContact(p, errors);
   if (contact !== undefined) out.contact = contact;
 
+  if (has(p, "categories")) {
+    out.categories = parseCategories(p["categories"], knownCategorySlugs, errors);
+  }
+
   if (errors.length > 0) return null;
   return out;
+}
+
+/**
+ * `categories` (§7.1): an array of tenant category slugs, or `null` / `[]` to
+ * clear. Returns the canonical set - de-duplicated, sorted - so a reorder or a
+ * repeat is not a change downstream. Every entry must be a known slug; an
+ * unknown one is a 422 that names it (categories are tenant configuration, not
+ * a side effect of a listing write). Only called when the key is present, so
+ * `[]` is a real "clear", distinct from an omitted field.
+ */
+function parseCategories(
+  raw: unknown,
+  known: readonly string[],
+  errors: string[],
+): readonly string[] {
+  if (raw === null) return [];
+  if (!Array.isArray(raw)) {
+    errors.push("payload.categories must be an array of category slugs or null");
+    return [];
+  }
+
+  const knownSet = new Set(known);
+  const slugs = new Set<string>();
+  for (const item of raw) {
+    if (!nonEmptyString(item) || !KEY_SLUG.test(item)) {
+      errors.push(
+        `payload.categories entries must be lowercase kebab-case slugs (got ${JSON.stringify(item)})`,
+      );
+      continue;
+    }
+    if (!knownSet.has(item)) {
+      errors.push(`payload.categories contains unknown slug "${item}"`);
+      continue;
+    }
+    slugs.add(item);
+  }
+  return [...slugs].sort();
 }
 
 function parseLocation(
@@ -526,6 +579,8 @@ function contentOf(listing: Listing): ListingContent {
     description: listing.description,
     location: listing.location,
     contact: listing.contact,
+    // Canonicalise so the diff over `categories` ignores order and repeats.
+    categories: [...new Set(listing.categories)].sort(),
   };
 }
 
