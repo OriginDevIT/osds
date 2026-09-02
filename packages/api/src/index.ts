@@ -11,6 +11,7 @@
  */
 export {
   resolveRequestContext,
+  normalizeHost,
   type RequestContext,
   type RequestInput,
   type TenantContext,

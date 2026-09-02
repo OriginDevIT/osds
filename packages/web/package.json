@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@osds/api": "workspace:*",
     "@osds/core": "workspace:*",
     "@osds/db": "workspace:*",
     "next": "^15.5.0",
