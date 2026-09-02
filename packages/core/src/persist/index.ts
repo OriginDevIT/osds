@@ -12,6 +12,7 @@
  */
 export {
   persistListingUpsert,
+  type CommandActor,
   type PersistDeps,
   type PersistListingUpsertResult,
 } from "./listing-upsert.js";
