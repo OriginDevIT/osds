@@ -52,11 +52,12 @@ import {
   isUniqueViolation,
   withTenant,
   writeOutboxEvents,
+  type CommandActor,
   type Db,
   type PersistDeps,
 } from "./shared.js";
 
-export type { PersistDeps } from "./shared.js";
+export type { CommandActor, PersistDeps } from "./shared.js";
 
 export type PersistListingUpsertResult =
   | { readonly status: "created"; readonly event_id: string }
@@ -88,6 +89,7 @@ export async function persistListingUpsert(
   db: Db,
   command: OsdsCommand,
   deps: PersistDeps,
+  actor: CommandActor,
 ): Promise<PersistListingUpsertResult> {
   // §11.2: log the attempt first, in its own committed transaction. An
   // unresolvable tenant is logged already-concluded and there is nothing to
@@ -96,7 +98,7 @@ export async function persistListingUpsert(
   if (log.kind === "closed")
     return { status: "rejected", problem: log.problem };
 
-  const result = await applyListingUpsert(db, command, deps);
+  const result = await applyListingUpsert(db, command, deps, actor);
   await concludeCommandLog(db, log.handle, deps, result);
   return result;
 }
@@ -105,10 +107,11 @@ async function applyListingUpsert(
   db: Db,
   command: OsdsCommand,
   deps: PersistDeps,
+  actor: CommandActor,
 ): Promise<PersistListingUpsertResult> {
   try {
     return await withTenant(db, command.tenant_id, (trx) =>
-      applyInTransaction(trx, command, deps),
+      applyInTransaction(trx, command, deps, actor),
     );
   } catch (err) {
     // A concurrent replay of the same command won the race on the partial
@@ -129,6 +132,7 @@ async function applyInTransaction(
   trx: Db,
   command: OsdsCommand,
   deps: PersistDeps,
+  actor: CommandActor,
 ): Promise<PersistListingUpsertResult> {
   const replayId = await findEventId(
     trx,
@@ -162,7 +166,7 @@ async function applyInTransaction(
       listingId,
       event.data.listing.categories,
     );
-    const eventId = await writeOutboxEvents(trx, command, deps, [
+    const eventId = await writeOutboxEvents(trx, command, deps, actor, [
       { type: "listing.created", subject: listingId, data: event.data },
     ]);
     return { status: "created", event_id: eventId };
@@ -174,7 +178,7 @@ async function applyInTransaction(
     result.event.subject,
     result.event.data.changes,
   );
-  const eventId = await writeOutboxEvents(trx, command, deps, [
+  const eventId = await writeOutboxEvents(trx, command, deps, actor, [
     {
       type: "listing.updated",
       subject: result.event.subject,

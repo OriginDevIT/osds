@@ -74,6 +74,7 @@ import {
   isUniqueViolation,
   withTenant,
   writeOutboxEvents,
+  type CommandActor,
   type Db,
   type OutboxEvent,
   type PersistDeps,
@@ -96,6 +97,7 @@ export async function persistClaimSubmit(
   db: Db,
   command: OsdsCommand,
   deps: PersistDeps,
+  actor: CommandActor,
   enabledMethods: readonly ClaimMethod[],
   ttlConfig?: VerificationTtlConfig,
 ): Promise<PersistClaimSubmitResult> {
@@ -103,7 +105,14 @@ export async function persistClaimSubmit(
   if (log.kind === "closed")
     return { status: "rejected", problem: log.problem };
 
-  const result = await runClaimSubmit(db, command, deps, enabledMethods, ttlConfig);
+  const result = await runClaimSubmit(
+    db,
+    command,
+    deps,
+    actor,
+    enabledMethods,
+    ttlConfig,
+  );
   await concludeCommandLog(db, log.handle, deps, result);
   return result;
 }
@@ -112,12 +121,13 @@ async function runClaimSubmit(
   db: Db,
   command: OsdsCommand,
   deps: PersistDeps,
+  actor: CommandActor,
   enabledMethods: readonly ClaimMethod[],
   ttlConfig: VerificationTtlConfig | undefined,
 ): Promise<PersistClaimSubmitResult> {
   try {
     return await withTenant(db, command.tenant_id, (trx) =>
-      applySubmit(trx, command, deps, enabledMethods, ttlConfig),
+      applySubmit(trx, command, deps, actor, enabledMethods, ttlConfig),
     );
   } catch (err) {
     if (isUniqueViolation(err)) {
@@ -134,6 +144,7 @@ async function applySubmit(
   trx: Db,
   command: OsdsCommand,
   deps: PersistDeps,
+  actor: CommandActor,
   enabledMethods: readonly ClaimMethod[],
   ttlConfig: VerificationTtlConfig | undefined,
 ): Promise<PersistClaimSubmitResult> {
@@ -164,7 +175,7 @@ async function applySubmit(
   if (result.outcome === "disputed") {
     // §9.4: no state change here - the moderation flow owns the dispute record.
     const [draft] = result.events;
-    const eventId = await writeOutboxEvents(trx, command, deps, [
+    const eventId = await writeOutboxEvents(trx, command, deps, actor, [
       { type: draft.type, subject: draft.subject, data: draft.data },
     ]);
     return { status: "disputed", event_id: eventId };
@@ -235,7 +246,14 @@ async function applySubmit(
     : claimEvents;
   const keyIndex = userMinted ? 1 : 0;
 
-  const eventId = await writeOutboxEvents(trx, command, deps, events, keyIndex);
+  const eventId = await writeOutboxEvents(
+    trx,
+    command,
+    deps,
+    actor,
+    events,
+    keyIndex,
+  );
   return { status: "submitted", event_id: eventId };
 }
 
@@ -245,12 +263,13 @@ export async function persistClaimApprove(
   db: Db,
   command: OsdsCommand,
   deps: PersistDeps,
+  actor: CommandActor,
 ): Promise<PersistClaimApproveResult> {
   const log = await beginCommandLog(db, command, deps);
   if (log.kind === "closed")
     return { status: "rejected", problem: log.problem };
 
-  const result = await runClaimApprove(db, command, deps);
+  const result = await runClaimApprove(db, command, deps, actor);
   await concludeCommandLog(db, log.handle, deps, result);
   return result;
 }
@@ -259,10 +278,11 @@ async function runClaimApprove(
   db: Db,
   command: OsdsCommand,
   deps: PersistDeps,
+  actor: CommandActor,
 ): Promise<PersistClaimApproveResult> {
   try {
     return await withTenant(db, command.tenant_id, (trx) =>
-      applyApprove(trx, command, deps),
+      applyApprove(trx, command, deps, actor),
     );
   } catch (err) {
     if (isUniqueViolation(err)) {
@@ -279,6 +299,7 @@ async function applyApprove(
   trx: Db,
   command: OsdsCommand,
   deps: PersistDeps,
+  actor: CommandActor,
 ): Promise<PersistClaimApproveResult> {
   const replayId = await findEventId(
     trx,
@@ -375,7 +396,7 @@ async function applyApprove(
     subject: event.subject,
     data: event.data,
   }));
-  const eventId = await writeOutboxEvents(trx, command, deps, events);
+  const eventId = await writeOutboxEvents(trx, command, deps, actor, events);
   return { status: "approved", event_id: eventId };
 }
 

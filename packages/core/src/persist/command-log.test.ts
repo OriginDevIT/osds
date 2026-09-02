@@ -20,6 +20,7 @@ import {
   persistClaimApprove,
   persistClaimSubmit,
   persistListingUpsert,
+  type CommandActor,
   type PersistDeps,
 } from "./index.js";
 import {
@@ -38,6 +39,17 @@ if (!available) {
 }
 
 const ENABLED: readonly ClaimMethod[] = ["manual", "phone_otp", "domain_email"];
+// Adapter actors matching each fixture's adapter_id - identical attribution to
+// before writeOutboxEvents took an actor (#95).
+const LISTING_ACTOR: CommandActor = { kind: "adapter", adapterId: "webhook" };
+const SUBMIT_ACTOR: CommandActor = {
+  kind: "adapter",
+  adapterId: "gohighlevel",
+};
+const APPROVE_ACTOR: CommandActor = {
+  kind: "adapter",
+  adapterId: "admin-console",
+};
 const consent = {
   contact_by_business: {
     granted: true,
@@ -189,7 +201,7 @@ const SELECT_LOG = sql`
 
   it("created: logs the attempt and concludes it", async () => {
     const c = listingCmd({ slug: "log-created", name: "Log Created" });
-    const res = await persistListingUpsert(db, c, deps);
+    const res = await persistListingUpsert(db, c, deps, LISTING_ACTOR);
     expect(res.status).toBe("created");
 
     const rows = await logByKey("tnt_a", c.idempotency_key);
@@ -216,20 +228,21 @@ const SELECT_LOG = sql`
       db,
       listingCmd({ slug: "log-upd", name: "One" }),
       deps,
+      LISTING_ACTOR,
     );
 
     const updCmd = listingCmd({ slug: "log-upd", name: "Two" });
-    expect((await persistListingUpsert(db, updCmd, deps)).status).toBe(
-      "updated",
-    );
+    expect(
+      (await persistListingUpsert(db, updCmd, deps, LISTING_ACTOR)).status,
+    ).toBe("updated");
     expect((await logByKey("tnt_a", updCmd.idempotency_key))[0]!.outcome).toBe(
       "updated",
     );
 
     const noopCmd = listingCmd({ slug: "log-upd", name: "Two" });
-    expect((await persistListingUpsert(db, noopCmd, deps)).status).toBe(
-      "unchanged",
-    );
+    expect(
+      (await persistListingUpsert(db, noopCmd, deps, LISTING_ACTOR)).status,
+    ).toBe("unchanged");
     const noopRow = (await logByKey("tnt_a", noopCmd.idempotency_key))[0]!;
     expect(noopRow.outcome).toBe("unchanged");
     expect(noopRow.event_id).toBeNull();
@@ -238,7 +251,7 @@ const SELECT_LOG = sql`
 
   it("rejected: the row carries the problem document, no event id", async () => {
     const c = listingCmd({ slug: "log-rej", name: "X", tier: "featured" });
-    const res = await persistListingUpsert(db, c, deps);
+    const res = await persistListingUpsert(db, c, deps, LISTING_ACTOR);
     expect(res.status).toBe("rejected");
 
     const row = (await logByKey("tnt_a", c.idempotency_key))[0]!;
@@ -250,8 +263,8 @@ const SELECT_LOG = sql`
 
   it("duplicate: both attempts are logged, the replay concludes as duplicate", async () => {
     const c = listingCmd({ slug: "log-dup", name: "Dup" });
-    const first = await persistListingUpsert(db, c, deps);
-    const second = await persistListingUpsert(db, c, deps);
+    const first = await persistListingUpsert(db, c, deps, LISTING_ACTOR);
+    const second = await persistListingUpsert(db, c, deps, LISTING_ACTOR);
     expect(first.status).toBe("created");
     expect(second.status).toBe("duplicate");
 
@@ -274,9 +287,10 @@ const SELECT_LOG = sql`
       claimant,
       consent,
     });
-    expect((await persistClaimSubmit(db, subCmd, deps, ENABLED)).status).toBe(
-      "submitted",
-    );
+    expect(
+      (await persistClaimSubmit(db, subCmd, deps, SUBMIT_ACTOR, ENABLED))
+        .status,
+    ).toBe("submitted");
     expect((await logByKey("tnt_a", subCmd.idempotency_key))[0]!.outcome).toBe(
       "submitted",
     );
@@ -287,18 +301,19 @@ const SELECT_LOG = sql`
       claimant: { ...claimant, email: "disp@x.example" },
       consent,
     });
-    expect((await persistClaimSubmit(db, dispCmd, deps, ENABLED)).status).toBe(
-      "disputed",
-    );
+    expect(
+      (await persistClaimSubmit(db, dispCmd, deps, SUBMIT_ACTOR, ENABLED))
+        .status,
+    ).toBe("disputed");
     expect((await logByKey("tnt_a", dispCmd.idempotency_key))[0]!.outcome).toBe(
       "disputed",
     );
 
     const claimId = await claimIdFor("tnt_a", "listing_cl1");
     const appCmd = approveCmd({ claim_id: claimId, decided_by: "usr_cladmin" });
-    expect((await persistClaimApprove(db, appCmd, deps)).status).toBe(
-      "approved",
-    );
+    expect(
+      (await persistClaimApprove(db, appCmd, deps, APPROVE_ACTOR)).status,
+    ).toBe("approved");
     const appRow = (await logByKey("tnt_a", appCmd.idempotency_key))[0]!;
     expect(appRow.outcome).toBe("approved");
     expect(appRow.command).toBe("claim.approve");
@@ -313,13 +328,15 @@ const SELECT_LOG = sql`
       claimant: { ...claimant, email: "crash@x.example" },
       consent,
     });
-    await persistClaimSubmit(db, subCmd, deps, ENABLED);
+    await persistClaimSubmit(db, subCmd, deps, SUBMIT_ACTOR, ENABLED);
     const claimId = await claimIdFor("tnt_a", "listing_crash");
 
     // decided_by references no user -> the update inside the command
     // transaction hits a foreign-key violation and throws.
     const appCmd = approveCmd({ claim_id: claimId, decided_by: "usr_ghost" });
-    await expect(persistClaimApprove(db, appCmd, deps)).rejects.toThrow();
+    await expect(
+      persistClaimApprove(db, appCmd, deps, APPROVE_ACTOR),
+    ).rejects.toThrow();
 
     const row = (await logByKey("tnt_a", appCmd.idempotency_key))[0]!;
     expect(row.command).toBe("claim.approve");
@@ -330,7 +347,7 @@ const SELECT_LOG = sql`
 
   it("a concluded row is frozen - re-concluding it affects nothing", async () => {
     const c = listingCmd({ slug: "log-frozen", name: "Frozen" });
-    await persistListingUpsert(db, c, deps);
+    await persistListingUpsert(db, c, deps, LISTING_ACTOR);
 
     const row = (await logByKey("tnt_a", c.idempotency_key))[0]!;
     expect(row.outcome).toBe("created");
@@ -356,7 +373,7 @@ const SELECT_LOG = sql`
       { slug: "log-notenant", name: "No Tenant" },
       { tenant_id: "tnt_ghost" },
     );
-    const res = await persistListingUpsert(db, c, deps);
+    const res = await persistListingUpsert(db, c, deps, LISTING_ACTOR);
     expect(res.status).toBe("rejected");
 
     // osds_app - any tenant GUC - cannot see it.
@@ -382,8 +399,8 @@ const SELECT_LOG = sql`
       { slug: "xt-b", name: "XT B" },
       { tenant_id: "tnt_b" },
     );
-    await persistListingUpsert(db, aCmd, deps);
-    await persistListingUpsert(db, bCmd, deps);
+    await persistListingUpsert(db, aCmd, deps, LISTING_ACTOR);
+    await persistListingUpsert(db, bCmd, deps, LISTING_ACTOR);
 
     expect(await logByKey("tnt_a", aCmd.idempotency_key)).toHaveLength(1);
     expect(await logByKey("tnt_a", bCmd.idempotency_key)).toHaveLength(0);

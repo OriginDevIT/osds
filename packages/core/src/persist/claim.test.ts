@@ -16,6 +16,7 @@ import type { ClaimMethod } from "../command/claim.js";
 import {
   persistClaimApprove,
   persistClaimSubmit,
+  type CommandActor,
   type PersistDeps,
 } from "./index.js";
 
@@ -50,6 +51,13 @@ if (!available) {
 }
 
 const ENABLED: readonly ClaimMethod[] = ["manual", "phone_otp", "domain_email"];
+// The adapter actors these fixtures always used - submitCmd carries adapter_id
+// "gohighlevel", approveCmd "admin-console". Same attribution as before #95.
+const AS_GHL: CommandActor = { kind: "adapter", adapterId: "gohighlevel" };
+const AS_ADMIN_CONSOLE: CommandActor = {
+  kind: "adapter",
+  adapterId: "admin-console",
+};
 
 const consent = {
   marketing_email: {
@@ -260,7 +268,7 @@ function claimant(email: string, name = "Dana Hoffman") {
         consent,
       });
 
-      const res = await persistClaimSubmit(db, cmd, deps, ENABLED);
+      const res = await persistClaimSubmit(db, cmd, deps, AS_GHL, ENABLED);
       expect(res.status).toBe("submitted");
       const eventId = res.status === "submitted" ? res.event_id : "";
 
@@ -337,7 +345,7 @@ function claimant(email: string, name = "Dana Hoffman") {
         consent,
       });
 
-      await persistClaimSubmit(db, cmd, deps, ENABLED);
+      await persistClaimSubmit(db, cmd, deps, AS_GHL, ENABLED);
 
       const events = await outboxByTrace("tnt_a", cmd.trace_id);
       expect(events).toHaveLength(3);
@@ -357,7 +365,7 @@ function claimant(email: string, name = "Dana Hoffman") {
         claimant: claimant("REUSE@X.Example", "New Name"),
         consent,
       });
-      const res = await persistClaimSubmit(db, cmd, deps, ENABLED);
+      const res = await persistClaimSubmit(db, cmd, deps, AS_GHL, ENABLED);
       expect(res.status).toBe("submitted");
       const eventId = res.status === "submitted" ? res.event_id : "";
 
@@ -392,7 +400,7 @@ function claimant(email: string, name = "Dana Hoffman") {
         consent,
       });
 
-      const res = await persistClaimSubmit(db, cmd, deps, ENABLED);
+      const res = await persistClaimSubmit(db, cmd, deps, AS_GHL, ENABLED);
       expect(res.status).toBe("disputed");
       const eventId = res.status === "disputed" ? res.event_id : "";
 
@@ -428,6 +436,7 @@ function claimant(email: string, name = "Dana Hoffman") {
           consent,
         }),
         deps,
+        AS_GHL,
         ENABLED,
       );
       expect(submitRes.status).toBe("submitted");
@@ -439,7 +448,7 @@ function claimant(email: string, name = "Dana Hoffman") {
         claim_id: claimBefore.id,
         decided_by: "usr_admin_4",
       });
-      const res = await persistClaimApprove(db, cmd, deps);
+      const res = await persistClaimApprove(db, cmd, deps, AS_ADMIN_CONSOLE);
       expect(res.status).toBe("approved");
       const eventId = res.status === "approved" ? res.event_id : "";
 
@@ -479,8 +488,8 @@ function claimant(email: string, name = "Dana Hoffman") {
         consent,
       });
 
-      const first = await persistClaimSubmit(db, cmd, deps, ENABLED);
-      const second = await persistClaimSubmit(db, cmd, deps, ENABLED);
+      const first = await persistClaimSubmit(db, cmd, deps, AS_GHL, ENABLED);
+      const second = await persistClaimSubmit(db, cmd, deps, AS_GHL, ENABLED);
 
       expect(first.status).toBe("submitted");
       const firstId = first.status === "submitted" ? first.event_id : "";
@@ -499,9 +508,7 @@ function claimant(email: string, name = "Dana Hoffman") {
       expect(events[1]!.type).toBe("claim.submitted");
       expect(events[1]!.id).toBe(firstId);
       expect(events[1]!.idempotency_key).toBe(cmd.idempotency_key);
-      expect(
-        events.filter((e) => e.idempotency_key !== null),
-      ).toHaveLength(1);
+      expect(events.filter((e) => e.idempotency_key !== null)).toHaveLength(1);
 
       // And no second claim / user from the replay.
       expect(await claimsForListing("tnt_a", "listing_s5")).toHaveLength(1);
@@ -525,6 +532,7 @@ function claimant(email: string, name = "Dana Hoffman") {
             consent,
           }),
           deps,
+          AS_GHL,
           ENABLED,
         );
       }
@@ -544,11 +552,13 @@ function claimant(email: string, name = "Dana Hoffman") {
         db,
         approveCmd({ claim_id: c1, decided_by: "usr_admin_6" }),
         deps,
+        AS_ADMIN_CONSOLE,
       );
       const r2 = await persistClaimApprove(
         db,
         approveCmd({ claim_id: c2, decided_by: "usr_admin_6" }),
         deps,
+        AS_ADMIN_CONSOLE,
       );
 
       expect(r1.status).toBe("approved");
@@ -585,11 +595,13 @@ function claimant(email: string, name = "Dana Hoffman") {
           db,
           approveCmd({ claim_id: c1, decided_by: "usr_admin_7" }),
           deps,
+          AS_ADMIN_CONSOLE,
         ),
         persistClaimApprove(
           db,
           approveCmd({ claim_id: c2, decided_by: "usr_admin_7" }),
           deps,
+          AS_ADMIN_CONSOLE,
         ),
       ]);
 
@@ -630,8 +642,8 @@ function claimant(email: string, name = "Dana Hoffman") {
         },
         { tenant_id: "tnt_b" },
       );
-      const a = await persistClaimSubmit(db, aCmd, deps, ENABLED);
-      const b = await persistClaimSubmit(db, bCmd, deps, ENABLED);
+      const a = await persistClaimSubmit(db, aCmd, deps, AS_GHL, ENABLED);
+      const b = await persistClaimSubmit(db, bCmd, deps, AS_GHL, ENABLED);
       expect(a.status).toBe("submitted");
       expect(b.status).toBe("submitted");
 

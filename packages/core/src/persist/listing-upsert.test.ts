@@ -17,7 +17,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createKysely, migrateToLatest, sql } from "@osds/db";
 import type { OsdsCommand } from "@osds/adapter-kit";
 import type { JsonPatchOp } from "../command/json-patch.js";
-import { persistListingUpsert, type PersistDeps } from "./index.js";
+import {
+  persistListingUpsert,
+  type CommandActor,
+  type PersistDeps,
+} from "./index.js";
 import { applyListingUpdate } from "./listing-upsert.js";
 
 const ADMIN_URL =
@@ -61,6 +65,9 @@ if (!available) {
       `${Date.now().toString().padStart(15, "0")}${(seq++).toString().padStart(9, "0")}`;
     const FIXED_NOW = new Date("2026-08-31T12:00:00.000Z");
     const deps: PersistDeps = { now: () => FIXED_NOW, newId };
+    // Every command() here carries adapter_id "webhook"; the attribution is the
+    // same adapter actor writeOutboxEvents stamped before it was parameterized.
+    const AS_WEBHOOK: CommandActor = { kind: "adapter", adapterId: "webhook" };
 
     function command(
       payload: Record<string, unknown>,
@@ -177,7 +184,7 @@ if (!available) {
         contact: { email: "OFFICE@hoffman.example" },
       });
 
-      const res = await persistListingUpsert(db, cmd, deps);
+      const res = await persistListingUpsert(db, cmd, deps, AS_WEBHOOK);
 
       expect(res.status).toBe("created");
       const eventId = res.status === "created" ? res.event_id : "";
@@ -214,11 +221,43 @@ if (!available) {
       });
     });
 
+    it("#95: an operator actor overrides the envelope adapter_id - staff/admin, origin null", async () => {
+      // Same envelope (adapter_id "webhook"); only the actor arg differs.
+      const editor = await persistListingUpsert(
+        db,
+        command({ slug: "op-editor", name: "Op Editor" }),
+        deps,
+        { kind: "operator", operatorId: "op_ed", role: "editor" },
+      );
+      expect(editor.status).toBe("created");
+      const editorId = (await listingRows("tnt_a")).find(
+        (r) => r.slug === "op-editor",
+      )!.id;
+      const editorEvent = (await outboxRows("tnt_a", editorId))[0]!;
+      expect(editorEvent.actor).toEqual({ type: "staff", id: "op_ed" });
+      expect(editorEvent.origin).toBeNull();
+
+      const admin = await persistListingUpsert(
+        db,
+        command({ slug: "op-admin", name: "Op Admin" }),
+        deps,
+        { kind: "operator", operatorId: "op_ad", role: "admin" },
+      );
+      expect(admin.status).toBe("created");
+      const adminId = (await listingRows("tnt_a")).find(
+        (r) => r.slug === "op-admin",
+      )!.id;
+      const adminEvent = (await outboxRows("tnt_a", adminId))[0]!;
+      expect(adminEvent.actor).toEqual({ type: "admin", id: "op_ad" });
+      expect(adminEvent.origin).toBeNull();
+    });
+
     it("update: applies the changed column and writes a listing.updated JSON Patch", async () => {
       const created = await persistListingUpsert(
         db,
         command({ slug: "lakeview-hvac", name: "Lakeview HVAC" }),
         deps,
+        AS_WEBHOOK,
       );
       expect(created.status).toBe("created");
 
@@ -226,6 +265,7 @@ if (!available) {
         db,
         command({ slug: "lakeview-hvac", name: "Lakeview Heating & Cooling" }),
         deps,
+        AS_WEBHOOK,
       );
 
       expect(res.status).toBe("updated");
@@ -252,6 +292,7 @@ if (!available) {
         db,
         command({ slug: "static-co", name: "Static Co" }),
         deps,
+        AS_WEBHOOK,
       );
       const before = (await listingRows("tnt_a")).find(
         (r) => r.slug === "static-co",
@@ -261,6 +302,7 @@ if (!available) {
         db,
         command({ slug: "static-co", name: "Static Co" }),
         deps,
+        AS_WEBHOOK,
       );
 
       expect(res).toEqual({ status: "unchanged" });
@@ -281,7 +323,7 @@ if (!available) {
         tier: "featured",
       });
 
-      const res = await persistListingUpsert(db, cmd, deps);
+      const res = await persistListingUpsert(db, cmd, deps, AS_WEBHOOK);
 
       expect(res.status).toBe("rejected");
       if (res.status === "rejected") {
@@ -308,7 +350,7 @@ if (!available) {
         categories: ["plumbers", "plumberz"],
       });
 
-      const res = await persistListingUpsert(db, cmd, deps);
+      const res = await persistListingUpsert(db, cmd, deps, AS_WEBHOOK);
 
       expect(res.status).toBe("rejected");
       if (res.status === "rejected") {
@@ -345,7 +387,7 @@ if (!available) {
         categories: ["plumbers", "emergency-plumbers", "plumbers"],
       });
 
-      const res = await persistListingUpsert(db, cmd, deps);
+      const res = await persistListingUpsert(db, cmd, deps, AS_WEBHOOK);
       expect(res.status).toBe("created");
 
       const listingId = (await listingRows("tnt_a")).find(
@@ -367,8 +409,13 @@ if (!available) {
     it("update: a category-set change is one replace /categories op and bumps updated_at", async () => {
       await persistListingUpsert(
         db,
-        command({ slug: "recat-co", name: "Recat Co", categories: ["plumbers"] }),
+        command({
+          slug: "recat-co",
+          name: "Recat Co",
+          categories: ["plumbers"],
+        }),
         deps,
+        AS_WEBHOOK,
       );
       const before = (await listingRows("tnt_a")).find(
         (r) => r.slug === "recat-co",
@@ -382,6 +429,7 @@ if (!available) {
           categories: ["hvac", "plumbers"],
         }),
         deps,
+        AS_WEBHOOK,
       );
       expect(res.status).toBe("updated");
 
@@ -420,6 +468,7 @@ if (!available) {
           categories: ["plumbers", "hvac"],
         }),
         deps,
+        AS_WEBHOOK,
       );
       const listingId = (await listingRows("tnt_a")).find(
         (r) => r.slug === "declassify-co",
@@ -428,8 +477,13 @@ if (!available) {
 
       const res = await persistListingUpsert(
         db,
-        command({ slug: "declassify-co", name: "Declassify Co", categories: [] }),
+        command({
+          slug: "declassify-co",
+          name: "Declassify Co",
+          categories: [],
+        }),
         deps,
+        AS_WEBHOOK,
       );
       expect(res.status).toBe("updated");
       expect(await listingCategorySlugs("tnt_a", listingId)).toEqual([]);
@@ -449,6 +503,7 @@ if (!available) {
           categories: ["plumbers", "emergency-plumbers"],
         }),
         deps,
+        AS_WEBHOOK,
       );
       const before = (await listingRows("tnt_a")).find(
         (r) => r.slug === "steady-co",
@@ -462,6 +517,7 @@ if (!available) {
           categories: ["emergency-plumbers", "plumbers", "plumbers"],
         }),
         deps,
+        AS_WEBHOOK,
       );
       expect(res).toEqual({ status: "unchanged" });
 
@@ -482,6 +538,7 @@ if (!available) {
           { tenant_id: "tnt_b" },
         ),
         deps,
+        AS_WEBHOOK,
       );
       expect(res.status).toBe("rejected");
       if (res.status === "rejected") {
@@ -494,8 +551,8 @@ if (!available) {
     it("idempotent replay: the second call returns the original event id and re-emits nothing", async () => {
       const cmd = command({ slug: "replayed-co", name: "Replayed Co" });
 
-      const first = await persistListingUpsert(db, cmd, deps);
-      const second = await persistListingUpsert(db, cmd, deps);
+      const first = await persistListingUpsert(db, cmd, deps, AS_WEBHOOK);
+      const second = await persistListingUpsert(db, cmd, deps, AS_WEBHOOK);
 
       expect(first.status).toBe("created");
       const eventId = first.status === "created" ? first.event_id : "";
@@ -523,6 +580,7 @@ if (!available) {
           { tenant_id: "tnt_a" },
         ),
         deps,
+        AS_WEBHOOK,
       );
       const b = await persistListingUpsert(
         db,
@@ -531,6 +589,7 @@ if (!available) {
           { tenant_id: "tnt_b" },
         ),
         deps,
+        AS_WEBHOOK,
       );
       expect(a.status).toBe("created");
       expect(b.status).toBe("created");
@@ -590,7 +649,9 @@ if (!available) {
       it("throws on a /categories op that is not a replace", async () => {
         await expect(
           run([{ op: "remove", path: "/categories" }]),
-        ).rejects.toThrow(/unexpected JSON Patch op "remove" at "\/categories"/);
+        ).rejects.toThrow(
+          /unexpected JSON Patch op "remove" at "\/categories"/,
+        );
       });
 
       it("throws when the change set changes nothing", async () => {

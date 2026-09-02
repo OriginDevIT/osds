@@ -8,8 +8,13 @@
  */
 import { sql } from "@osds/db";
 import type { Kysely } from "@osds/db";
-import type { OsdsCommand, ProblemDocument } from "@osds/adapter-kit";
+import type {
+  ActorType,
+  OsdsCommand,
+  ProblemDocument,
+} from "@osds/adapter-kit";
 import { validationProblem } from "../command/problem.js";
+import { ROLE_RANK, type StaffRole } from "../roles.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generated schema types are not wired up yet
 export type Db = Kysely<any>;
@@ -109,6 +114,64 @@ export interface OutboxEvent {
 }
 
 /**
+ * Who a command attributes its events to. The caller supplies one at every
+ * {@link writeOutboxEvents} call - there is no default. A silent default is how
+ * an `adapter` label ended up permanently stamped on staff actions (#95).
+ *
+ *   adapter  - an adapter's command. `actor.type` is `"adapter"`, and `origin`
+ *              is the adapter id (the §2.1 loop guard).
+ *   operator - a signed-in operator dispatching from `/admin`. `actor.type` is
+ *              `"admin"` when the membership role is `admin` (spec §4.4,
+ *              "Reading actor.type"), `"staff"` otherwise. Not adapter-caused,
+ *              so `origin` is `null`.
+ *   admin    - an admin id carried in a command payload rather than a session
+ *              (`entitlement.grant.admin_id`). That command has its own writer
+ *              in `command/handle.ts`; this arm is here so the eventual fold has
+ *              a name. `origin` is `null`.
+ *
+ * No `system` arm yet - a scheduled job that needs one adds it with a decision.
+ */
+export type CommandActor =
+  | { readonly kind: "adapter"; readonly adapterId: string }
+  | {
+      readonly kind: "operator";
+      readonly operatorId: string;
+      readonly role: StaffRole;
+    }
+  | { readonly kind: "admin"; readonly adminId: string };
+
+/**
+ * A {@link CommandActor} resolved to what the outbox row stores: the `actor`
+ * object (§2 envelope) and the §2.1 `origin` loop guard. `origin` is the adapter
+ * id only for an adapter command; anything not adapter-caused gets `null`.
+ */
+function resolveActor(actor: CommandActor): {
+  readonly actor: { readonly type: ActorType; readonly id: string };
+  readonly origin: string | null;
+} {
+  switch (actor.kind) {
+    case "adapter":
+      return {
+        actor: { type: "adapter", id: actor.adapterId },
+        origin: actor.adapterId,
+      };
+    case "operator":
+      return {
+        actor: {
+          type: ROLE_RANK[actor.role] >= ROLE_RANK.admin ? "admin" : "staff",
+          id: actor.operatorId,
+        },
+        origin: null,
+      };
+    case "admin":
+      return {
+        actor: { type: "admin", id: actor.adminId },
+        origin: null,
+      };
+  }
+}
+
+/**
  * Insert every event of one command into the outbox, in emission order so
  * per-subject ordering holds (§3.1). `command.idempotency_key` goes on exactly
  * one row - the event at `keyIndex` (default 0, the first) - and the rest get
@@ -121,6 +184,9 @@ export interface OutboxEvent {
  * `claim.submitted` (§4.3), but the idempotency key and the returned id stay on
  * `claim.submitted`.
  *
+ * `actor` ({@link CommandActor}) is supplied by the caller - there is no
+ * default. It sets each row's `actor` and, together, its `origin` (#95).
+ *
  * Throws on an empty list: an accepted command that produced no event is a bug,
  * not a silent no-op (cf. the empty-assignment guard in listing-upsert.ts).
  */
@@ -128,6 +194,7 @@ export async function writeOutboxEvents(
   trx: Db,
   command: OsdsCommand,
   deps: PersistDeps,
+  actor: CommandActor,
   events: readonly OutboxEvent[],
   keyIndex = 0,
 ): Promise<string> {
@@ -142,7 +209,8 @@ export async function writeOutboxEvents(
     );
   }
 
-  const actor = JSON.stringify({ type: "adapter", id: command.adapter_id });
+  const resolved = resolveActor(actor);
+  const actorJson = JSON.stringify(resolved.actor);
   const occurredAt = deps.now().toISOString();
 
   let primaryId = "";
@@ -156,7 +224,7 @@ export async function writeOutboxEvents(
         actor, origin, trace_id, data, idempotency_key
       ) values (
         ${id}, ${command.tenant_id}, ${event.type}, 1, ${occurredAt}, ${event.subject},
-        ${actor}::jsonb, ${command.adapter_id}, ${command.trace_id},
+        ${actorJson}::jsonb, ${resolved.origin}, ${command.trace_id},
         ${JSON.stringify(event.data)}::jsonb,
         ${i === keyIndex ? command.idempotency_key : null}
       )
