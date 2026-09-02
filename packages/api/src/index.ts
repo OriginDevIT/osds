@@ -20,6 +20,14 @@ export {
   type TenantOperator,
 } from "./request-context.js";
 
+export {
+  SESSION_COOKIE_NAME,
+  serializeSessionCookie,
+  serializeClearedSessionCookie,
+  type SessionCookieInput,
+  type CookieClock,
+} from "./session-cookie.js";
+
 // Spec §4.4 role rules, re-exported for request-context consumers. They
 // originate in `@osds/core` - a spec rule with no driver - not here.
 export { ROLE_RANK, type StaffRole } from "@osds/core";
