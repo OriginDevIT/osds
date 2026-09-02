@@ -30,6 +30,8 @@ export {
   InvalidPasswordHashError,
 } from "./password.js";
 
+export { ROLE_RANK, type StaffRole } from "./roles.js";
+
 export {
   CommandRejected,
   validationProblem,

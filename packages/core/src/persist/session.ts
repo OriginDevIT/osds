@@ -76,7 +76,14 @@ export interface ResolvedSession {
   readonly expiresAt: Date;
 }
 
-const tokenHashOf = (token: string): string =>
+/**
+ * The SHA-256 (hex) of a raw session token - the value stored in
+ * `operator_sessions.token_hash` and carried in the `app.session_token_hash`
+ * GUC. SHA-256 not scrypt: a uniform 256-bit token has nothing to strengthen
+ * (see the file header). Exported so `@osds/api`'s request-context resolver
+ * hashes a presented cookie identically instead of reproducing the algorithm.
+ */
+export const tokenHashOf = (token: string): string =>
   createHash("sha256").update(token).digest("hex");
 
 function asDate(v: Date | string): Date {
