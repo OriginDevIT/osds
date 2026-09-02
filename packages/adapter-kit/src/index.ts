@@ -257,7 +257,12 @@ export interface OsdsCommand {
   /** Derived from the external system's identifiers so a redelivery collapses to one effect. */
   readonly idempotency_key: string;
   readonly tenant_id: string;
-  readonly adapter_id: string;
+  /**
+   * The adapter that sent the command, or `null` for a non-adapter path - CSV
+   * import, the write API, or an operator dispatching from `/admin` (spec §7.1
+   * shows `adapter_id: null`).
+   */
+  readonly adapter_id: string | null;
   /** Propagated onto the resulting event's `trace_id`. */
   readonly trace_id: string;
   readonly payload: Readonly<Record<string, unknown>>;

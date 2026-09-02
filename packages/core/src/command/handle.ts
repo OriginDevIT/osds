@@ -71,7 +71,7 @@ export async function handleCommand(
   }
 
   if (!ctx.scopes.includes(REQUIRED_SCOPE)) {
-    return { status: "rejected", problem: scopeProblem(command.adapter_id, REQUIRED_SCOPE) };
+    return { status: "rejected", problem: scopeProblem(command.adapter_id ?? "unknown", REQUIRED_SCOPE) };
   }
 
   let parsed: ParsedCommand;

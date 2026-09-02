@@ -37,6 +37,9 @@ importers:
 
   packages/api:
     dependencies:
+      '@osds/adapter-kit':
+        specifier: workspace:*
+        version: link:../adapter-kit
       '@osds/core':
         specifier: workspace:*
         version: link:../core

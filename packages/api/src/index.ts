@@ -29,6 +29,12 @@ export {
   type CookieClock,
 } from "./session-cookie.js";
 
+export {
+  dispatchCommand,
+  COMMAND_MIN_RANK,
+  type DispatchOutcome,
+} from "./dispatch.js";
+
 // Spec §4.4 role rules, re-exported for request-context consumers. They
 // originate in `@osds/core` - a spec rule with no driver - not here.
 export { ROLE_RANK, type StaffRole } from "@osds/core";
