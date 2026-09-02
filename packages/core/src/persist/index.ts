@@ -34,6 +34,7 @@ export {
   revokeSession,
   revokeAllForOperator,
   authenticateOperator,
+  tokenHashOf,
   type Session,
   type ResolvedSession,
 } from "./session.js";

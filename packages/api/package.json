@@ -1,0 +1,19 @@
+{
+  "name": "@osds/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "scripts": { "build": "tsc -b", "dev": "tsc -b --watch" },
+  "dependencies": {
+    "@osds/core": "workspace:*",
+    "@osds/db": "workspace:*",
+    "kysely": "^0.28.17"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10",
+    "pg": "^8.13.1"
+  }
+}

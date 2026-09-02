@@ -19,8 +19,20 @@ export default defineConfig({
   resolve: {
     // Resolve workspace packages to their source, so tests run against current
     // code with no build step.
+    //
+    // Order is load-bearing: `@osds/core/persist` MUST precede `@osds/core`.
+    // Aliases are matched in order, and the `@osds/core` entry also matches the
+    // `@osds/core/persist` subpath, so listing `@osds/core` first shadows the
+    // subpath alias. It does not then fall back to package resolution - the
+    // whole test file fails to load with:
+    //   Error: Cannot find package '@osds/core/persist' imported from
+    //   packages/api/src/request-context.test.ts
+    // and `vitest run packages/api/src/request-context.test.ts` reports
+    // "1 failed (1) / no tests" (verified 2026-09-01 by swapping the two lines).
     alias: {
       "@osds/adapter-kit": fromRoot("./packages/adapter-kit/src/index.ts"),
+      "@osds/api": fromRoot("./packages/api/src/index.ts"),
+      "@osds/core/persist": fromRoot("./packages/core/src/persist/index.ts"),
       "@osds/core": fromRoot("./packages/core/src/index.ts"),
       "@osds/db": fromRoot("./packages/db/src/index.ts"),
     },
