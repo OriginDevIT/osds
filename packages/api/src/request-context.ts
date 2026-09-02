@@ -92,8 +92,14 @@ export interface RequestInput {
   readonly consoleHost: string;
 }
 
-/** Host header value -> bare hostname: trimmed, lowercased, port stripped (cf. `packages/web`). */
-function normalizeHost(raw: string): string {
+/**
+ * Host header value -> bare hostname: trimmed, lowercased, port stripped, IPv6
+ * brackets kept. The single host normalizer - `packages/web` uses this exact
+ * function for the `host` it hands `authenticateOperator` / `createSession` /
+ * `revokeSession`, so a session's `issued_for_host` is stored under the same
+ * form this resolver later matches on.
+ */
+export function normalizeHost(raw: string): string {
   const value = raw.trim().toLowerCase();
   if (value === "") return "";
   if (value.startsWith("[")) {

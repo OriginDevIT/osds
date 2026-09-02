@@ -6,8 +6,13 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createKysely, sql } from "@osds/db";
-import { tokenHashOf } from "@osds/core/persist";
-import { ROLE_RANK, resolveRequestContext } from "./index.js";
+import { hashPassword, ulidFactory } from "@osds/core";
+import {
+  authenticateOperator,
+  tokenHashOf,
+  type PersistDeps,
+} from "@osds/core/persist";
+import { ROLE_RANK, normalizeHost, resolveRequestContext } from "./index.js";
 import {
   adminUrl,
   createScratchDb,
@@ -25,6 +30,19 @@ describe("spec §4.4 role rules, re-exported from @osds/api", () => {
       moderator: 1,
       support: 0,
     });
+  });
+});
+
+describe("normalizeHost - the single host normalizer @osds/web also uses", () => {
+  it.each<[string, string]>([
+    ["Example.COM", "example.com"],
+    ["example.com:3000", "example.com"],
+    ["  Example.com  ", "example.com"],
+    ["[::1]:8080", "[::1]"],
+    ["[2001:db8::1]", "[2001:db8::1]"],
+    ["", ""],
+  ])("%j -> %j", (input, expected) => {
+    expect(normalizeHost(input)).toBe(expected);
   });
 });
 
@@ -56,11 +74,13 @@ if (!available) {
   async function seedOperator(
     id: string,
     email: string,
-    opts: { superadmin?: boolean } = {},
+    opts: { superadmin?: boolean; passwordHash?: string } = {},
   ) {
     await sql`
       insert into operators (id, email, password_hash, is_superadmin)
-      values (${id}, ${email}, 'x', ${opts.superadmin ?? false})
+      values (
+        ${id}, ${email}, ${opts.passwordHash ?? "x"}, ${opts.superadmin ?? false}
+      )
     `.execute(owner);
   }
 
@@ -299,5 +319,51 @@ if (!available) {
       db,
     );
     expect(ctx).toEqual({ kind: "console", host: CONSOLE_HOST, operator: null });
+  });
+
+  it("a real authenticateOperator token resolves through resolveRequestContext at a ported host", async () => {
+    // Closes the seam between createSession's `host.toLowerCase()` (which keeps
+    // a port) and resolveRequestContext's `normalizeHost()` (which strips one).
+    // authenticateOperator's DB behaviour and resolveRequestContext's are each
+    // covered elsewhere, but never chained: a login token has not been proven
+    // to resolve.
+    const deps: PersistDeps = { now: () => new Date(), newId: ulidFactory };
+    await seedOperator("op_rt", "rt@example.test", {
+      passwordHash: await hashPassword("correct-horse-battery-staple"),
+    });
+    await seedMembership("op_rt", "tnt_chi", "editor", "active");
+
+    // The browser reaches /admin at a host that carries a port and mixed case.
+    // login/route.ts resolves the context first and logs in with `ctx.host` -
+    // the normalized value resolveRequestContext will later match
+    // `issued_for_host` against.
+    const rawHost = "ChicagoPlumbers.Example:8443";
+    const loginHost = normalizeHost(rawHost);
+
+    const session = await authenticateOperator(
+      db,
+      deps,
+      "rt@example.test",
+      "correct-horse-battery-staple",
+      loginHost,
+    );
+    expect(session).not.toBeNull();
+
+    // A later request carries the raw, un-normalized Host header.
+    const ctx = await resolveRequestContext(
+      { host: rawHost, sessionToken: session!.token, ...CONSOLE },
+      db,
+    );
+    expect(ctx).toEqual({
+      kind: "tenant",
+      host: TENANT_HOST,
+      tenantId: "tnt_chi",
+      operator: {
+        operatorId: "op_rt",
+        email: "rt@example.test",
+        isSuperadmin: false,
+        role: "editor",
+      },
+    });
   });
 });
