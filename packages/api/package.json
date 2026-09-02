@@ -5,9 +5,18 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
-  "scripts": { "build": "tsc -b", "dev": "tsc -b --watch" },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b --watch"
+  },
   "dependencies": {
+    "@osds/adapter-kit": "workspace:*",
     "@osds/core": "workspace:*",
     "@osds/db": "workspace:*",
     "kysely": "^0.28.17"

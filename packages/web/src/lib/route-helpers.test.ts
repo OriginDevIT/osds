@@ -1,12 +1,14 @@
 /**
- * `sameOriginGuard` - the login-CSRF / cross-site-logout guard. Pure, no DB.
+ * `sameOriginGuard` and `commandResponse` - pure, no DB.
  */
 import { describe, expect, it } from "vitest";
-import { sameOriginGuard } from "./route-helpers.js";
+import type { DispatchOutcome } from "@osds/api";
+import { commandResponse, sameOriginGuard } from "./route-helpers.js";
 
 function post(headers: Record<string, string | undefined>): Request {
   const h = new Headers();
-  for (const [k, v] of Object.entries(headers)) if (v !== undefined) h.set(k, v);
+  for (const [k, v] of Object.entries(headers))
+    if (v !== undefined) h.set(k, v);
   return new Request("https://tenant.example/admin/login", {
     method: "POST",
     headers: h,
@@ -74,5 +76,76 @@ describe("sameOriginGuard", () => {
         post({ origin: "http://evil.example", host: "tenant.example" }),
       )?.status,
     ).toBe(403);
+  });
+});
+
+describe("commandResponse", () => {
+  const problem = (status: number) => ({
+    type: "https://osds.dev/problems/x",
+    title: "x",
+    status,
+    code: "x",
+    detail: "x",
+  });
+
+  it("accepted -> 202 application/json with the event id", async () => {
+    const res = commandResponse({ kind: "accepted", eventId: "evt_1" });
+    expect(res.status).toBe(202);
+    expect(res.headers.get("content-type")).toBe(
+      "application/json; charset=utf-8",
+    );
+    expect(await res.json()).toEqual({ event_id: "evt_1" });
+  });
+
+  it("accepted with a null event id (unchanged) -> 202, event_id null", async () => {
+    const res = commandResponse({ kind: "accepted", eventId: null });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ event_id: null });
+  });
+
+  it("duplicate -> 409 with the original event id", async () => {
+    const res = commandResponse({ kind: "duplicate", eventId: "evt_orig" });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ event_id: "evt_orig" });
+  });
+
+  it("unauthorized -> 401 application/problem+json", async () => {
+    const res = commandResponse({ kind: "unauthorized" });
+    expect(res.status).toBe(401);
+    expect(res.headers.get("content-type")).toBe(
+      "application/problem+json; charset=utf-8",
+    );
+    expect(await res.json()).toMatchObject({
+      status: 401,
+      code: "unauthorized",
+    });
+  });
+
+  it.each([
+    ["rejected", 422],
+    ["unsupported", 422],
+    ["forbidden", 403],
+    ["error", 500],
+  ] as const)(
+    "%s -> the problem's status as application/problem+json",
+    async (kind, status) => {
+      const res = commandResponse({
+        kind,
+        problem: problem(status),
+      } as DispatchOutcome);
+      expect(res.status).toBe(status);
+      expect(res.headers.get("content-type")).toBe(
+        "application/problem+json; charset=utf-8",
+      );
+      expect(await res.json()).toEqual(problem(status));
+    },
+  );
+
+  it("falls back to 422 when a problem carries no numeric status", async () => {
+    const res = commandResponse({
+      kind: "rejected",
+      problem: { title: "no status" },
+    });
+    expect(res.status).toBe(422);
   });
 });

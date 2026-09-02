@@ -818,8 +818,9 @@ function envelopeErrors(command: OsdsCommand): string[] {
     errors.push("idempotency_key is required");
   }
   if (!nonEmptyString(command.tenant_id)) errors.push("tenant_id is required");
-  if (!nonEmptyString(command.adapter_id))
-    errors.push("adapter_id is required");
+  // §7.1: the non-adapter path (operator dispatch, write API) sends null.
+  if (command.adapter_id !== null && !nonEmptyString(command.adapter_id))
+    errors.push("adapter_id must be a non-empty string or null");
   if (!nonEmptyString(command.trace_id)) errors.push("trace_id is required");
   if (!isObject(command.payload)) errors.push("payload must be an object");
   return errors;

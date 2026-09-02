@@ -2,7 +2,7 @@
  * Small helpers shared by the admin/console route handlers. No `next/*` import -
  * plain Web `Request` / `Response`.
  */
-import { normalizeHost } from "@osds/api";
+import { normalizeHost, type DispatchOutcome } from "@osds/api";
 
 /** A `text/plain` response with a trailing newline already in `body`. */
 export function text(status: number, body: string): Response {
@@ -10,6 +10,52 @@ export function text(status: number, body: string): Response {
     status,
     headers: { "content-type": "text/plain; charset=utf-8" },
   });
+}
+
+function json(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
+
+function problemJson(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/problem+json; charset=utf-8" },
+  });
+}
+
+/**
+ * Render a {@link DispatchOutcome} from `@osds/api`'s `dispatchCommand` to an
+ * HTTP response. The single place command dispatch meets status codes and
+ * `application/problem+json` (spec §7: 202 / 409 / 422, plus 401 / 403 / 500).
+ */
+export function commandResponse(outcome: DispatchOutcome): Response {
+  switch (outcome.kind) {
+    case "accepted":
+      return json(202, { event_id: outcome.eventId });
+    case "duplicate":
+      return json(409, { event_id: outcome.eventId });
+    case "unauthorized":
+      return problemJson(401, {
+        type: "https://osds.dev/problems/unauthorized",
+        title: "authentication required",
+        status: 401,
+        code: "unauthorized",
+        detail: "sign in at /admin before dispatching a command",
+      });
+    case "rejected":
+    case "unsupported":
+    case "forbidden":
+    case "error": {
+      const status =
+        typeof outcome.problem.status === "number"
+          ? outcome.problem.status
+          : 422;
+      return problemJson(status, outcome.problem);
+    }
+  }
 }
 
 /**

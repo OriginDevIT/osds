@@ -222,8 +222,9 @@ export function handleListingUpsert(
     envelope.push("idempotency_key is required");
   if (!nonEmptyString(command.tenant_id))
     envelope.push("tenant_id is required");
-  if (!nonEmptyString(command.adapter_id))
-    envelope.push("adapter_id is required");
+  // §7.1: the non-adapter path (CSV, write API, operator dispatch) sends null.
+  if (command.adapter_id !== null && !nonEmptyString(command.adapter_id))
+    envelope.push("adapter_id must be a non-empty string or null");
   if (!nonEmptyString(command.trace_id)) envelope.push("trace_id is required");
   if (!isObject(command.payload)) envelope.push("payload must be an object");
   if (envelope.length > 0) {
