@@ -32,6 +32,9 @@ export {
 
 export { ROLE_RANK, type StaffRole } from "./roles.js";
 
+export { newUlid, encodeUlid, ulidFactory } from "./ulid.js";
+export type { IdFactory } from "./command/context.js";
+
 export {
   CommandRejected,
   validationProblem,
