@@ -16,6 +16,15 @@ export default defineConfig({
     // creates and grants ("tuple concurrently updated").
     fileParallelism: false,
   },
+  // `packages/web/tsconfig.json` sets `jsx: "preserve"` for Next's own
+  // compiler; without an override the test transformer inherits that and leaves
+  // JSX in place, and Vite's import analysis rejects the file ("make sure to
+  // not set jsx to preserve"). Setting `oxc.jsx` explicitly makes the transform
+  // emit the automatic runtime regardless of tsconfig. Only one test imports a
+  // `.tsx` (app/admin/login/page.test.ts, the login page's guard branches);
+  // every other test imports `.ts`. `react/jsx-runtime` is a `@osds/web`
+  // dependency already.
+  oxc: { jsx: { runtime: "automatic", importSource: "react" } },
   resolve: {
     // Resolve workspace packages to their source, so tests run against current
     // code with no build step.
