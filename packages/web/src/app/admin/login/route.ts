@@ -6,15 +6,22 @@
  *
  * `authenticateOperator` verifies the password and mints the session row in one
  * call - there is no separate `createSession` here. Its result is `null` for
- * both an unknown email and a wrong password, in comparable time (spec §4.4);
- * this handler maps `null` to one fixed `401`, so the response never reveals
- * whether the address has an account.
+ * both an unknown email and a wrong password, in comparable time; this handler
+ * maps `null` to one fixed `401`, so a failed login never reveals whether the
+ * address has an account.
+ *
+ * The `{ throttled: true }` result (too many recent attempts for this email,
+ * #86) is the one deliberate exception to that identical-failed-login rule: it
+ * returns `429` with `Retry-After`. It still leaks nothing about account
+ * existence - `authenticateOperator` counts attempts against the *submitted*
+ * address, so one that was never an operator trips the limit on the same
+ * schedule as a real one.
  *
  * Web `Request` in, Web `Response` out - no `next/*` import. Request primitives
  * come from `lib/request-context` (the one adapter).
  */
 import { serializeSessionCookie } from "@osds/api";
-import { authenticateOperator } from "@osds/core/persist";
+import { authenticateOperator, isLoginThrottled } from "@osds/core/persist";
 import { getDb } from "../../../lib/db";
 import { persistDeps } from "../../../lib/persist-deps";
 import { getRequestContext } from "../../../lib/request-context";
@@ -50,6 +57,15 @@ export async function POST(request: Request): Promise<Response> {
     password,
     ctx.host,
   );
+  if (isLoginThrottled(session)) {
+    return new Response("Too many sign-in attempts. Try again later.\n", {
+      status: 429,
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "retry-after": String(session.retryAfterSeconds),
+      },
+    });
+  }
   if (session === null) {
     return text(401, "Email or password is incorrect.\n");
   }

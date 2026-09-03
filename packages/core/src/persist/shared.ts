@@ -48,15 +48,22 @@ export function withTenant<T>(
 
 /**
  * Request-scoped GUCs a NON-tenant persist transaction may set (operator auth,
- * sessions - the console host has no tenant at all). An omitted key is left
- * unset: its 0017 resolver returns NULL, and every policy branch reading it
- * default-denies, so a missing GUC fails closed rather than widening.
+ * sessions, the login-attempt limiter - the console host has no tenant at all).
+ * An omitted key is left unset: its 0017 / 0018 resolver returns NULL, and every
+ * policy branch reading it default-denies, so a missing GUC fails closed rather
+ * than widening.
  */
 export interface AppGucs {
   readonly operatorId?: string;
   readonly loginEmail?: string;
   readonly sessionTokenHash?: string;
   readonly sessionHost?: string;
+  /**
+   * SHA-256 (hex) of the address a login POST is attempting. Scopes the caller
+   * to its own row in `operator_login_attempts` (0018, #86) - the pre-auth
+   * login path has no operator and no tenant to scope by.
+   */
+  readonly loginAttemptHash?: string;
 }
 
 const APP_GUC_NAME: Readonly<Record<keyof AppGucs, string>> = {
@@ -64,6 +71,7 @@ const APP_GUC_NAME: Readonly<Record<keyof AppGucs, string>> = {
   loginEmail: "app.login_email",
   sessionTokenHash: "app.session_token_hash",
   sessionHost: "app.session_host",
+  loginAttemptHash: "app.login_attempt_hash",
 };
 
 /**

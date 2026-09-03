@@ -18,7 +18,21 @@
  *   revokeSession          same as resolveSession
  *   revokeAllForOperator   app.operator_id
  *                          -> operator_sessions_self USING (host-blind operator branch)
- *   authenticateOperator   app.login_email, then app.operator_id + app.session_host
+ *   authenticateOperator   app.login_attempt_hash (the attempt counter, 0018 /
+ *                          #86), then app.login_email, then - via createSession -
+ *                          app.operator_id + app.session_host
+ *
+ * authenticateOperator also enforces a per-email login-attempt limit (#86).
+ * Every call counts one attempt in a fixed 15-minute window with a single
+ * upsert on `operator_login_attempts` and, once the running count exceeds
+ * {@link LOGIN_ATTEMPT_LIMIT}, returns {@link LoginThrottled} carrying the
+ * seconds left in the window - BEFORE the operator lookup and before any
+ * scrypt, so a flood cannot spend the box's CPU. One statement, not a read then
+ * an increment: two concurrent requests both under the limit would otherwise
+ * both proceed to scrypt. The counter is keyed on the SHA-256 of the submitted
+ * address, never a resolved operator id, so an address that was never an
+ * operator throttles identically and the 429 is not an existence oracle. A
+ * successful login deletes the rows.
  *
  * Token: 256 bits of CSPRNG, base64url, returned once and never recoverable.
  * `operator_sessions.token_hash` and `app.session_token_hash` carry its
@@ -48,6 +62,16 @@ const SESSION_LIFETIME_MS = 14 * 24 * 60 * 60 * 1000;
 /** 256 bits. */
 const TOKEN_BYTES = 32;
 
+/** The fixed login-attempt bucket (#86): 15 minutes, in ms. */
+const LOGIN_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
+
+/**
+ * Attempts per {@link LOGIN_ATTEMPT_WINDOW_MS} window before a login is
+ * throttled. The attempt that makes the running count exceed this is the first
+ * one refused, so this many attempts per window reach password verification.
+ */
+const LOGIN_ATTEMPT_LIMIT = 5;
+
 /**
  * A valid scrypt hash of a fixed string, at password.ts's CURRENT parameters.
  * {@link authenticateOperator} verifies against it when no operator row matches
@@ -70,6 +94,26 @@ export interface Session {
   /** Absolute expiry - for the cookie's Max-Age. */
   readonly expiresAt: Date;
 }
+
+/**
+ * {@link authenticateOperator}'s third outcome (#86): the login was refused
+ * before credentials were checked because too many attempts have been made for
+ * this email in the current fixed window. `null` still means an unknown email
+ * or a wrong password.
+ *
+ * `throttled: true` is a literal discriminant, matching `@osds/api`'s
+ * `DispatchOutcome` - see {@link isLoginThrottled}.
+ */
+export interface LoginThrottled {
+  readonly throttled: true;
+  /** Whole seconds until the current window ends. In `(0, 900]`. */
+  readonly retryAfterSeconds: number;
+}
+
+/** Narrows {@link authenticateOperator}'s result to {@link LoginThrottled}. */
+export const isLoginThrottled = (
+  result: Session | LoginThrottled | null,
+): result is LoginThrottled => result !== null && "throttled" in result;
 
 export interface ResolvedSession {
   readonly operatorId: string;
@@ -192,6 +236,13 @@ export async function revokeAllForOperator(
  * comparable time: an unknown email still runs one scrypt against
  * {@link DUMMY_HASH} (#76).
  *
+ * Before any of that (#86): count this attempt in the current fixed 15-minute
+ * window with one upsert, and if the running count exceeds
+ * {@link LOGIN_ATTEMPT_LIMIT} return {@link LoginThrottled} - no operator
+ * lookup, no scrypt. The count is per submitted address (hashed), so an address
+ * that is not an operator throttles on the same schedule. A successful login
+ * clears every window for the address.
+ *
  * Throws {@link InvalidPasswordHashError} if the stored hash is structurally
  * corrupt - a fault to fix, not a login failure to bounce forever.
  */
@@ -201,8 +252,42 @@ export async function authenticateOperator(
   email: string,
   password: string,
   host: string,
-): Promise<Session | null> {
+): Promise<Session | LoginThrottled | null> {
   const emailLower = email.toLowerCase();
+  const emailHashHex = createHash("sha256").update(emailLower).digest("hex");
+
+  const now = deps.now();
+  const windowStart = new Date(
+    Math.floor(now.getTime() / LOGIN_ATTEMPT_WINDOW_MS) *
+      LOGIN_ATTEMPT_WINDOW_MS,
+  );
+
+  // One statement: count this attempt and read the running total back. A read
+  // then a separate increment races - two requests both under the limit would
+  // both pass and both run scrypt, the CPU cost the limit exists to cap (#86).
+  // Counting every attempt (not just failures) is safe: the window is a fixed
+  // wall-clock bucket, so a refused attempt cannot push the boundary out.
+  const attempts = await withAppRole(
+    db,
+    { loginAttemptHash: emailHashHex },
+    async (trx) => {
+      const res = await sql<{ failures: number }>`
+        insert into operator_login_attempts (email_hash, window_start, failures)
+        values (decode(${emailHashHex}, 'hex'), ${windowStart.toISOString()}, 1)
+        on conflict (email_hash, window_start)
+          do update set failures = operator_login_attempts.failures + 1
+        returning failures
+      `.execute(trx);
+      return res.rows[0]!.failures;
+    },
+  );
+
+  if (attempts > LOGIN_ATTEMPT_LIMIT) {
+    const retryAfterSeconds = Math.ceil(
+      (windowStart.getTime() + LOGIN_ATTEMPT_WINDOW_MS - now.getTime()) / 1000,
+    );
+    return { throttled: true, retryAfterSeconds };
+  }
 
   const found = await withAppRole(
     db,
@@ -232,6 +317,14 @@ export async function authenticateOperator(
       // Opportunistic: a failed rehash must never fail a valid login.
     }
   }
+
+  // Successful login: clear every window for this email, so a stale earlier
+  // bucket cannot throttle the next sign-in.
+  await withAppRole(db, { loginAttemptHash: emailHashHex }, (trx) =>
+    sql`delete from operator_login_attempts where email_hash = decode(${emailHashHex}, 'hex')`.execute(
+      trx,
+    ),
+  );
 
   return createSession(db, deps, found.id, host);
 }
