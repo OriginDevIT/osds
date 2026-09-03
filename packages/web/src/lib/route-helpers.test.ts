@@ -1,9 +1,9 @@
 /**
- * `sameOriginGuard` and `commandResponse` - pure, no DB.
+ * `sameOriginGuard`, `seeOther` and `commandResponse` - pure, no DB.
  */
 import { describe, expect, it } from "vitest";
 import type { DispatchOutcome } from "@osds/api";
-import { commandResponse, sameOriginGuard } from "./route-helpers.js";
+import { commandResponse, sameOriginGuard, seeOther } from "./route-helpers.js";
 
 function post(headers: Record<string, string | undefined>): Request {
   const h = new Headers();
@@ -76,6 +76,16 @@ describe("sameOriginGuard", () => {
         post({ origin: "http://evil.example", host: "tenant.example" }),
       )?.status,
     ).toBe(403);
+  });
+});
+
+describe("seeOther", () => {
+  it("303 with the Location, no body, no content-type", () => {
+    const res = seeOther("/admin/login?error=credentials");
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/admin/login?error=credentials");
+    expect(res.headers.get("content-type")).toBeNull();
+    expect(res.body).toBeNull();
   });
 });
 

@@ -1,17 +1,17 @@
 /**
- * POST /admin/login handler behaviour. The request-primitive adapter, the db
- * accessor, and `@osds/core/persist` are mocked; `@osds/api`'s cookie
+ * POST /admin/login/submit handler behaviour. The request-primitive adapter,
+ * the db accessor, and `@osds/core/persist` are mocked; `@osds/api`'s cookie
  * serializer runs for real. No DB - `authenticateOperator`'s own DB behaviour
  * is covered in `@osds/core`'s session suite.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SESSION_COOKIE_NAME } from "@osds/api";
 
-vi.mock("../../../lib/request-context", () => ({
+vi.mock("../../../../lib/request-context", () => ({
   getRequestContext: vi.fn(),
   getSessionToken: vi.fn(),
 }));
-vi.mock("../../../lib/db", () => ({ getDb: () => ({}) }));
+vi.mock("../../../../lib/db", () => ({ getDb: () => ({}) }));
 vi.mock("@osds/core/persist", () => ({
   authenticateOperator: vi.fn(),
   revokeSession: vi.fn(),
@@ -22,7 +22,7 @@ vi.mock("@osds/core/persist", () => ({
 }));
 
 import { POST } from "./route.js";
-import { getRequestContext } from "../../../lib/request-context.js";
+import { getRequestContext } from "../../../../lib/request-context.js";
 import { authenticateOperator } from "@osds/core/persist";
 
 const ctxMock = vi.mocked(getRequestContext);
@@ -41,12 +41,15 @@ function loginReq(opts: {
   form?: Record<string, string>;
   rawBody?: string;
   contentType?: string;
+  /** `Accept` header. Set to `text/html...` to exercise the browser branch. */
+  accept?: string;
 }): Request {
   const headers = new Headers();
   if (opts.origin !== null) {
     headers.set("origin", opts.origin ?? "https://tenant.example");
   }
   headers.set("host", opts.host ?? "tenant.example");
+  if (opts.accept !== undefined) headers.set("accept", opts.accept);
   let body: string | null = null;
   if (opts.rawBody !== undefined) {
     body = opts.rawBody;
@@ -55,12 +58,15 @@ function loginReq(opts: {
     body = new URLSearchParams(opts.form).toString();
     headers.set("content-type", "application/x-www-form-urlencoded");
   }
-  return new Request("https://tenant.example/admin/login", {
+  return new Request("https://tenant.example/admin/login/submit", {
     method: "POST",
     headers,
     body,
   });
 }
+
+/** `Accept: text/html` - the header a browser sends on a form navigation. */
+const ACCEPT_HTML = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 
 const goodForm = { email: "a@b.test", password: "hunter2" };
 const session = () => ({ token: "TOKENVALUE", expiresAt: new Date(Date.now() + 1_000) });
@@ -112,9 +118,58 @@ describe("request body", () => {
       expect(authMock).not.toHaveBeenCalled();
     },
   );
+
+  it("browser form POST with a blank field: 303 to /admin/login?error=missing", async () => {
+    const res = await POST(
+      loginReq({ form: { email: "a@b.test" }, accept: ACCEPT_HTML }),
+    );
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/admin/login?error=missing");
+    expect(authMock).not.toHaveBeenCalled();
+  });
 });
 
-describe("rate limit (#86)", () => {
+// The failure shape is chosen by `Accept`. A browser (Accept: text/html) is
+// redirected back to the form; every other caller keeps the bare status and,
+// for a throttle, Retry-After - the machine contract (#86).
+describe("failure responses - browser vs machine", () => {
+  it("browser: null -> 303 to /admin/login?error=credentials, no cookie", async () => {
+    authMock.mockResolvedValue(null);
+    const res = await POST(loginReq({ form: goodForm, accept: ACCEPT_HTML }));
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/admin/login?error=credentials");
+    expect(res.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("browser: throttled -> 303 to /admin/login?error=throttled, no Retry-After, no interval", async () => {
+    authMock.mockResolvedValue({ throttled: true, retryAfterSeconds: 420 });
+    const res = await POST(loginReq({ form: goodForm, accept: ACCEPT_HTML }));
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/admin/login?error=throttled");
+    expect(res.headers.get("retry-after")).toBeNull();
+    expect(res.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("machine (Accept: application/json): null -> bare 401, no redirect", async () => {
+    authMock.mockResolvedValue(null);
+    const res = await POST(
+      loginReq({ form: goodForm, accept: "application/json" }),
+    );
+    expect(res.status).toBe(401);
+    expect(res.headers.get("location")).toBeNull();
+    expect(await res.text()).toBe("Email or password is incorrect.\n");
+  });
+
+  it("machine (Accept: */*): throttled -> 429 with Retry-After", async () => {
+    authMock.mockResolvedValue({ throttled: true, retryAfterSeconds: 420 });
+    const res = await POST(loginReq({ form: goodForm, accept: "*/*" }));
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("420");
+    expect(res.headers.get("location")).toBeNull();
+  });
+});
+
+describe("rate limit (#86) - machine caller (no Accept header)", () => {
   it("429 with Retry-After and no cookie when authenticateOperator throttles", async () => {
     authMock.mockResolvedValue({ throttled: true, retryAfterSeconds: 420 });
     const res = await POST(loginReq({ form: goodForm }));
@@ -125,7 +180,7 @@ describe("rate limit (#86)", () => {
   });
 });
 
-describe("credentials - identical failed-login response", () => {
+describe("credentials - identical failed-login response (machine caller)", () => {
   it("401 with a fixed body and no cookie for both unknown email and wrong password", async () => {
     authMock.mockResolvedValue(null);
     const a = await POST(loginReq({ form: { email: "nobody@x.test", password: "wrong" } }));

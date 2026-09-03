@@ -12,6 +12,15 @@ export function text(status: number, body: string): Response {
   });
 }
 
+/**
+ * A body-less `303 See Other` to a local path - the POST-redirect-GET reply to
+ * a browser form submission. `location` must be an app-local path (a leading
+ * `/`), not a caller-supplied value.
+ */
+export function seeOther(location: string): Response {
+  return new Response(null, { status: 303, headers: { Location: location } });
+}
+
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
