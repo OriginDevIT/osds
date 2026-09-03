@@ -15,6 +15,10 @@ vi.mock("../../../lib/db", () => ({ getDb: () => ({}) }));
 vi.mock("@osds/core/persist", () => ({
   authenticateOperator: vi.fn(),
   revokeSession: vi.fn(),
+  // Faithful to the real guard in @osds/core/persist/session.ts - kept inline
+  // so this unit test never loads the DB driver that module pulls in.
+  isLoginThrottled: (r: unknown): boolean =>
+    typeof r === "object" && r !== null && "throttled" in r,
 }));
 
 import { POST } from "./route.js";
@@ -110,7 +114,18 @@ describe("request body", () => {
   );
 });
 
-describe("credentials - spec §4.4 identical response", () => {
+describe("rate limit (#86)", () => {
+  it("429 with Retry-After and no cookie when authenticateOperator throttles", async () => {
+    authMock.mockResolvedValue({ throttled: true, retryAfterSeconds: 420 });
+    const res = await POST(loginReq({ form: goodForm }));
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("420");
+    expect(res.headers.get("set-cookie")).toBeNull();
+    expect(await res.text()).toBe("Too many sign-in attempts. Try again later.\n");
+  });
+});
+
+describe("credentials - identical failed-login response", () => {
   it("401 with a fixed body and no cookie for both unknown email and wrong password", async () => {
     authMock.mockResolvedValue(null);
     const a = await POST(loginReq({ form: { email: "nobody@x.test", password: "wrong" } }));

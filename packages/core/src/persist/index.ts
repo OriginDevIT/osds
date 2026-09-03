@@ -35,9 +35,11 @@ export {
   revokeSession,
   revokeAllForOperator,
   authenticateOperator,
+  isLoginThrottled,
   tokenHashOf,
   type Session,
   type ResolvedSession,
+  type LoginThrottled,
 } from "./session.js";
 
 export { handleCommand } from "../command/handle.js";

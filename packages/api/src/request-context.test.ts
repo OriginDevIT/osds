@@ -9,6 +9,7 @@ import { createKysely, sql } from "@osds/db";
 import { hashPassword, ulidFactory } from "@osds/core";
 import {
   authenticateOperator,
+  isLoginThrottled,
   tokenHashOf,
   type PersistDeps,
 } from "@osds/core/persist";
@@ -347,11 +348,13 @@ if (!available) {
       "correct-horse-battery-staple",
       loginHost,
     );
-    expect(session).not.toBeNull();
+    if (session === null || isLoginThrottled(session)) {
+      throw new Error("expected authenticateOperator to return a session");
+    }
 
     // A later request carries the raw, un-normalized Host header.
     const ctx = await resolveRequestContext(
-      { host: rawHost, sessionToken: session!.token, ...CONSOLE },
+      { host: rawHost, sessionToken: session.token, ...CONSOLE },
       db,
     );
     expect(ctx).toEqual({
