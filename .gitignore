@@ -12,6 +12,9 @@ packages/db/src/schema.ts
 .env.*
 !.env.example
 
+# one-off operator seed (see its header) - must never be committed
+packages/core/seed-operator.mts
+
 .DS_Store
 Thumbs.db
 *.log
