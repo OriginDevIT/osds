@@ -37,7 +37,15 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'tenants',
+    'directory',
+    'billing',
+    'audit',
 ]
+
+# Operators are the installation's people; a directory's users are a separate,
+# tenant-scoped model (directory.DirectoryUser) and not Django auth users.
+AUTH_USER_MODEL = 'tenants.Operator'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
