@@ -1,9 +1,0 @@
-{
-  "files": [],
-  "references": [
-    { "path": "packages/adapter-kit" },
-    { "path": "packages/core" },
-    { "path": "packages/db" },
-    { "path": "packages/api" }
-  ]
-}
