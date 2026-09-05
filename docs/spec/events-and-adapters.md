@@ -25,7 +25,7 @@ Load-bearing. Breaking these is how the project ends up with a proprietary depen
 
 1. **Core never imports adapter code.** No conditional logic anywhere in core that names a vendor.
 2. **Events are facts, past tense, immutable.** An emitted event is never retracted, only followed by a corrective event.
-3. **Commands are requests, imperative, fallible.** Adapters send commands *into* core. Core validates, may reject, and emits the resulting event if it succeeds.
+3. **Commands are requests, imperative, fallible.** Adapters send commands _into_ core. Core validates, may reject, and emits the resulting event if it succeeds.
 4. **Every event is tenant-scoped.** No global events except `tenant.*`.
 5. **Delivery is at-least-once.** Adapters must be idempotent on `event.id`.
 6. **Single-tenant is the default experience, multi-tenant is the schema.** Every table carries `tenant_id` from the first migration.
@@ -45,26 +45,35 @@ Load-bearing. Breaking these is how the project ends up with a proprietary depen
   "occurred_at": "2026-08-28T14:22:10.442Z",
   "subject": "listing_01JBQ6YW8TFN2H5CKXQ4V3ZDAE",
 
-  "tenant": { "id": "tnt_01JBQ2K9", "slug": "chicago-plumbers", "domain": "chicagoplumbers.example" },
-  "actor":  { "type": "owner", "id": "usr_01JBQ5T2", "ip": "203.0.113.44", "user_agent": "Mozilla/5.0 ..." },
+  "tenant": {
+    "id": "tnt_01JBQ2K9",
+    "slug": "chicago-plumbers",
+    "domain": "chicagoplumbers.example"
+  },
+  "actor": {
+    "type": "owner",
+    "id": "usr_01JBQ5T2",
+    "ip": "203.0.113.44",
+    "user_agent": "Mozilla/5.0 ..."
+  },
   "origin": null,
   "trace_id": "01JBQ7X2M4K8ZP3RVN6T9WGYHD",
 
-  "data": { }
+  "data": {}
 }
 ```
 
-| Field | Purpose |
-|---|---|
-| `id` | ULID. Doubles as the idempotency key. Adapters must dedupe on it. |
-| `type` | `<domain>.<past-tense-verb>`. Permanent — renaming means a new type plus deprecation of the old. |
-| `version` | Schema major version **for this event type**, not for OSDS as a whole. |
-| `occurred_at` | RFC 3339, UTC, millisecond precision. |
-| `subject` | Primary entity. Ordering guaranteed per `subject`, never globally. |
-| `tenant` | Always present except on `tenant.*` events. |
-| `actor.type` | `visitor` \| `owner` \| `staff` \| `admin` \| `system` \| `agent` \| `adapter` |
-| `origin` | Adapter ID that caused this event via a command, or `null` if core-originated. **Loop guard.** |
-| `trace_id` | Propagates across command → event → command chains. |
+| Field         | Purpose                                                                                          |
+| ------------- | ------------------------------------------------------------------------------------------------ |
+| `id`          | ULID. Doubles as the idempotency key. Adapters must dedupe on it.                                |
+| `type`        | `<domain>.<past-tense-verb>`. Permanent — renaming means a new type plus deprecation of the old. |
+| `version`     | Schema major version **for this event type**, not for OSDS as a whole.                           |
+| `occurred_at` | RFC 3339, UTC, millisecond precision.                                                            |
+| `subject`     | Primary entity. Ordering guaranteed per `subject`, never globally.                               |
+| `tenant`      | Always present except on `tenant.*` events.                                                      |
+| `actor.type`  | `visitor` \| `owner` \| `staff` \| `admin` \| `system` \| `agent` \| `adapter`                   |
+| `origin`      | Adapter ID that caused this event via a command, or `null` if core-originated. **Loop guard.**   |
+| `trace_id`    | Propagates across command → event → command chains.                                              |
 
 ### 2.1 Loop prevention
 
@@ -82,23 +91,23 @@ Ordering is guaranteed per `subject`. Nothing is guaranteed across subjects. Do 
 
 ### 3.2 Namespaces
 
-| Namespace | Concerns |
-|---|---|
-| `listing.*` | The listing record and its published state |
-| `claim.*` | Acquiring a verified human owner |
-| `staff.*` | An operator's membership of one directory |
-| `user.*` | People who hold or seek ownership of a listing |
-| `billing.*` | Money, as reported by a payment adapter |
-| `entitlement.*` | Tier and period state, as decided by core |
-| `slot.*` | Capacity-limited premium placement |
-| `lead.*`, `call.*` | Consumer contact delivered to a business |
-| `review.*` | Native reviews |
-| `moderation.*` | Human or agent decisions on queued items |
-| `compliance.*` | Removal, export, consent |
-| `agent.*` | AI agent actions and escalation |
-| `tenant.*` | Directory lifecycle. The only namespace not tenant-scoped |
-| `import.*` | CSV batches and their rollback |
-| `postal.*` | Physical mail dispatch |
+| Namespace          | Concerns                                                  |
+| ------------------ | --------------------------------------------------------- |
+| `listing.*`        | The listing record and its published state                |
+| `claim.*`          | Acquiring a verified human owner                          |
+| `staff.*`          | An operator's membership of one directory                 |
+| `user.*`           | People who hold or seek ownership of a listing            |
+| `billing.*`        | Money, as reported by a payment adapter                   |
+| `entitlement.*`    | Tier and period state, as decided by core                 |
+| `slot.*`           | Capacity-limited premium placement                        |
+| `lead.*`, `call.*` | Consumer contact delivered to a business                  |
+| `review.*`         | Native reviews                                            |
+| `moderation.*`     | Human or agent decisions on queued items                  |
+| `compliance.*`     | Removal, export, consent                                  |
+| `agent.*`          | AI agent actions and escalation                           |
+| `tenant.*`         | Directory lifecycle. The only namespace not tenant-scoped |
+| `import.*`         | CSV batches and their rollback                            |
+| `postal.*`         | Physical mail dispatch                                    |
 
 ### 3.3 Complete catalogue
 
@@ -106,37 +115,37 @@ Ordering is guaranteed per `subject`. Nothing is guaranteed across subjects. Do 
 
 #### `listing.*`
 
-| Type | When | Payload detail |
-|---|---|---|
-| `listing.created` | Row created, any source | §4.1 |
-| `listing.updated` | Any field change; `changes` is a JSON Patch | §4.1 |
-| `listing.published` | Became publicly visible | §4.1 |
-| `listing.unpublished` | Hidden — moderation, expiry, or request | §4.1 |
-| `listing.merged` | Duplicate resolution; `winner_id`, `loser_id`, `strategy` | §4.1 |
-| `listing.deleted` | Hard delete; carries `suppression_key` | §4.1.1 |
-| `listing.owner_assigned` | Ownership attached to a user, following `claim.approved` | §9 |
-| `listing.tier_changed` | Tier moved; `from_tier`, `to_tier`, `effective_at`, `cause` | §6 |
-| `listing.expiring_soon` | Scheduled, pre-expiry | §6 |
-| `listing.expired` | Paid term lapsed | §6 |
+| Type                     | When                                                        | Payload detail |
+| ------------------------ | ----------------------------------------------------------- | -------------- |
+| `listing.created`        | Row created, any source                                     | §4.1           |
+| `listing.updated`        | Any field change; `changes` is a JSON Patch                 | §4.1           |
+| `listing.published`      | Became publicly visible                                     | §4.1           |
+| `listing.unpublished`    | Hidden — moderation, expiry, or request                     | §4.1           |
+| `listing.merged`         | Duplicate resolution; `winner_id`, `loser_id`, `strategy`   | §4.1           |
+| `listing.deleted`        | Hard delete; carries `suppression_key`                      | §4.1.1         |
+| `listing.owner_assigned` | Ownership attached to a user, following `claim.approved`    | §9             |
+| `listing.tier_changed`   | Tier moved; `from_tier`, `to_tier`, `effective_at`, `cause` | §6             |
+| `listing.expiring_soon`  | Scheduled, pre-expiry                                       | §6             |
+| `listing.expired`        | Paid term lapsed                                            | §6             |
 
 #### `claim.*`
 
-| Type | When | Payload detail |
-|---|---|---|
-| `claim.submitted` | Claim opened. **`consent` required.** | §9 |
-| `claim.verification_started` | A verification method began; `method`, `expires_at` | §9 |
-| `claim.verification_failed` | Attempt failed; `method`, `attempt`, `reason` | §9 |
-| `claim.approved` | Verified or manually approved | §9.3 |
-| `claim.rejected` | Declined; `reason`, `decided_by` | §9 |
-| `claim.abandoned` | Idle past threshold; `last_step`, `idle_for_hours` | §9 |
-| `claim.notified_existing_contacts` | Anti-hijack notice sent to contacts already on the listing | §9.4 |
-| `claim.disputed` | Second claimant on a claimed listing; opens moderation | §9.4 |
+| Type                               | When                                                       | Payload detail |
+| ---------------------------------- | ---------------------------------------------------------- | -------------- |
+| `claim.submitted`                  | Claim opened. **`consent` required.**                      | §9             |
+| `claim.verification_started`       | A verification method began; `method`, `expires_at`        | §9             |
+| `claim.verification_failed`        | Attempt failed; `method`, `attempt`, `reason`              | §9             |
+| `claim.approved`                   | Verified or manually approved                              | §9.3           |
+| `claim.rejected`                   | Declined; `reason`, `decided_by`                           | §9             |
+| `claim.abandoned`                  | Idle past threshold; `last_step`, `idle_for_hours`         | §9             |
+| `claim.notified_existing_contacts` | Anti-hijack notice sent to contacts already on the listing | §9.4           |
+| `claim.disputed`                   | Second claimant on a claimed listing; opens moderation     | §9.4           |
 
 #### `user.*`
 
-| Type | When | Payload detail |
-|---|---|---|
-| `user.created` | A user row was minted, on any path | §4.3 |
+| Type           | When                               | Payload detail |
+| -------------- | ---------------------------------- | -------------- |
+| `user.created` | A user row was minted, on any path | §4.3           |
 
 A user is a person who owns or seeks to own a listing. Staff and deployment
 operators are not users and live in their own table — see §4.3.
@@ -147,12 +156,12 @@ An operator's relationship to one tenant. Tenant-scoped like everything else —
 the tenant block names the directory the membership concerns, and `subject` is
 the operator's id.
 
-| Type | When | Payload detail |
-|---|---|---|
-| `staff.invited` | A membership row was created, at any status | §4.4 |
-| `staff.accepted` | A pending membership became active | §4.4 |
-| `staff.role_changed` | An active membership's role moved; `from_role`, `to_role` | §4.4 |
-| `staff.removed` | A membership row was deleted; `removed_by` (`admin` \| `self`) | §4.4 |
+| Type                 | When                                                           | Payload detail |
+| -------------------- | -------------------------------------------------------------- | -------------- |
+| `staff.invited`      | A membership row was created, at any status                    | §4.4           |
+| `staff.accepted`     | A pending membership became active                             | §4.4           |
+| `staff.role_changed` | An active membership's role moved; `from_role`, `to_role`      | §4.4           |
+| `staff.removed`      | A membership row was deleted; `removed_by` (`admin` \| `self`) | §4.4           |
 
 A membership created together with the operator it points at is `active` on
 password set, so that path emits `staff.invited` then `staff.accepted`. A
@@ -168,15 +177,15 @@ the audit trail that matters. Revisit if an adapter ever needs to react to it.
 
 Reported by a payment adapter. Never sets tier directly.
 
-| Type | Notable data |
-|---|---|
-| `billing.checkout_started` | `plan_id`, `listing_id`, `amount`, `currency` |
-| `billing.subscription_started` | `subscription`, `plan`, `current_period_end` |
-| `billing.subscription_changed` | `from_plan`, `to_plan`, `proration` |
-| `billing.payment_succeeded` | `amount`, `currency`, `invoice_ref` |
-| `billing.payment_failed` | `attempt`, `next_retry_at`, `failure_code` |
-| `billing.subscription_canceled` | `at_period_end`, `reason`, `canceled_by` |
-| `billing.refund_issued` | `amount`, `reason`, `issued_by` |
+| Type                            | Notable data                                  |
+| ------------------------------- | --------------------------------------------- |
+| `billing.checkout_started`      | `plan_id`, `listing_id`, `amount`, `currency` |
+| `billing.subscription_started`  | `subscription`, `plan`, `current_period_end`  |
+| `billing.subscription_changed`  | `from_plan`, `to_plan`, `proration`           |
+| `billing.payment_succeeded`     | `amount`, `currency`, `invoice_ref`           |
+| `billing.payment_failed`        | `attempt`, `next_retry_at`, `failure_code`    |
+| `billing.subscription_canceled` | `at_period_end`, `reason`, `canceled_by`      |
+| `billing.refund_issued`         | `amount`, `reason`, `issued_by`               |
 
 #### `entitlement.*`
 
@@ -192,31 +201,36 @@ Detail in §6.6.
 
 #### `lead.*` and `call.*`
 
-| Type | Notable data |
-|---|---|
-| `lead.captured` | `lead`, `listing_id`, `consent`, `source_page`. **`consent` required.** |
-| `lead.delivered` | `channel`, `destination_hash`, `latency_ms` |
-| `lead.delivery_failed` | `channel`, `error`, `attempt` |
-| `lead.marked_spam` | `by`, `signals` |
-| `call.tracked` | `duration_s`, `answered`, `recording_url?`, `tracking_number` |
+| Type                   | Notable data                                                            |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `lead.captured`        | `lead`, `listing_id`, `consent`, `source_page`. **`consent` required.** |
+| `lead.delivered`       | `channel`, `destination_hash`, `latency_ms`                             |
+| `lead.delivery_failed` | `channel`, `error`, `attempt`                                           |
+| `lead.marked_spam`     | `by`, `signals`                                                         |
+| `call.tracked`         | `duration_s`, `answered`, `recording_url?`, `tracking_number`           |
 
 ```jsonc
 // lead.captured data
 {
   "lead": {
     "id": "lead_01JBQ...",
-    "kind": "contact_form",       // contact_form | phone_reveal | quote_request | booking | message
+    "kind": "contact_form", // contact_form | phone_reveal | quote_request | booking | message
     "name": "Priya R.",
     "email": "priya@example.test",
     "phone_e164": "+13125550188",
     "message": "Burst pipe under the sink, need someone today.",
-    "spam_score": 0.02
+    "spam_score": 0.02,
   },
   "listing_id": "listing_01JBQ...",
   "source_page": "/plumbers/hoffman-plumbing-lakeview",
   "consent": {
-    "contact_by_business": { "granted": true, "at": "2026-08-28T14:31:02Z", "ip": "198.51.100.7", "text_version": "lead-consent-v2" }
-  }
+    "contact_by_business": {
+      "granted": true,
+      "at": "2026-08-28T14:31:02Z",
+      "ip": "198.51.100.7",
+      "text_version": "lead-consent-v2",
+    },
+  },
 }
 ```
 
@@ -228,19 +242,19 @@ Detail in §5.3.
 
 #### `moderation.*`
 
-| Type | Notable data |
-|---|---|
-| `moderation.queued` | `item_type`, `item_id`, `rules_triggered`, `priority` |
+| Type                 | Notable data                                                              |
+| -------------------- | ------------------------------------------------------------------------- |
+| `moderation.queued`  | `item_type`, `item_id`, `rules_triggered`, `priority`                     |
 | `moderation.decided` | `decision`, `decided_by` (`human` \| `agent`), `rationale`, `confidence?` |
 
 #### `compliance.*`
 
-| Type | Notable data |
-|---|---|
-| `compliance.removal_requested` | `subject_type`, `basis`, `requester`, `due_by` |
-| `compliance.removal_completed` | `actions_taken`, `suppression_key` |
-| `compliance.data_exported` | `format`, `scope`, `delivered_to` |
-| `compliance.consent_changed` | `channel`, `granted`, `at`, `text_version`, `source` |
+| Type                           | Notable data                                         |
+| ------------------------------ | ---------------------------------------------------- |
+| `compliance.removal_requested` | `subject_type`, `basis`, `requester`, `due_by`       |
+| `compliance.removal_completed` | `actions_taken`, `suppression_key`                   |
+| `compliance.data_exported`     | `format`, `scope`, `delivered_to`                    |
+| `compliance.consent_changed`   | `channel`, `granted`, `at`, `text_version`, `source` |
 
 `basis` is `gdpr_erasure` \| `ccpa` \| `dmca` \| `owner_request` \| `other`. `due_by` exists because GDPR allows one month — wire it to a hard alert, not a nurture sequence.
 
@@ -248,40 +262,40 @@ Detail in §5.3.
 
 Detail in §8.5.
 
-| Type | Notable data |
-|---|---|
-| `agent.action_taken` | `agent_id`, `action`, `target`, `confidence`, `transcript_ref` |
-| `agent.escalation_requested` | `reason`, `severity`, `context_ref`, `attempted_resolutions` |
-| `agent.escalation_resolved` | `resolved_by`, `outcome`, `duration_s` |
-| `agent.blocked` | `attempted_action`, `policy` |
+| Type                         | Notable data                                                   |
+| ---------------------------- | -------------------------------------------------------------- |
+| `agent.action_taken`         | `agent_id`, `action`, `target`, `confidence`, `transcript_ref` |
+| `agent.escalation_requested` | `reason`, `severity`, `context_ref`, `attempted_resolutions`   |
+| `agent.escalation_resolved`  | `resolved_by`, `outcome`, `duration_s`                         |
+| `agent.blocked`              | `attempted_action`, `policy`                                   |
 
 #### `tenant.*`
 
 The only namespace without a `tenant` block on the envelope, since the tenant is the subject.
 
-| Type | Notable data |
-|---|---|
-| `tenant.created` | `slug`, `mode` (`single` \| `multi`), `created_by` |
-| `tenant.domain_verified` | `domain`, `method` |
-| `tenant.settings_changed` | `changes` (JSON Patch), `changed_by` |
-| `tenant.suspended` | `reason`, `suspended_by` |
+| Type                      | Notable data                                       |
+| ------------------------- | -------------------------------------------------- |
+| `tenant.created`          | `slug`, `mode` (`single` \| `multi`), `created_by` |
+| `tenant.domain_verified`  | `domain`, `method`                                 |
+| `tenant.settings_changed` | `changes` (JSON Patch), `changed_by`               |
+| `tenant.suspended`        | `reason`, `suspended_by`                           |
 
 #### `import.*`
 
-| Type | Notable data |
-|---|---|
-| `import.started` | `batch_id`, `source`, `row_count`, `started_by` |
-| `import.completed` | `batch_id`, `created`, `updated`, `skipped`, `suppressed`, `errors` |
-| `import.rolled_back` | `batch_id`, `listings_removed`, `rolled_back_by` |
+| Type                 | Notable data                                                        |
+| -------------------- | ------------------------------------------------------------------- |
+| `import.started`     | `batch_id`, `source`, `row_count`, `started_by`                     |
+| `import.completed`   | `batch_id`, `created`, `updated`, `skipped`, `suppressed`, `errors` |
+| `import.rolled_back` | `batch_id`, `listings_removed`, `rolled_back_by`                    |
 
 `suppressed` counts rows matching a `suppression_key` from a prior `listing.deleted` — see §4.1.1.
 
 #### `postal.*`
 
-| Type | Notable data |
-|---|---|
+| Type                | Notable data                                               |
+| ------------------- | ---------------------------------------------------------- |
 | `postal.dispatched` | `claim_id`, `adapter`, `external_id`, `estimated_delivery` |
-| `postal.failed` | `claim_id`, `reason` |
+| `postal.failed`     | `claim_id`, `reason`                                       |
 
 ### 3.4 Deferred
 
@@ -301,51 +315,71 @@ Not yet specified, and therefore **not** in the type union. Adding them later is
   "id": "listing_01JBQ6YW8TFN2H5CKXQ4V3ZDAE",
   "slug": "hoffman-plumbing-lakeview",
   "name": "Hoffman Plumbing",
-  "status": "unclaimed",              // unclaimed | claimed | suspended
-  "visibility": "draft",              // draft | published | hidden
-  "tier": "free",                     // resolved from entitlement — see §6
+  "status": "unclaimed", // unclaimed | claimed | suspended
+  "visibility": "draft", // draft | published | hidden
+  "tier": "free", // resolved from entitlement — see §6
   "categories": ["plumbers", "emergency-plumbers"],
 
   "location": {
     "address_line1": "1422 W Belmont Ave",
-    "address_line2": "Suite 200",     // nullable
+    "address_line2": "Suite 200", // nullable
     "locality": "Chicago",
     "region": "IL",
     "postal_code": "60657",
     "country": "US",
     "lat": 41.9395,
-    "lon": -87.6640,
-    "geo_precision": "rooftop"        // rooftop | street | locality | none
+    "lon": -87.664,
+    "geo_precision": "rooftop", // rooftop | street | locality | none
   },
 
-  "contact": {                        // REDACTED unless adapter holds pii:contact
+  "contact": {
+    // REDACTED unless adapter holds pii:contact
     "phone_e164": "+17735550142",
     "email": "office@hoffmanplumbing.example",
     "website": "https://hoffmanplumbing.example",
     "social": [
-      { "platform": "facebook",  "url": "https://facebook.com/hoffmanplumbing", "label": null },
-      { "platform": "instagram", "url": "https://instagram.com/hoffmanplumbing", "label": null }
-    ]
+      {
+        "platform": "facebook",
+        "url": "https://facebook.com/hoffmanplumbing",
+        "label": null,
+      },
+      {
+        "platform": "instagram",
+        "url": "https://instagram.com/hoffmanplumbing",
+        "label": null,
+      },
+    ],
   },
 
   "external_profiles": {
-    "google":   { "place_id": "ChIJN1t_tDeuEmsRUsoyG83frY4", "map_url": null, "review_url": null },
-    "facebook": { "page_url": "https://facebook.com/hoffmanplumbing", "review_url": null },
-    "yelp":     { "business_url": null },
-    "bbb":      { "profile_url": null }
+    "google": {
+      "place_id": "ChIJN1t_tDeuEmsRUsoyG83frY4",
+      "map_url": null,
+      "review_url": null,
+    },
+    "facebook": {
+      "page_url": "https://facebook.com/hoffmanplumbing",
+      "review_url": null,
+    },
+    "yelp": { "business_url": null },
+    "bbb": { "profile_url": null },
   },
 
-  "attributes": { "hours": {}, "payment_methods": [], "service_area_radius_km": 25 },
+  "attributes": {
+    "hours": {},
+    "payment_methods": [],
+    "service_area_radius_km": 25,
+  },
   "media": { "logo": null, "cover": null, "gallery": [] },
-  "reviews_disabled": false,          // per-listing override, moderation use
+  "reviews_disabled": false, // per-listing override, moderation use
 
   "provenance": {
-    "source": "csv_import",           // manual | csv_import | owner_submission | api
+    "source": "csv_import", // manual | csv_import | owner_submission | api
     "import_batch_id": "imp_01JBQ...",
     "submitted_by": "usr_01JBQ...",
     "created_at": "2026-08-01T09:00:00Z",
-    "notes": null
-  }
+    "notes": null,
+  },
 }
 ```
 
@@ -391,10 +425,10 @@ everything else.
 {
   "id": "usr_01JBQ5T2",
   "tenant_id": "tnt_01JBQ2K9",
-  "email": "dana@hoffmanplumbing.example",   // lowercased before storage
+  "email": "dana@hoffmanplumbing.example", // lowercased before storage
   "name": "Dana Hoffman",
   "phone_e164": "+17735550142",
-  "created_at": "2026-08-28T14:22:10Z"
+  "created_at": "2026-08-28T14:22:10Z",
 }
 ```
 
@@ -428,9 +462,9 @@ emitted when an existing row is reused.
     "id": "usr_01JBQ5T2",
     "email": "dana@hoffmanplumbing.example",
     "name": "Dana Hoffman",
-    "phone_e164": "+17735550142"
+    "phone_e164": "+17735550142",
   },
-  "created_by": "claim.submit"
+  "created_by": "claim.submit",
 }
 ```
 
@@ -504,13 +538,13 @@ are the same act.
 The permission level within one membership. Ordered ranks, each a superset of
 the one below.
 
-| Rank | Role | Adds |
-|---|---|---|
-| 4 | `admin` | Invite and remove operators, change roles, tenant settings, domain, tiers and pricing |
-| 3 | `manager` | Slot capacity, comps, entitlement overrides, refund approval, lead export |
-| 2 | `editor` | Approve claims, edit listing content, respond to reviews as the directory |
-| 1 | `moderator` | Act on the moderation queue, mark leads as spam |
-| 0 | `support` | Read only. Sees the directory, changes nothing |
+| Rank | Role        | Adds                                                                                  |
+| ---- | ----------- | ------------------------------------------------------------------------------------- |
+| 4    | `admin`     | Invite and remove operators, change roles, tenant settings, domain, tiers and pricing |
+| 3    | `manager`   | Slot capacity, comps, entitlement overrides, refund approval, lead export             |
+| 2    | `editor`    | Approve claims, edit listing content, respond to reviews as the directory             |
+| 1    | `moderator` | Act on the moderation queue, mark leads as spam                                       |
+| 0    | `support`   | Read only. Sees the directory, changes nothing                                        |
 
 Role is per membership. The same operator may be `admin` on one directory and
 `support` on another. There is no installation-wide role except
@@ -551,13 +585,13 @@ your clients administer other directories on the same installation.
 
 #### Reading `actor.type`
 
-| `actor.type` | Principal |
-|---|---|
-| `owner` | A user with an approved claim |
-| `staff` | An operator with an active membership below `admin` |
-| `admin` | An operator with an active `admin` membership, or a superadmin |
-| `visitor` | No principal |
-| `system`, `agent`, `adapter` | Not people |
+| `actor.type`                 | Principal                                                      |
+| ---------------------------- | -------------------------------------------------------------- |
+| `owner`                      | A user with an approved claim                                  |
+| `staff`                      | An operator with an active membership below `admin`            |
+| `admin`                      | An operator with an active `admin` membership, or a superadmin |
+| `visitor`                    | No principal                                                   |
+| `system`, `agent`, `adapter` | Not people                                                     |
 
 #### Events
 
@@ -571,13 +605,13 @@ gained access, and the directory is already on the envelope.
   "membership": {
     "operator_id": "op_01JBQ5T2",
     "role": "editor",
-    "status": "pending"
+    "status": "pending",
   },
   "operator": {
     "email": "dana@example.test",
-    "existing": true            // whether the operators row already existed
+    "existing": true, // whether the operators row already existed
   },
-  "granted_by": "op_01JBQ2K9"
+  "granted_by": "op_01JBQ2K9",
 }
 ```
 
@@ -590,6 +624,122 @@ form submission.
 other grant**, with `granted_by` equal to `operator_id`. That the two match is
 what makes hosting-side access visible in the log rather than
 indistinguishable from ordinary staffing.
+
+### 4.5 Listing types
+
+A directory is _of_ something. Businesses is the common case and the one the
+rest of this document uses in examples, but a directory of conference speakers,
+open-source projects, hiking trails or service offerings is the same system
+with a different set of fields.
+
+**A tenant defines one or more listing types.** Each type names the fields its
+listings carry beyond the common core, and how they render.
+
+```jsonc
+{
+  "id": "lt_01JBQ...",
+  "tenant_id": "tnt_01JBQ2K9",
+  "key": "business",
+  "label_singular": "Business",
+  "label_plural": "Businesses",
+  "path_segment": "businesses",
+  "claimable": true,
+  "fields": [
+    {
+      "key": "years_in_business",
+      "label": "Years in business",
+      "type": "integer",
+      "required": false,
+      "public": true,
+      "searchable": false,
+    },
+    {
+      "key": "licence_number",
+      "label": "Licence number",
+      "type": "text",
+      "required": false,
+      "public": true,
+      "searchable": false,
+    },
+  ],
+}
+```
+
+#### The common core is fixed
+
+Every listing, of every type, carries the fields in §4.1: identity (`id`,
+`slug`, `name`, `description`), `status`, `visibility`, `tier`, `categories`,
+`location`, `contact`, `media` and `provenance`. These are what the claim flow,
+the entitlement engine, search and the public page are written against, and a
+type cannot remove them.
+
+A type that genuinely has no address leaves `location` empty. A software
+directory is not improved by making `location` optional for everyone else.
+
+#### Type-specific fields live in one document
+
+Custom fields are stored as a single JSON document on the listing, validated
+against the type's schema on write. **Not one column per field, and not one
+table per type.** Both alternatives make adding a directory type a migration,
+which is the thing this design exists to avoid.
+
+Field types are `text`, `long_text`, `integer`, `decimal`, `boolean`, `date`,
+`url`, `email`, `select` and `multi_select`. `select` and `multi_select` carry
+an `options` array. This list is closed — a type system a tenant can extend is
+a second schema language to maintain.
+
+- `required` is enforced on create and on owner edit, never retroactively. A
+  type gaining a required field does not invalidate existing listings; the
+  admin UI surfaces which rows are now incomplete.
+- `public` false means the field is admin-only. It still appears in exports and
+  is still personal data if it holds any.
+- `searchable` true includes the value in the listing's full-text document.
+  Only `text`, `long_text` and `select` may be searchable.
+
+#### Types are not categories
+
+A **type** is what kind of thing a listing is, and determines its fields and
+its URL segment. A **category** is how listings of a type are grouped for
+browsing, and is a tenant-configured tree. A plumber is a `business` of
+category `plumbers`. Confusing the two produces a category tree that cannot be
+reorganised without a schema change.
+
+Categories are scoped to a type. The same tenant may run `businesses` with a
+trade taxonomy and `software` with a licence taxonomy, and neither taxonomy
+appears in the other's browse UI.
+
+#### Routing
+
+`path_segment` prefixes the type's public URLs where a tenant runs more than
+one type:
+
+```
+/businesses/plumbers/hoffman-plumbing-lakeview
+/software/crm/opensource-crm
+```
+
+**A tenant with exactly one listing type omits the segment**, giving
+`/plumbers/hoffman-plumbing-lakeview`. Single-type is the common case and
+should not pay for the general one. Adding a second type introduces the
+segment and must therefore issue permanent redirects from the old paths — the
+admin UI states this before the second type is created, because an operator who
+discovers it afterwards has already lost the indexed URLs.
+
+`slug` is unique per tenant per type.
+
+#### Claimability
+
+`claimable` false disables the claim flow for the type entirely. A directory of
+hiking trails has no owner to verify, and offering a claim button on one is a
+support burden with no outcome. Entitlements are unaffected — an operator may
+still sell placement on an unclaimable listing.
+
+#### Events
+
+Listing types emit no events of their own. A type is tenant configuration, and
+its creation or change is a `tenant.settings_changed` with the JSON Patch, like
+any other setting. `listing.created` and `listing.updated` carry the type key
+in their payload so an adapter can route on it.
 
 ---
 
@@ -626,13 +776,13 @@ Configured per tenant. The same installation can run one directory with native r
 
 ### 5.3 Review events
 
-| Type | Notable data |
-|---|---|
-| `review.submitted` | `review`, `verification` |
-| `review.published` | `review`, `rating_snapshot` |
-| `review.flagged` | `reason`, `flagged_by` |
-| `review.removed` | `reason`, `decided_by`, `legal_hold` |
-| `review.responded` | `response`, `responder_id` |
+| Type               | Notable data                         |
+| ------------------ | ------------------------------------ |
+| `review.submitted` | `review`, `verification`             |
+| `review.published` | `review`, `rating_snapshot`          |
+| `review.flagged`   | `reason`, `flagged_by`               |
+| `review.removed`   | `reason`, `decided_by`, `legal_hold` |
+| `review.responded` | `response`, `responder_id`           |
 
 Reviews carry defamation exposure. `review.removed` with `legal_hold: true` retains the record and hides the display. Never hard-delete a review under legal hold.
 
@@ -650,53 +800,53 @@ Reviews carry defamation exposure. `review.removed` with `legal_hold: true` reta
   "listing_id": "listing_01JBQ...",
   "tier": "featured",
   "status": "active",
-  "billing_mode": "recurring",        // recurring | term | comp | none
-  "term_days": null,                  // 30 | 60 | 90 | 365 when billing_mode=term
+  "billing_mode": "recurring", // recurring | term | comp | none
+  "term_days": null, // 30 | 60 | 90 | 365 when billing_mode=term
   "started_at": "2026-08-01T00:00:00Z",
   "current_period_end": "2026-09-01T00:00:00Z",
   "trial_ends_at": null,
   "dunning_started_at": null,
   "grace_ends_at": null,
-  "slot_id": "slot_01JBQ...",         // null if tier.uses_slot is false
+  "slot_id": "slot_01JBQ...", // null if tier.uses_slot is false
   "cancel_at_period_end": false,
-  "comp": null,                       // { granted_by, reason, expires_at | null }
-  "payment_ref": { "adapter": "stripe", "external_id": "sub_1QxYz" }
+  "comp": null, // { granted_by, reason, expires_at | null }
+  "payment_ref": { "adapter": "stripe", "external_id": "sub_1QxYz" },
 }
 ```
 
 ### 6.2 States
 
-| Status | Meaning |
-|---|---|
-| `none` | No entitlement. Listing sits on the rank-0 tier. |
-| `trialing` | Trial running, card on file, converts automatically at `trial_ends_at`. |
-| `active` | Paid and current. |
+| Status     | Meaning                                                                            |
+| ---------- | ---------------------------------------------------------------------------------- |
+| `none`     | No entitlement. Listing sits on the rank-0 tier.                                   |
+| `trialing` | Trial running, card on file, converts automatically at `trial_ends_at`.            |
+| `active`   | Paid and current.                                                                  |
 | `past_due` | Payment failed. Dunning window running. **Premium features remain fully visible.** |
-| `grace` | Dunning exhausted. Perks withdrawn, restore path open for 30 days. |
-| `expired` | Grace ended, or a term ended without renewal. |
-| `canceled` | Owner cancelled. Runs to `current_period_end`, then expires. |
-| `comped` | Admin-granted. Optional expiry. |
+| `grace`    | Dunning exhausted. Perks withdrawn, restore path open for 30 days.                 |
+| `expired`  | Grace ended, or a term ended without renewal.                                      |
+| `canceled` | Owner cancelled. Runs to `current_period_end`, then expires.                       |
+| `comped`   | Admin-granted. Optional expiry.                                                    |
 
 ### 6.3 Transitions
 
-| From | Trigger | To | Emits |
-|---|---|---|---|
-| `none` | Checkout completes, trial configured | `trialing` | `entitlement.started`, `listing.tier_changed` |
-| `none` | Checkout completes, no trial | `active` | `entitlement.started`, `listing.tier_changed` |
-| `trialing` | `trial_ends_at` reached, payment succeeds | `active` | `entitlement.trial_converted` |
-| `trialing` | `trial_ends_at` reached, payment fails | `past_due` | `entitlement.dunning_started` |
-| `trialing` | Owner cancels | `canceled` | `entitlement.canceled` |
-| `active` | `billing.payment_failed` | `past_due` | `entitlement.dunning_started` |
-| `active` | Owner cancels | `canceled` | `entitlement.canceled` |
-| `active` | `billing.refund_issued` | `expired` | `listing.tier_changed` (immediate) |
-| `active` | Term ends, `billing_mode=term`, not renewed | `expired` | `entitlement.expired`, `listing.tier_changed` |
-| `past_due` | Payment succeeds | `active` | `entitlement.recovered` |
-| `past_due` | 14 days elapsed | `grace` | `entitlement.downgraded`, `listing.tier_changed` |
-| `grace` | Owner pays | `active` | `entitlement.restored`, `listing.tier_changed` |
-| `grace` | 30 days elapsed | `expired` | `entitlement.expired` |
-| `canceled` | `current_period_end` reached | `expired` | `entitlement.expired`, `listing.tier_changed` |
-| `comped` | `comp.expires_at` reached | `expired` | `entitlement.expired` |
-| any | Admin override | any | `entitlement.overridden` (records `admin_id`, `reason`) |
+| From       | Trigger                                     | To         | Emits                                                   |
+| ---------- | ------------------------------------------- | ---------- | ------------------------------------------------------- |
+| `none`     | Checkout completes, trial configured        | `trialing` | `entitlement.started`, `listing.tier_changed`           |
+| `none`     | Checkout completes, no trial                | `active`   | `entitlement.started`, `listing.tier_changed`           |
+| `trialing` | `trial_ends_at` reached, payment succeeds   | `active`   | `entitlement.trial_converted`                           |
+| `trialing` | `trial_ends_at` reached, payment fails      | `past_due` | `entitlement.dunning_started`                           |
+| `trialing` | Owner cancels                               | `canceled` | `entitlement.canceled`                                  |
+| `active`   | `billing.payment_failed`                    | `past_due` | `entitlement.dunning_started`                           |
+| `active`   | Owner cancels                               | `canceled` | `entitlement.canceled`                                  |
+| `active`   | `billing.refund_issued`                     | `expired`  | `listing.tier_changed` (immediate)                      |
+| `active`   | Term ends, `billing_mode=term`, not renewed | `expired`  | `entitlement.expired`, `listing.tier_changed`           |
+| `past_due` | Payment succeeds                            | `active`   | `entitlement.recovered`                                 |
+| `past_due` | 14 days elapsed                             | `grace`    | `entitlement.downgraded`, `listing.tier_changed`        |
+| `grace`    | Owner pays                                  | `active`   | `entitlement.restored`, `listing.tier_changed`          |
+| `grace`    | 30 days elapsed                             | `expired`  | `entitlement.expired`                                   |
+| `canceled` | `current_period_end` reached                | `expired`  | `entitlement.expired`, `listing.tier_changed`           |
+| `comped`   | `comp.expires_at` reached                   | `expired`  | `entitlement.expired`                                   |
+| any        | Admin override                              | any        | `entitlement.overridden` (records `admin_id`, `reason`) |
 
 **Note the asymmetry:** `past_due → grace` is 14 days during which nothing changes publicly. `grace → expired` is 30 days during which the listing is already downgraded. Cancellation skips grace entirely — they chose to leave, and grace exists for involuntary failure.
 
@@ -712,15 +862,15 @@ At `expired`, the listing falls back to the **rank-0 tier**. It is never unpubli
 
 The bug this table exists to prevent: a listing rendering as Featured while the card has been declining for three weeks.
 
-| Status | Badge | Featured placement | Perks | Owner sees |
-|---|---|---|---|---|
-| `trialing` | Tier badge | Yes | Full | "Trial ends in N days" |
-| `active` | Tier badge | Yes | Full | Normal |
-| `past_due` | Tier badge | **Yes** | **Full** | Persistent banner: "Payment failed, update card" |
-| `grace` | None | No | Rank-0 only | Banner: "Your listing has been downgraded. Restore it." |
-| `expired` | None | No | Rank-0 only | Upgrade prompt with locked-state stats |
-| `canceled` (pre-period-end) | Tier badge | Yes | Full | "Cancelled, active until {date}" |
-| `comped` | Tier badge | Yes | Full | Nothing indicating comp status |
+| Status                      | Badge      | Featured placement | Perks       | Owner sees                                              |
+| --------------------------- | ---------- | ------------------ | ----------- | ------------------------------------------------------- |
+| `trialing`                  | Tier badge | Yes                | Full        | "Trial ends in N days"                                  |
+| `active`                    | Tier badge | Yes                | Full        | Normal                                                  |
+| `past_due`                  | Tier badge | **Yes**            | **Full**    | Persistent banner: "Payment failed, update card"        |
+| `grace`                     | None       | No                 | Rank-0 only | Banner: "Your listing has been downgraded. Restore it." |
+| `expired`                   | None       | No                 | Rank-0 only | Upgrade prompt with locked-state stats                  |
+| `canceled` (pre-period-end) | Tier badge | Yes                | Full        | "Cancelled, active until {date}"                        |
+| `comped`                    | Tier badge | Yes                | Full        | Nothing indicating comp status                          |
 
 `past_due` keeping full perks is deliberate. Most failed payments are involuntary. Publicly demoting someone whose card expired is invisible to them and loses customers who intended to pay.
 
@@ -733,11 +883,15 @@ Applies to any tier with `uses_slot: true`.
 ```jsonc
 {
   "id": "pool_01JBQ...",
-  "scope": { "type": "category_location", "category": "plumbers", "locality": "Lakeview" },
+  "scope": {
+    "type": "category_location",
+    "category": "plumbers",
+    "locality": "Lakeview",
+  },
   "tier": "featured",
   "capacity": 3,
-  "locked": 1,                  // held back, not sellable
-  "default_listing_id": "listing_01JBQ..."   // shown in unsold slots, nullable
+  "locked": 1, // held back, not sellable
+  "default_listing_id": "listing_01JBQ...", // shown in unsold slots, nullable
 }
 ```
 
@@ -779,22 +933,22 @@ T-10 days   slot.waitlist_notified   → "A Featured slot in {scope} may become 
 T-0         slot.released            → purchasable; first completed checkout wins
 ```
 
-The T-10 notice says *may* become available, because the incumbent may renew. If they do, waitlist members receive `slot.waitlist_cleared`. Overstating availability produces angry email; the wording is part of the spec, not a copy decision.
+The T-10 notice says _may_ become available, because the incumbent may renew. If they do, waitlist members receive `slot.waitlist_cleared`. Overstating availability produces angry email; the wording is part of the spec, not a copy decision.
 
 No slot is reserved for a waitlist member. Notification is an equal starting gun; the hold mechanism resolves the race.
 
 #### Slot events
 
-| Type | Notable data |
-|---|---|
-| `slot.held` | `pool_id`, `listing_id`, `expires_at` |
-| `slot.hold_released` | `reason` (`expired` \| `abandoned` \| `payment_failed`) |
-| `slot.occupied` | `pool_id`, `listing_id`, `term_days`, `ends_at` |
-| `slot.released` | `pool_id`, `previous_listing_id`, `reason` |
-| `slot.waitlist_joined` | `pool_id`, `user_id`, `listing_id` |
-| `slot.waitlist_notified` | `pool_id`, `recipient_count`, `expected_available_at` |
-| `slot.waitlist_cleared` | `pool_id`, `reason` (`renewed` \| `sold`) |
-| `slot.capacity_changed` | `pool_id`, `from`, `to`, `changed_by` |
+| Type                     | Notable data                                            |
+| ------------------------ | ------------------------------------------------------- |
+| `slot.held`              | `pool_id`, `listing_id`, `expires_at`                   |
+| `slot.hold_released`     | `reason` (`expired` \| `abandoned` \| `payment_failed`) |
+| `slot.occupied`          | `pool_id`, `listing_id`, `term_days`, `ends_at`         |
+| `slot.released`          | `pool_id`, `previous_listing_id`, `reason`              |
+| `slot.waitlist_joined`   | `pool_id`, `user_id`, `listing_id`                      |
+| `slot.waitlist_notified` | `pool_id`, `recipient_count`, `expected_available_at`   |
+| `slot.waitlist_cleared`  | `pool_id`, `reason` (`renewed` \| `sold`)               |
+| `slot.capacity_changed`  | `pool_id`, `from`, `to`, `changed_by`                   |
 
 ### 6.7 Trials
 
@@ -817,18 +971,18 @@ An admin may grant any tier with no payment, with or without expiry.
 
 ### 6.10 Entitlement events
 
-| Type | Notable data |
-|---|---|
-| `entitlement.started` | `tier`, `billing_mode`, `period_end`, `trial_ends_at` |
-| `entitlement.trial_converted` | `tier`, `period_end` |
-| `entitlement.dunning_started` | `attempt`, `dunning_ends_at`, `failure_code` |
-| `entitlement.recovered` | `days_in_dunning` |
-| `entitlement.downgraded` | `from_tier`, `to_tier`, `grace_ends_at` |
-| `entitlement.restored` | `tier`, `days_in_grace` |
-| `entitlement.renewal_due` | `days_remaining`, `term_days` |
-| `entitlement.expired` | `from_tier`, `cause` |
-| `entitlement.canceled` | `at_period_end`, `reason`, `canceled_by` |
-| `entitlement.overridden` | `admin_id`, `reason`, `from`, `to` |
+| Type                          | Notable data                                          |
+| ----------------------------- | ----------------------------------------------------- |
+| `entitlement.started`         | `tier`, `billing_mode`, `period_end`, `trial_ends_at` |
+| `entitlement.trial_converted` | `tier`, `period_end`                                  |
+| `entitlement.dunning_started` | `attempt`, `dunning_ends_at`, `failure_code`          |
+| `entitlement.recovered`       | `days_in_dunning`                                     |
+| `entitlement.downgraded`      | `from_tier`, `to_tier`, `grace_ends_at`               |
+| `entitlement.restored`        | `tier`, `days_in_grace`                               |
+| `entitlement.renewal_due`     | `days_remaining`, `term_days`                         |
+| `entitlement.expired`         | `from_tier`, `cause`                                  |
+| `entitlement.canceled`        | `at_period_end`, `reason`, `canceled_by`              |
+| `entitlement.overridden`      | `admin_id`, `reason`, `from`, `to`                    |
 
 ---
 
@@ -883,14 +1037,14 @@ The write path for every population route in §4.1.1 — manual entry, CSV impor
   "adapter_id": null,
   "trace_id": "01JBQ7X2M4K8ZP3RVN6T9WGYHD",
   "payload": {
-    "id": "listing_01JBQ...",          // optional — see matching
+    "id": "listing_01JBQ...", // optional — see matching
     "slug": "hoffman-plumbing-lakeview",
     "name": "Hoffman Plumbing",
     "description": null,
     "categories": ["plumbers", "emergency-plumbers"],
-    "location": { },                    // §4.1, partial
-    "contact": { }                      // §4.1, partial
-  }
+    "location": {}, // §4.1, partial
+    "contact": {}, // §4.1, partial
+  },
 }
 ```
 
@@ -920,22 +1074,22 @@ Required on create: `slug`, `name`.
 
 `tier` and `status` are refused when the key is present at all, even set to `null`.
 
-| Field | Why | Where it belongs |
-|---|---|---|
-| `tier` | Derived from entitlement | `entitlement.reportPayment`, `entitlement.grant` (§6) |
-| `status` | Moves through the claim flow | `claim.approve` (§9) |
+| Field    | Why                          | Where it belongs                                      |
+| -------- | ---------------------------- | ----------------------------------------------------- |
+| `tier`   | Derived from entitlement     | `entitlement.reportPayment`, `entitlement.grant` (§6) |
+| `status` | Moves through the claim flow | `claim.approve` (§9)                                  |
 
 Rejection is a `422` naming the field. Silently ignoring them is worse — the caller believes the write landed.
 
 #### Outcomes
 
-| Outcome | Emits |
-|---|---|
-| Created | `listing.created` |
-| Updated | `listing.updated`, `changes` as a JSON Patch (§3.3) |
-| Unchanged | **Nothing.** An empty patch is not an event — design rule 2 |
-| Rejected | Nothing; `422` |
-| Replay of a seen `idempotency_key` | Nothing; `409` with the original event ID |
+| Outcome                            | Emits                                                       |
+| ---------------------------------- | ----------------------------------------------------------- |
+| Created                            | `listing.created`                                           |
+| Updated                            | `listing.updated`, `changes` as a JSON Patch (§3.3)         |
+| Unchanged                          | **Nothing.** An empty patch is not an event — design rule 2 |
+| Rejected                           | Nothing; `422`                                              |
+| Replay of a seen `idempotency_key` | Nothing; `409` with the original event ID                   |
 
 An emitted event asserts a change the store made. A patch operation the store cannot apply is an error, not a dropped op.
 
@@ -955,8 +1109,8 @@ export type Capability =
   | "media.store"
   | "agent.converse"
   | "analytics.track"
-  | "reviews.fetch"          // OPTIONAL — external review display, §5.1
-  | "search.index";          // OPTIONAL upgrade — core search always works without it
+  | "reviews.fetch" // OPTIONAL — external review display, §5.1
+  | "search.index"; // OPTIONAL upgrade — core search always works without it
 
 export type Scope =
   | "pii:contact"
@@ -975,7 +1129,7 @@ export interface AdapterManifest {
   default_enabled?: boolean;
   capabilities: Capability[];
   scopes: Scope[];
-  subscribes: string[];          // ["claim.*", "listing.tier_changed"]
+  subscribes: string[]; // ["claim.*", "listing.tier_changed"]
   config_schema: JSONSchema7;
   secrets: string[];
   inbound_routes?: string[];
@@ -1005,7 +1159,10 @@ export interface Adapter {
   manifest: AdapterManifest;
   init?(ctx: AdapterContext): Promise<void>;
   handle(event: OsdsAnyEvent, ctx: AdapterContext): Promise<HandleResult>;
-  actions?: Record<string, (input: unknown, ctx: AdapterContext) => Promise<unknown>>;
+  actions?: Record<
+    string,
+    (input: unknown, ctx: AdapterContext) => Promise<unknown>
+  >;
   inbound?(req: InboundRequest, ctx: AdapterContext): Promise<InboundResult>;
   health?(ctx: AdapterContext): Promise<{ ok: boolean; detail?: string }>;
 }
@@ -1054,7 +1211,7 @@ Secrets never appear in `config`, never appear in event payloads, and are redact
 
 Agents live outside OSDS. Core defines and enforces what they may do; the adapter implements the conversation. If the agent platform changes, the guardrails stay.
 
-- No `command:entitlement`. An agent may read state and *request* a refund, which lands in `moderation.queued`.
+- No `command:entitlement`. An agent may read state and _request_ a refund, which lands in `moderation.queued`.
 - No `compliance.*` commands.
 - No listing deletion.
 - Outbound message rate caps per tenant per hour, with a global kill switch flipping every agent scope to read-only.
@@ -1074,7 +1231,7 @@ Agents live outside OSDS. Core defines and enforces what they may do; the adapte
   "severity": "high",
   "attempted_resolutions": 2,
   "transcript_ref": "s3://osds-transcripts/tnt_01JBQ2K9/conv_abc123.jsonl",
-  "summary": "Claimant disputes listing accuracy and has referenced their attorney."
+  "summary": "Claimant disputes listing accuracy and has referenced their attorney.",
 }
 ```
 
@@ -1082,15 +1239,15 @@ Agents live outside OSDS. Core defines and enforces what they may do; the adapte
 
 Rule 1 says core never imports adapter code. But a system with zero adapters cannot send a claim verification code, so nobody can claim a listing. Transactional email is load-bearing, not optional.
 
-| Adapter | Bundled | Default enabled | Why |
-|---|---|---|---|
-| `smtp` | Yes | **Yes** | Configured in the first-run wizard. Without it, claims cannot complete. |
-| `webhook` | Yes | **Yes** | POSTs any event to a URL. The universal escape hatch. |
-| `stripe` | Yes | No | Reference payments implementation. |
-| `paypal` | Yes | No | Second provider, proves the payments capability is not Stripe-shaped. |
-| `gohighlevel` | Yes | No | Reference CRM implementation (§10). |
+| Adapter       | Bundled | Default enabled | Why                                                                     |
+| ------------- | ------- | --------------- | ----------------------------------------------------------------------- |
+| `smtp`        | Yes     | **Yes**         | Configured in the first-run wizard. Without it, claims cannot complete. |
+| `webhook`     | Yes     | **Yes**         | POSTs any event to a URL. The universal escape hatch.                   |
+| `stripe`      | Yes     | No              | Reference payments implementation.                                      |
+| `paypal`      | Yes     | No              | Second provider, proves the payments capability is not Stripe-shaped.   |
+| `gohighlevel` | Yes     | No              | Reference CRM implementation (§10).                                     |
 
-`smtp` is imported by the *bootstrap configuration*, not by core logic — the distinction that keeps rule 1 intact.
+`smtp` is imported by the _bootstrap configuration_, not by core logic — the distinction that keeps rule 1 intact.
 
 **A directory with no payment adapter is fully functional**, running free tiers only. The admin UI hides purchasable tiers when no `payments.checkout` capability is available.
 
@@ -1100,13 +1257,13 @@ Rule 1 says core never imports adapter code. But a system with zero adapters can
 
 Methods are enabled per tenant in the setup wizard. **At least one must be enabled; manual admin review is the default and is always available as a fallback.**
 
-| Method | Strength | Requires | Notes |
-|---|---|---|---|
-| `manual` | Varies | Nothing | **Default.** Always available. |
-| `phone_otp` | Strong | `sms.send` or `voice.call` | The workhorse. Proves control of the listed line. |
-| `domain_email` | Weak | `email.send` (bundled) | Only meaningful with a real company domain. |
-| `gbp_oauth` | Strongest | Google API access | Optional, never default. §9.1. |
-| `postcard` | Strong for address | `postal.send` | §9.2. |
+| Method         | Strength           | Requires                   | Notes                                             |
+| -------------- | ------------------ | -------------------------- | ------------------------------------------------- |
+| `manual`       | Varies             | Nothing                    | **Default.** Always available.                    |
+| `phone_otp`    | Strong             | `sms.send` or `voice.call` | The workhorse. Proves control of the listed line. |
+| `domain_email` | Weak               | `email.send` (bundled)     | Only meaningful with a real company domain.       |
+| `gbp_oauth`    | Strongest          | Google API access          | Optional, never default. §9.1.                    |
+| `postcard`     | Strong for address | `postal.send`              | §9.2.                                             |
 
 ```jsonc
 // claim.submitted data
@@ -1115,20 +1272,35 @@ Methods are enabled per tenant in the setup wizard. **At least one must be enabl
     "id": "claim_01JBQ...",
     "listing_id": "listing_01JBQ...",
     "status": "pending_verification",
-    "method": "phone_otp"
+    "method": "phone_otp",
   },
   "claimant": {
     "id": "usr_01JBQ...",
     "name": "Dana Hoffman",
     "email": "dana@hoffmanplumbing.example",
     "phone_e164": "+17735550142",
-    "role_claimed": "owner"
+    "role_claimed": "owner",
   },
   "consent": {
-    "marketing_email": { "granted": true,  "at": "2026-08-28T14:22:10Z", "ip": "203.0.113.44", "text_version": "consent-v3" },
-    "marketing_sms":   { "granted": true,  "at": "2026-08-28T14:22:10Z", "ip": "203.0.113.44", "text_version": "consent-v3" },
-    "automated_calls": { "granted": false, "at": null, "ip": null, "text_version": "consent-v3" }
-  }
+    "marketing_email": {
+      "granted": true,
+      "at": "2026-08-28T14:22:10Z",
+      "ip": "203.0.113.44",
+      "text_version": "consent-v3",
+    },
+    "marketing_sms": {
+      "granted": true,
+      "at": "2026-08-28T14:22:10Z",
+      "ip": "203.0.113.44",
+      "text_version": "consent-v3",
+    },
+    "automated_calls": {
+      "granted": false,
+      "at": null,
+      "ip": null,
+      "text_version": "consent-v3",
+    },
+  },
 }
 ```
 
@@ -1172,14 +1344,18 @@ When an admin verifies by hand, the record must capture how, not just that it ha
 ```jsonc
 // claim.approved data, manual path
 {
-  "claim": { "id": "claim_01JBQ...", "listing_id": "listing_01JBQ...", "method": "manual" },
+  "claim": {
+    "id": "claim_01JBQ...",
+    "listing_id": "listing_01JBQ...",
+    "method": "manual",
+  },
   "manual_verification": {
-    "method_used": "phone",          // phone | email | postcard | website | social | in_person | document | other
+    "method_used": "phone", // phone | email | postcard | website | social | in_person | document | other
     "verified_by": "usr_admin_01JBQ...",
     "verified_at": "2026-08-28T16:04:00Z",
     "notes": "Called listed number, spoke with Dana Hoffman, confirmed ownership.",
-    "evidence_ref": null
-  }
+    "evidence_ref": null,
+  },
 }
 ```
 
@@ -1201,13 +1377,13 @@ A competitor or ex-employee claiming a listing takes control of that business's 
 
 Lifetime is tenant-configurable within bounds core enforces. A tenant may tune it to its own audience; it may not configure a lifetime that makes the method meaningless.
 
-| Method | Default | Minimum | Maximum |
-|---|---|---|---|
-| `phone_otp` | 10 minutes | 5 minutes | 60 minutes |
-| `domain_email` | 24 hours | 15 minutes | 48 hours |
-| `postcard` | 21 days | 7 days | 45 days |
-| `gbp_oauth` | — | — | — |
-| `manual` | — | — | — |
+| Method         | Default    | Minimum    | Maximum    |
+| -------------- | ---------- | ---------- | ---------- |
+| `phone_otp`    | 10 minutes | 5 minutes  | 60 minutes |
+| `domain_email` | 24 hours   | 15 minutes | 48 hours   |
+| `postcard`     | 21 days    | 7 days     | 45 days    |
+| `gbp_oauth`    | —          | —          | —          |
+| `manual`       | —          | —          | —          |
 
 `gbp_oauth` has no OSDS-side code; Google owns that session. `manual` has no code at all — an admin decides when they have seen enough.
 
@@ -1240,23 +1416,23 @@ Shipped in-repo as the worked example and as the thing that runs the steward's o
 **Scopes:** `pii:contact`, `command:listing`
 **Egress allowlist:** `services.leadconnectorhq.com`
 
-| OSDS event | GHL action |
-|---|---|
-| `claim.submitted` | Contacts **upsert** (email lowercased, phone E.164) → tag `osds:claim-pending` → set `osds_listing_id`, `osds_tenant` → write consent fields → POST to `claim_workflow_webhook_url` |
-| `claim.approved` | Retag `osds:owner` → create Opportunity in `pipeline_id`, stage *Claimed* |
-| `claim.verification_failed` | Tag `osds:claim-stalled`; a GHL workflow owns the nudge sequence |
-| `listing.tier_changed` | Update `osds_tier` custom field, move Opportunity stage |
-| `entitlement.dunning_started` | Tag `osds:dunning`, fire dunning workflow webhook |
-| `entitlement.downgraded` | Tag `osds:downgraded`, start win-back sequence |
-| `slot.waitlist_notified` | Tag `osds:waitlist-active` |
-| `lead.captured` | Post as a Conversation note on the owner's contact |
-| `agent.escalation_requested` | Create a Task assigned to a human, tag `osds:escalated`, remove `osds:ai-active` |
+| OSDS event                    | GHL action                                                                                                                                                                          |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `claim.submitted`             | Contacts **upsert** (email lowercased, phone E.164) → tag `osds:claim-pending` → set `osds_listing_id`, `osds_tenant` → write consent fields → POST to `claim_workflow_webhook_url` |
+| `claim.approved`              | Retag `osds:owner` → create Opportunity in `pipeline_id`, stage _Claimed_                                                                                                           |
+| `claim.verification_failed`   | Tag `osds:claim-stalled`; a GHL workflow owns the nudge sequence                                                                                                                    |
+| `listing.tier_changed`        | Update `osds_tier` custom field, move Opportunity stage                                                                                                                             |
+| `entitlement.dunning_started` | Tag `osds:dunning`, fire dunning workflow webhook                                                                                                                                   |
+| `entitlement.downgraded`      | Tag `osds:downgraded`, start win-back sequence                                                                                                                                      |
+| `slot.waitlist_notified`      | Tag `osds:waitlist-active`                                                                                                                                                          |
+| `lead.captured`               | Post as a Conversation note on the owner's contact                                                                                                                                  |
+| `agent.escalation_requested`  | Create a Task assigned to a human, tag `osds:escalated`, remove `osds:ai-active`                                                                                                    |
 
 **Rate limiting.** GHL API v2 documents a burst limit of 100 requests per 10 seconds and 200,000 per day, per app per location. Normal traffic never approaches this; a 10,000-listing backfill does. The adapter reads `X-RateLimit-Remaining` and `X-RateLimit-Daily-Remaining` on every response and throttles proactively rather than reacting to 429s.
 
 **Loop guard.** Every write carries the `osds` tag prefix; the inbound handler drops any GHL webhook whose change originated from a tagged write.
 
-**Deliberately not in this adapter:** listing storage. GHL Contacts represent *people*. The listing lives in OSDS. `osds_listing_id` on a contact is a pointer, never a copy.
+**Deliberately not in this adapter:** listing storage. GHL Contacts represent _people_. The listing lives in OSDS. `osds_listing_id` on a contact is a pointer, never a copy.
 
 ---
 
@@ -1270,11 +1446,11 @@ No message broker, no extra container, survives restarts, inspectable with SQL. 
 
 ### 11.2 Three logs, three retentions
 
-| Log | Contents | Retention |
-|---|---|---|
-| **Event log** | Things that happened | Envelope **forever**; `data` payload **90 days**, then nulled |
-| **Command log** | Things *attempted*, including rejected and blocked | **Forever**, payload nulled at 90 days |
-| **Access log** | Who viewed or exported what | **2 years**, separate store |
+| Log             | Contents                                           | Retention                                                     |
+| --------------- | -------------------------------------------------- | ------------------------------------------------------------- |
+| **Event log**   | Things that happened                               | Envelope **forever**; `data` payload **90 days**, then nulled |
+| **Command log** | Things _attempted_, including rejected and blocked | **Forever**, payload nulled at 90 days                        |
+| **Access log**  | Who viewed or exported what                        | **2 years**, separate store                                   |
 
 The envelope is small and free of personal data, so keeping it indefinitely is a cheap permanent audit trail. The payload holds phone numbers, emails and message bodies — a second copy of personal data with its own retention obligation, and the copy people forget when processing a deletion request. Nulling at 90 days keeps the debugging value without accumulating a shadow PII database. Replay older than 90 days reconstructs from current state.
 
