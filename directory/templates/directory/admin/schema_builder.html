@@ -1,0 +1,31 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Fields — {{ listing_type.key }}{% endblock %}
+{% block content %}
+<h1>Fields for “{{ listing_type.label_plural }}”</h1>
+<p class="muted">
+  The common core (name, description, location, contact, categories, media,
+  provenance) is always present and not listed here. Field types are fixed;
+  a field's type is frozen once saved — add a new key to change it.
+</p>
+
+{% if errors %}
+  <ul class="errors">{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+{% endif %}
+
+<form method="post">
+  {% csrf_token %}
+  <div id="field-rows">
+    {% for field in fields %}
+      {% include "directory/admin/_field_row.html" with field=field type_key=listing_type.key %}
+    {% endfor %}
+  </div>
+
+  <button type="button"
+          hx-get="{% url 'directory_admin:type-fields-row' key=listing_type.key %}"
+          hx-target="#field-rows" hx-swap="beforeend">Add field</button>
+
+  <div><button type="submit">Save schema</button></div>
+</form>
+
+<p><a href="{% url 'directory_admin:type-list' %}">Back to listing types</a></p>
+{% endblock %}

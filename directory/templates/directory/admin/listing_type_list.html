@@ -1,0 +1,27 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Listing types{% endblock %}
+{% block content %}
+<h1>Listing types</h1>
+<p><a href="{% url 'directory_admin:type-create' %}">New listing type</a></p>
+<table>
+  <thead><tr><th>Key</th><th>Labels</th><th>Segment</th><th>Claimable</th><th>Fields</th><th></th></tr></thead>
+  <tbody>
+  {% for t in types %}
+    <tr>
+      <td>{{ t.key }}</td>
+      <td>{{ t.label_singular }} / {{ t.label_plural }}</td>
+      <td>{{ t.path_segment }}</td>
+      <td>{{ t.claimable|yesno }}</td>
+      <td>{{ t.fields|length }}</td>
+      <td>
+        <a href="{% url 'directory_admin:type-edit' key=t.key %}">Edit</a> &middot;
+        <a href="{% url 'directory_admin:type-fields' key=t.key %}">Fields</a> &middot;
+        <a href="{% url 'directory_admin:category-list' key=t.key %}">Categories</a>
+      </td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="6" class="muted">No listing types yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

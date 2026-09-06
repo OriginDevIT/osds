@@ -106,6 +106,36 @@ class Category(models.Model):
         return self.slug
 
 
+class PathRedirect(models.Model):
+    """A permanent (301) prefix redirect for public URLs, written when a
+    ``ListingType.path_segment`` changes or a tenant gains its second type
+    (spec §4.5). The public router consumes these in a later PR.
+    """
+
+    tenant = models.ForeignKey(
+        "tenants.Tenant", on_delete=models.CASCADE, related_name="path_redirects"
+    )
+    # "" is the pre-multi-type root; otherwise "/<old-segment>".
+    old_prefix = models.CharField(max_length=64)
+    new_prefix = models.CharField(max_length=64)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    objects = TenantScopedManager()
+    all_tenants = models.Manager()
+
+    class Meta:
+        db_table = "path_redirects"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "old_prefix"],
+                name="uniq_pathredirect_tenant_old_prefix",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.old_prefix or '/'} -> {self.new_prefix}"
+
+
 class DirectoryUser(models.Model):
     """A person who owns, or seeks to own, a listing (spec §4.3). Belongs to
     exactly one tenant. Not a Django auth user and holds no credential -- owner

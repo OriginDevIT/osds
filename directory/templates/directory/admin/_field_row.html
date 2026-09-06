@@ -1,0 +1,42 @@
+{% load directory_admin %}
+<fieldset class="field-row">
+  <div class="grid">
+    <label>Key
+      <input type="text" name="field_key" value="{{ field.key }}" autocomplete="off">
+    </label>
+    <label>Label
+      <input type="text" name="field_label" value="{{ field.label }}" autocomplete="off">
+    </label>
+    <label>Type
+      <select name="field_type">
+        {% for t in field_types %}
+          <option value="{{ t }}"{% if field.type == t %} selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Required
+      <select name="field_required">
+        <option value="0"{% if not field.required %} selected{% endif %}>No</option>
+        <option value="1"{% if field.required %} selected{% endif %}>Yes</option>
+      </select>
+    </label>
+    <label>Public
+      <select name="field_public">
+        <option value="1"{% if field.public %} selected{% endif %}>Yes</option>
+        <option value="0"{% if not field.public %} selected{% endif %}>No</option>
+      </select>
+    </label>
+    <label>Searchable
+      <select name="field_searchable">
+        <option value="0"{% if not field.searchable %} selected{% endif %}>No</option>
+        <option value="1"{% if field.searchable %} selected{% endif %}>Yes (text, long_text, select only)</option>
+      </select>
+    </label>
+  </div>
+  <label>Options (one per line; only used for select / multi_select)
+    <textarea name="field_options" rows="3">{{ field.options|join_lines }}</textarea>
+  </label>
+  <button type="button"
+          hx-get="{% url 'directory_admin:type-fields-row' key=type_key %}?blank=1"
+          hx-target="closest .field-row" hx-swap="outerHTML">Remove field</button>
+</fieldset>

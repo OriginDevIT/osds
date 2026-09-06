@@ -1,12 +1,11 @@
 """URLconf served on a tenant's own domain.
 
-The public directory site and the tenant admin at ``/admin`` land here in
-later PRs. For now it serves the domain-verification challenge so the wizard's
-HTTP check can pass.
+The public directory site lands here in later PRs. For now it serves the
+domain-verification challenge and the tenant admin.
 """
 
 from django.http import HttpResponse
-from django.urls import path
+from django.urls import include, path
 
 
 def _challenge(request):
@@ -19,4 +18,5 @@ def _challenge(request):
 
 urlpatterns = [
     path(".well-known/osds-challenge", _challenge, name="domain-challenge"),
+    path("admin/", include("directory.admin_urls")),
 ]
