@@ -65,10 +65,12 @@ Each block ends at a mergeable state. Later blocks assume earlier ones.
 
 ### 1 — Foundation
 
-Project scaffold, settings from environment, compose file. Models in one
-migration: `Tenant`, `Operator`, `StaffMembership`, `ListingType`, `Category`,
-`Listing`, `DirectoryUser`, `Claim`, `Lead`, `Consent`, `Tier`, `Entitlement`,
-`OutboxEvent`, `ImportBatch`, `CommandLog`, `AccessLog`.
+Project scaffold, settings from environment, compose file. Models in one migration, per app: `tenants` — `Tenant`, `Operator`,
+`StaffMembership`, `OperatorInvite`, `InstallSetup`, `Secret`. `directory` —
+`ListingType`, `Category`, `Listing`, `DirectoryUser`, `Claim`, `Lead`,
+`Consent`, `ConsentText`, `SuppressionKey`, `ImportBatch`, `PathRedirect`,
+`SearchReindexJob`. `billing` — `Tier`, `Entitlement`. `audit` —
+`OutboxEvent`, `CommandLog`, `AccessLog`.
 
 Tenant resolution from the Host header. Scoped default manager on every
 tenant-scoped model, plus the test asserting each one has it. Event-name
