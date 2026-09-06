@@ -8,8 +8,9 @@ whether a request is for the installation console, a tenant's own domain, or
 neither, and it establishes (and always tears down) the ambient tenant scope
 that ``osds.db.TenantScopedManager`` reads.
 
-The first-run branch (route everything to the setup wizard until setup is
-complete) is added with the wizard.
+While first-run setup is incomplete every host routes to the wizard
+(``osds.urls_setup``), with one exception: the domain-verification challenge
+endpoint still answers so the wizard's own HTTP check can pass.
 """
 
 from __future__ import annotations
@@ -18,7 +19,9 @@ from django.conf import settings
 from django.http import HttpResponse, HttpResponseNotFound
 
 from osds.tenancy import reset_current_tenant, set_current_tenant
+from tenants.dns_check import CHALLENGE_PATH
 from tenants.models import Tenant
+from tenants.setup_state import setup_complete
 
 
 class TenantResolutionMiddleware:
@@ -27,7 +30,7 @@ class TenantResolutionMiddleware:
 
     def __call__(self, request):
         host = self._host(request)
-        kind, tenant, early = self._resolve(host)
+        kind, tenant, early = self._resolve(request, host)
 
         request.osds_host_kind = kind
         request.tenant = tenant
@@ -35,6 +38,8 @@ class TenantResolutionMiddleware:
             request.urlconf = "osds.urls_console"
         elif kind == "tenant":
             request.urlconf = "osds.urls_tenant"
+        elif kind == "setup":
+            request.urlconf = "osds.urls_setup"
 
         token = set_current_tenant(tenant)
         try:
@@ -50,12 +55,21 @@ class TenantResolutionMiddleware:
         # with ALLOWED_HOSTS=['*']; Django turns that into a 400 around us.
         return request.get_host().split(":", 1)[0].strip().rstrip(".").lower()
 
-    def _resolve(self, host: str):
+    def _resolve(self, request, host: str):
         """Return ``(kind, tenant, early_response)``.
 
         ``early_response`` is non-None only for hosts that get a fixed response
         without reaching a view: unknown (404) and suspended (503).
         """
+        if not setup_complete():
+            # The challenge endpoint must answer mid-setup so the wizard's HTTP
+            # domain check can pass; everything else goes to the wizard.
+            if request.path == CHALLENGE_PATH:
+                tenant = self._lookup_tenant(host)
+                if tenant is not None:
+                    return "tenant", tenant, None
+            return "setup", None, None
+
         console_host = (getattr(settings, "OSDS_CONSOLE_HOST", "") or "").lower()
         if console_host and host == console_host:
             # Console wins over a tenant that somehow claims the same name.

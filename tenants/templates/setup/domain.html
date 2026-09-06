@@ -1,0 +1,23 @@
+{% extends "setup/base.html" %}
+{% block title %}{{ title }} &middot; OSDS setup{% endblock %}
+{% block heading %}{{ title }}{% endblock %}
+{% block content %}
+<form method="post">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <p class="hint">
+    Point this hostname at the server, then click <strong>Verify</strong>.
+    Verification fetches
+    <code>http://{{ form.domain.value|default:"your-domain" }}{{ challenge_path }}</code>
+    and expects the body to be:
+  </p>
+  <p><code>{{ challenge_token }}</code></p>
+  {% if verified %}
+    <p class="ok">This domain is verified.</p>
+  {% elif dns_detail %}
+    <p class="bad">Not verified yet: {{ dns_detail }}</p>
+  {% endif %}
+  <button type="submit" name="action" value="verify">Save &amp; verify</button>
+  <button type="submit" name="action" value="skip">Save &amp; continue</button>
+</form>
+{% endblock %}

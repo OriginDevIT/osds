@@ -7,13 +7,18 @@ from __future__ import annotations
 import importlib
 
 from django.http import HttpResponse
-from django.test import RequestFactory, TestCase, override_settings
+from django.test import Client, RequestFactory, TestCase, override_settings
+from django.utils import timezone
 
 from osds.middleware import TenantResolutionMiddleware
 from osds.tenancy import get_current_tenant
-from tenants.models import Tenant
+from tenants.models import InstallSetup, Tenant
 
 CONSOLE = "console.example.test"
+
+
+def _mark_setup_complete():
+    InstallSetup.objects.create(token_hash="x" * 64, completed_at=timezone.now())
 
 
 @override_settings(
@@ -21,6 +26,7 @@ CONSOLE = "console.example.test"
 )
 class HostResolutionTests(TestCase):
     def setUp(self):
+        _mark_setup_complete()  # host resolution only runs once setup is done
         self.rf = RequestFactory()
         self.seen: dict = {}
 
@@ -144,3 +150,69 @@ class HostResolutionTests(TestCase):
     def test_both_switched_urlconfs_import(self):
         importlib.import_module("osds.urls_console")
         importlib.import_module("osds.urls_tenant")
+
+
+@override_settings(OSDS_CONSOLE_HOST=CONSOLE, ALLOWED_HOSTS=["*"], DEBUG=False)
+class FirstRunRoutingTests(TestCase):
+    """Before setup is complete every host routes to the wizard."""
+
+    def setUp(self):
+        self.rf = RequestFactory()
+        self.seen: dict = {}
+
+        def get_response(request):
+            self.seen["kind"] = request.osds_host_kind
+            return HttpResponse("ok")
+
+        self.mw = TenantResolutionMiddleware(get_response)
+
+    def _call(self, host, path="/"):
+        request = self.rf.get(path, HTTP_HOST=host)
+        return self.mw(request), request
+
+    def test_console_host_routes_to_setup_during_first_run(self):
+        _, request = self._call(CONSOLE)
+        self.assertEqual(request.osds_host_kind, "setup")
+        self.assertEqual(request.urlconf, "osds.urls_setup")
+
+    def test_unknown_host_routes_to_setup_during_first_run(self):
+        _, request = self._call("anything.example.test")
+        self.assertEqual(request.osds_host_kind, "setup")
+
+    def test_known_tenant_host_still_routes_to_setup(self):
+        Tenant.objects.create(
+            slug="acme", name="Acme", primary_domain="acme.example.test"
+        )
+        _, request = self._call("acme.example.test")
+        self.assertEqual(request.osds_host_kind, "setup")
+
+    def test_challenge_endpoint_still_reaches_the_tenant_during_first_run(self):
+        tenant = Tenant.objects.create(
+            slug="acme",
+            name="Acme",
+            primary_domain="acme.example.test",
+            settings={"domain_challenge": "tok123"},
+        )
+        _, request = self._call(
+            "acme.example.test", path="/.well-known/osds-challenge"
+        )
+        self.assertEqual(request.osds_host_kind, "tenant")
+        self.assertEqual(request.tenant, tenant)
+
+    def test_routing_returns_to_normal_once_setup_completes(self):
+        _mark_setup_complete()
+        _, request = self._call(CONSOLE)
+        self.assertEqual(request.osds_host_kind, "console")
+
+    def test_challenge_endpoint_serves_the_token_during_first_run(self):
+        Tenant.objects.create(
+            slug="acme",
+            name="Acme",
+            primary_domain="acme.example.test",
+            settings={"domain_challenge": "tok123"},
+        )
+        response = Client().get(
+            "/.well-known/osds-challenge", HTTP_HOST="acme.example.test"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content.decode().strip(), "tok123")
