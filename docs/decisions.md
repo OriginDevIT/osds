@@ -8,7 +8,7 @@ replaying prior conversations.
 information, not a fresh opinion. If you disagree, open an issue arguing the
 new information — do not relitigate in code or in a chat session.
 
-Last updated: 2026-09-05
+Last updated: 2026-09-06
 
 ---
 
@@ -92,7 +92,7 @@ rebuild rather than a restart.
 
 | Decision                                                           | Reasoning                                                                                                                                                                                                                                                                                                            |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Directories have a type**                                        | Businesses, locations, people, services, software and others. A listing type carries a field schema; type-specific columns would be a rewrite per type. Spec §4.6.                                                                                                                                                   |
+| **Directories have a type**                                        | Businesses, locations, people, services, software and others. A listing type carries a field schema; type-specific columns would be a rewrite per type. Spec §4.5.                                                                                                                                                   |
 | **Tiers are tenant-configured**                                    | An ordered list with a `rank`. Rank 0 is the fallback tier. Core hardcodes no tier names. A tenant may define no rank-0 tier, which changes downgrade behaviour.                                                                                                                                                     |
 | **Provenance is recorded on every listing**                        | Source, import batch, submitter. Four operational reasons: dedupe across population routes, undo of an import batch, removal that sticks via a suppression key, and trust display on the public page. Not about upstream licensing.                                                                                  |
 | **Removal sticks**                                                 | A deleted listing records a suppression key — normalised name, address and phone hash — that subsequent imports check against, so a removed business does not reappear on the next CSV upload.                                                                                                                       |
@@ -208,6 +208,7 @@ New subsection.
 | **Reserved slugs are rejected on write**                                   | `search`, `admin`, `robots.txt`, `sitemap.xml` and `.well-known` collide with fixed routes. Checked against both the raw input and its slugified form, since slugification strips the dotted ones.                                                                                                                                           |
 | **Category page 1 indexable; page 2+, thin categories and search noindex** | Thresholds: three published listings minimum. §12.2 gives the principle — generating tens of thousands of thin combination pages damages standing in search — not the numbers. Tenant-configurable later.                                                                                                                                    |
 | **No HTMX on the public site**                                             | Plain GET forms. The public pages must work for a crawler and a text browser; nothing there needs partial updates.                                                                                                                                                                                                                           |
+| **Media attachment emits `listing.updated`, nothing else**                 | Spec §3.4 defers `media.*` pending the pipeline design. An asset row moving `pending → ready` is internal state no adapter can act on while the worker does not exist. The `media` field appearing in a listing's JSON Patch is the fact that matters. Revisit when the pipeline lands.                                                      |
 
 ---
 
