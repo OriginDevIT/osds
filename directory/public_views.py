@@ -12,6 +12,7 @@ that no view uses a bare ``Listing.objects``.
 
 from __future__ import annotations
 
+from django.conf import settings
 from django.core.paginator import Paginator
 from django.db.models import Value
 from django.db.models.functions import Coalesce
@@ -23,12 +24,15 @@ from directory import routing
 from directory.models import Category, Listing, ListingType, PathRedirect
 from directory.search import search
 
-PER_PAGE = 20
 _MIN_INDEXABLE = 3  # a category with fewer published listings gets noindex
 _RESERVED_TOP = {"robots.txt", "sitemap.xml"}  # PR 4 routes these
 
 
 # --- helpers ------------------------------------------------------------------
+
+
+def _page_size() -> int:
+    return getattr(settings, "OSDS_PUBLIC_PAGE_SIZE", 20)
 
 
 def _types(request) -> list[ListingType]:
@@ -123,7 +127,12 @@ def search_results(request):
     q = request.GET.get("q", "")
     near = _parse_near(request)
     page_obj = search(
-        request.tenant, listing_type, q=q, near=near, page=request.GET.get("page", 1)
+        request.tenant,
+        listing_type,
+        q=q,
+        near=near,
+        page=request.GET.get("page", 1),
+        per_page=_page_size(),
     )
     return render(
         request,
@@ -193,7 +202,7 @@ def _category_page(request, listing_type, slug, *, multi):
         .order_by("-tier_rank", "name", "public_id")
     )
     total = base.count()
-    page_obj = Paginator(base, PER_PAGE).get_page(request.GET.get("page", 1))
+    page_obj = Paginator(base, _page_size()).get_page(request.GET.get("page", 1))
     noindex = page_obj.number > 1 or total < _MIN_INDEXABLE
     children = Category.objects.filter(listing_type=listing_type, parent=category)
     return render(

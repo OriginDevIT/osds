@@ -47,6 +47,9 @@ OSDS_DEV_TENANT_SLUG = os.environ.get('OSDS_DEV_TENANT_SLUG', '')
 # fails at boot rather than at the storage step of the first-run wizard.
 OSDS_SECRET_KEY = os.environ['OSDS_SECRET_KEY']
 
+# Listings per page on the public category-browse and search pages.
+OSDS_PUBLIC_PAGE_SIZE = 20
+
 
 # Application definition
 

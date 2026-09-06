@@ -157,15 +157,10 @@ class IndexabilityTests(_Base):
         r = self.get("/big/")
         self.assertNotContains(r, 'content="noindex')
 
+    @override_settings(OSDS_PUBLIC_PAGE_SIZE=2)
     def test_page_two_is_noindex(self):
-        from directory import public_views
-
-        public_views.PER_PAGE = 2  # force a second page (5 listings)
-        try:
-            r = self.get("/big/?page=2")
-            self.assertContains(r, 'content="noindex,follow')
-        finally:
-            public_views.PER_PAGE = 20
+        r = self.get("/big/?page=2")  # 5 listings, 2 per page
+        self.assertContains(r, 'content="noindex,follow')
 
     def test_category_below_three_listings_is_noindex(self):
         r = self.get("/small/")
