@@ -1,0 +1,13 @@
+{% extends "public/base.html" %}
+{% load public_urls %}
+{% block content %}
+<nav class="crumbs"><a href="/">{{ request.tenant.name }}</a> / {{ listing_type.label_plural }}</nav>
+<h1>{{ listing_type.label_plural }}</h1>
+<ul class="cats">
+  {% for c in categories %}
+    <li><a href="{% category_url listing_type c multi %}">{{ c.name }}</a></li>
+  {% empty %}
+    <li class="muted">No categories yet.</li>
+  {% endfor %}
+</ul>
+{% endblock %}

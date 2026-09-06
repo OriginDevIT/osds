@@ -1,0 +1,39 @@
+{% load public_urls %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ request.tenant.name }}{% endblock %}</title>
+  {% block robots %}{% endblock %}
+  {% block canonical %}{% endblock %}
+  <style>
+    body { font: 15px/1.6 system-ui, sans-serif; max-width: 46rem; margin: 0 auto; padding: 1rem; color: #1a1a1a; }
+    header { border-bottom: 1px solid #ddd; padding-bottom: .75rem; margin-bottom: 1.25rem; }
+    header a.brand { font-weight: 700; font-size: 1.15rem; text-decoration: none; color: inherit; }
+    header form { margin-top: .5rem; display: flex; gap: .4rem; }
+    header input[type=search] { flex: 1; padding: .4rem; }
+    nav.crumbs { font-size: .9rem; color: #666; margin-bottom: .75rem; }
+    .card { border: 1px solid #e2e2e2; border-radius: 6px; padding: .75rem 1rem; margin: .6rem 0; }
+    .card h3 { margin: 0 0 .2rem; font-size: 1.05rem; }
+    .badge { display: inline-block; background: #1a1a1a; color: #fff; border-radius: 4px; padding: 0 .4rem; font-size: .75rem; vertical-align: middle; }
+    .muted { color: #777; font-size: .9rem; }
+    .pager { margin-top: 1.5rem; display: flex; gap: 1rem; }
+    ul.cats { columns: 2; list-style: none; padding: 0; }
+    footer { border-top: 1px solid #ddd; margin-top: 2.5rem; padding-top: .75rem; color: #888; font-size: .85rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <a class="brand" href="/">{{ request.tenant.name }}</a>
+    <form method="get" action="/search/">
+      {% if multi and listing_type %}<input type="hidden" name="type" value="{{ listing_type.path_segment }}">{% endif %}
+      <input type="search" name="q" value="{{ q|default:'' }}" placeholder="Search{% if listing_type %} {{ listing_type.label_plural|lower }}{% endif %}…" aria-label="Search">
+      <button type="submit">Search</button>
+    </form>
+  </header>
+
+  {% block content %}{% endblock %}
+
+  <footer>{{ request.tenant.name }}</footer>
+</body>
+</html>
