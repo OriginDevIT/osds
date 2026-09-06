@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}OSDS setup{% endblock %}</title>
+  <style>
+    body { font: 15px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; }
+    label { display: block; margin-top: .75rem; font-weight: 600; }
+    input[type=text], input[type=email], input[type=password], input[type=number], select {
+      width: 100%; padding: .4rem; margin-top: .2rem; box-sizing: border-box;
+    }
+    .errorlist { color: #b00020; margin: .25rem 0; padding-left: 1rem; }
+    .hint { color: #555; font-size: .9rem; }
+    button { margin-top: 1rem; padding: .5rem 1rem; }
+    code { background: #f2f2f2; padding: .1rem .3rem; }
+    .ok { color: #0a7d28; }
+    .bad { color: #b00020; }
+  </style>
+</head>
+<body>
+  <h1>{% block heading %}OSDS first-run setup{% endblock %}</h1>
+  {% block content %}{% endblock %}
+</body>
+</html>

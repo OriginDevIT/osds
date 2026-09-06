@@ -1,0 +1,12 @@
+{% extends "setup/base.html" %}
+{% block title %}Unlock &middot; OSDS setup{% endblock %}
+{% block heading %}Unlock first-run setup{% endblock %}
+{% block content %}
+<p class="hint">The setup token was printed to the container logs
+(<code>docker compose logs osds-app</code>).</p>
+<form method="post">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit">Unlock</button>
+</form>
+{% endblock %}

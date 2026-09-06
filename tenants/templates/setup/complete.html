@@ -1,0 +1,9 @@
+{% extends "setup/base.html" %}
+{% block title %}Setup complete &middot; OSDS{% endblock %}
+{% block heading %}Setup complete{% endblock %}
+{% block content %}
+<p>{{ tenant.name }} is live on <code>{{ tenant.primary_domain }}</code>.</p>
+<p>Sign in to the tenant admin at
+<code>{{ tenant.primary_domain }}/admin</code>, or reach the installation
+console on its own host.</p>
+{% endblock %}

@@ -26,6 +26,7 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/osds_test
       DJANGO_SECRET_KEY: ci-only-not-a-secret
       DJANGO_DEBUG: "0"
+      OSDS_SECRET_KEY: ci-only-not-a-secret
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

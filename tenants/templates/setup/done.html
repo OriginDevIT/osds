@@ -1,0 +1,13 @@
+{% extends "setup/base.html" %}
+{% block title %}Finish &middot; OSDS setup{% endblock %}
+{% block heading %}Finish setup{% endblock %}
+{% block content %}
+<p>Directory <strong>{{ tenant.name }}</strong> is configured on
+<code>{{ tenant.primary_domain }}</code>
+({% if tenant.domain_verified_at %}verified{% else %}not verified yet{% endif %}).</p>
+<p class="hint">Finishing closes the wizard. This page will not be reachable again.</p>
+<form method="post">
+  {% csrf_token %}
+  <button type="submit">Finish</button>
+</form>
+{% endblock %}
