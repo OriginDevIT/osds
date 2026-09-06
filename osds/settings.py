@@ -27,7 +27,18 @@ SECRET_KEY = 'django-insecure-tqc962$(_m9!g(n)dff+9im0d_0)dj!0s8u7=0^k8icl40n^c!
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+# TenantResolutionMiddleware is the authoritative Host header gate: it runs
+# first and returns 404 for any host that is neither the console nor a known
+# tenant domain. Django's own ALLOWED_HOSTS check cannot enumerate tenant
+# domains, which are added at runtime.
+ALLOWED_HOSTS = ['*']
+
+# Deployment topology, from the environment. The console host is where the
+# first-run wizard runs and where operators accept invitations; empty means no
+# host resolves as the console. The dev slug is a DEBUG-only fallback so a
+# developer without DNS still reaches a directory on localhost.
+OSDS_CONSOLE_HOST = os.environ.get('OSDS_CONSOLE_HOST', '')
+OSDS_DEV_TENANT_SLUG = os.environ.get('OSDS_DEV_TENANT_SLUG', '')
 
 
 # Application definition
@@ -50,6 +61,9 @@ INSTALLED_APPS = [
 AUTH_USER_MODEL = 'tenants.Operator'
 
 MIDDLEWARE = [
+    # First: nothing else validates the Host header (ALLOWED_HOSTS=['*']), and
+    # SecurityMiddleware's SSL redirect would build a URL from the raw host.
+    'osds.middleware.TenantResolutionMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
