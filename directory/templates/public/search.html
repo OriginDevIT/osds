@@ -1,0 +1,28 @@
+{% extends "public/base.html" %}
+{% load public_urls %}
+{% block title %}Search &middot; {{ request.tenant.name }}{% endblock %}
+{% block robots %}<meta name="robots" content="noindex,follow">{% endblock %}
+{% block content %}
+<h1>Search</h1>
+
+{% if multi %}
+  <p class="muted">Searching {{ listing_type.label_plural }}.
+    {% for t in types %}{% if t != listing_type %}
+      <a href="/search/?q={{ q|urlencode }}&type={{ t.path_segment }}">{{ t.label_plural }}</a>
+    {% endif %}{% endfor %}
+  </p>
+{% endif %}
+
+{% if q %}<p>Results for <strong>{{ q }}</strong>{% if near %} near you{% endif %} — {{ page_obj.paginator.count }} found.</p>{% endif %}
+
+{% for listing in page_obj %}
+  {% include "public/_card.html" with listing=listing listing_type=listing_type multi=multi %}
+{% empty %}
+  <p class="muted">{% if q %}No matches.{% else %}Type a search above.{% endif %}</p>
+{% endfor %}
+
+<div class="pager">
+  {% if page_obj.has_previous %}<a href="?q={{ q|urlencode }}&page={{ page_obj.previous_page_number }}">&larr; Previous</a>{% endif %}
+  {% if page_obj.has_next %}<a href="?q={{ q|urlencode }}&page={{ page_obj.next_page_number }}">Next &rarr;</a>{% endif %}
+</div>
+{% endblock %}

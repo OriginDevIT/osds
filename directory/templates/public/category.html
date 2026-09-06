@@ -1,0 +1,34 @@
+{% extends "public/base.html" %}
+{% load public_urls %}
+{% block title %}{{ category.name }} &middot; {{ request.tenant.name }}{% endblock %}
+{% block robots %}{% if noindex %}<meta name="robots" content="noindex,follow">{% endif %}{% endblock %}
+{% block canonical %}<link rel="canonical" href="{{ canonical_url }}">{% endblock %}
+{% block content %}
+<nav class="crumbs">
+  <a href="/">{{ request.tenant.name }}</a>
+  {% if multi %} / <a href="{% type_url listing_type multi %}">{{ listing_type.label_plural }}</a>{% endif %}
+  {% if category.parent %} / <a href="{% category_url listing_type category.parent multi %}">{{ category.parent.name }}</a>{% endif %}
+  / {{ category.name }}
+</nav>
+
+<h1>{{ category.name }}</h1>
+
+{% if children %}
+  <ul class="cats">
+    {% for c in children %}<li><a href="{% category_url listing_type c multi %}">{{ c.name }}</a></li>{% endfor %}
+  </ul>
+{% endif %}
+
+<p class="muted">{{ total }} listing{{ total|pluralize }}</p>
+
+{% for listing in page_obj %}
+  {% include "public/_card.html" with listing=listing listing_type=listing_type multi=multi %}
+{% empty %}
+  <p class="muted">Nothing here yet.</p>
+{% endfor %}
+
+<div class="pager">
+  {% if page_obj.has_previous %}<a href="?page={{ page_obj.previous_page_number }}">&larr; Previous</a>{% endif %}
+  {% if page_obj.has_next %}<a href="?page={{ page_obj.next_page_number }}">Next &rarr;</a>{% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,11 @@
+{% extends "public/base.html" %}
+{% load public_urls %}
+{% block content %}
+<h1>{{ request.tenant.name }}</h1>
+<p>Browse:</p>
+<ul class="cats">
+  {% for t in types %}
+    <li><a href="{% type_url t True %}">{{ t.label_plural }}</a></li>
+  {% endfor %}
+</ul>
+{% endblock %}

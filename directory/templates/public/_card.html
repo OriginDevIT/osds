@@ -1,0 +1,14 @@
+{% load public_urls %}
+{% canonical_category listing as cat %}
+{% listing_url listing_type cat listing multi as url %}
+<div class="card">
+  <h3>
+    {% if url %}<a href="{{ url }}">{{ listing.name }}</a>{% else %}{{ listing.name }}{% endif %}
+    {% if listing.current_tier.rank %}<span class="badge">{{ listing.current_tier.badge_label|default:listing.current_tier.name }}</span>{% endif %}
+  </h3>
+  {% if listing.description %}<p>{{ listing.description|truncatewords:28 }}</p>{% endif %}
+  <p class="muted">
+    {% if listing.locality %}{{ listing.locality }}{% if listing.region %}, {{ listing.region }}{% endif %}{% endif %}
+    {% if listing.distance %} &middot; {{ listing.distance|floatformat:1 }} km{% endif %}
+  </p>
+</div>

@@ -1,0 +1,17 @@
+{% extends "public/base.html" %}
+{% load public_urls %}
+{% block content %}
+<h1>{{ request.tenant.name }}</h1>
+{% if listing_type %}
+  <h2>{{ listing_type.label_plural }} by category</h2>
+  <ul class="cats">
+    {% for c in categories %}
+      <li><a href="{% category_url listing_type c multi %}">{{ c.name }}</a></li>
+    {% empty %}
+      <li class="muted">No categories yet.</li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p class="muted">This directory has no listing types yet.</p>
+{% endif %}
+{% endblock %}

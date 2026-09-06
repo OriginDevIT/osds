@@ -1,0 +1,7 @@
+{% extends "public/base.html" %}
+{% block title %}Not found &middot; {{ request.tenant.name }}{% endblock %}
+{% block robots %}<meta name="robots" content="noindex">{% endblock %}
+{% block content %}
+<h1>Not found</h1>
+<p>That page doesn't exist. <a href="/">Go to the directory home.</a></p>
+{% endblock %}

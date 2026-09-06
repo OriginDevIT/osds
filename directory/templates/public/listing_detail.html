@@ -1,0 +1,43 @@
+{% extends "public/base.html" %}
+{% load public_urls %}
+{% block title %}{{ listing.name }} &middot; {{ request.tenant.name }}{% endblock %}
+{% block canonical %}<link rel="canonical" href="{{ canonical_url }}">{% endblock %}
+{% block content %}
+<nav class="crumbs">
+  <a href="/">{{ request.tenant.name }}</a>
+  {% if multi %} / <a href="{% type_url listing_type multi %}">{{ listing_type.label_plural }}</a>{% endif %}
+  / <a href="{% category_url listing_type category multi %}">{{ category.name }}</a>
+  / {{ listing.name }}
+</nav>
+
+<h1>{{ listing.name }}
+  {% if listing.current_tier.rank %}<span class="badge">{{ listing.current_tier.badge_label|default:listing.current_tier.name }}</span>{% endif %}
+</h1>
+
+{% if listing.description %}<p>{{ listing.description|linebreaksbr }}</p>{% endif %}
+
+{% if listing.address_line1 or listing.locality %}
+  <p class="muted">
+    {{ listing.address_line1 }}{% if listing.address_line2 %}, {{ listing.address_line2 }}{% endif %}<br>
+    {{ listing.locality }}{% if listing.region %}, {{ listing.region }}{% endif %} {{ listing.postal_code }}
+    {{ listing.country }}
+  </p>
+{% endif %}
+
+<ul>
+  {% if listing.phone_e164 %}<li>{{ listing.phone_e164 }}</li>{% endif %}
+  {% if listing.email %}<li><a href="mailto:{{ listing.email }}">{{ listing.email }}</a></li>{% endif %}
+  {% if listing.website %}<li><a href="{{ listing.website }}" rel="nofollow">{{ listing.website }}</a></li>{% endif %}
+</ul>
+
+{% if public_fields %}
+  <dl>
+    {% for label, value in public_fields %}<dt>{{ label }}</dt><dd>{{ value }}</dd>{% endfor %}
+  </dl>
+{% endif %}
+
+<p class="muted">
+  In:
+  {% for c in categories %}<a href="{% category_url listing_type c multi %}">{{ c.name }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+</p>
+{% endblock %}
