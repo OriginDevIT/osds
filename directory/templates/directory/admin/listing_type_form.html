@@ -1,0 +1,17 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}{{ mode|title }} listing type{% endblock %}
+{% block content %}
+<h1>{{ mode|title }} listing type</h1>
+{% if mode == "edit" %}<p class="muted">Key: <code>{{ listing_type.key }}</code> (frozen)</p>{% endif %}
+{% if needs_confirm %}
+  <p class="muted">This is the second type. Adding it moves existing listing URLs
+  under a segment and issues permanent redirects (spec §4.5).</p>
+{% endif %}
+{% if form.non_field_errors %}<ul class="errors">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+<form method="post">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit">Save</button>
+</form>
+<p><a href="{% url 'directory_admin:type-list' %}">Back</a></p>
+{% endblock %}

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Directory admin{% endblock %}</title>
+  {# TODO: vendor htmx as a static asset before release. #}
+  <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
+  <style>
+    body { font: 15px/1.5 system-ui, sans-serif; max-width: 52rem; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; }
+    label { display: block; margin-top: .6rem; font-weight: 600; }
+    input[type=text], input[type=number], select, textarea { width: 100%; padding: .35rem; box-sizing: border-box; }
+    .field-row { border: 1px solid #ccc; padding: .75rem; margin: .5rem 0; }
+    .field-row .grid { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem 1rem; }
+    .errors { color: #b00020; }
+    .messages { color: #0a7d28; }
+    button { margin-top: .8rem; padding: .4rem .9rem; }
+    table { border-collapse: collapse; width: 100%; }
+    td, th { border-bottom: 1px solid #ddd; padding: .4rem .5rem; text-align: left; }
+    .muted { color: #666; font-size: .9rem; }
+  </style>
+</head>
+<body>
+  {% if messages %}
+    <ul class="messages">{% for m in messages %}<li>{{ m }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% block content %}{% endblock %}
+</body>
+</html>
