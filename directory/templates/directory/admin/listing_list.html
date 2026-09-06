@@ -1,0 +1,23 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Listings — {{ listing_type.key }}{% endblock %}
+{% block content %}
+<h1>{{ listing_type.label_plural }}</h1>
+<p><a href="{% url 'directory_admin:listing-create' key=listing_type.key %}">New listing</a></p>
+<table>
+  <thead><tr><th>Name</th><th>Slug</th><th>Visibility</th><th>Status</th><th></th></tr></thead>
+  <tbody>
+  {% for l in listings %}
+    <tr>
+      <td>{{ l.name }}</td>
+      <td>{{ l.slug }}</td>
+      <td>{{ l.visibility }}</td>
+      <td>{{ l.status }}</td>
+      <td><a href="{% url 'directory_admin:listing-edit' key=listing_type.key public_id=l.public_id %}">Edit</a></td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="5" class="muted">No listings yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p><a href="{% url 'directory_admin:type-list' %}">Back</a></p>
+{% endblock %}

@@ -1,14 +1,18 @@
-"""Validation for a ``ListingType``'s field schema (spec §4.5).
+"""Validation for a ``ListingType``'s field schema (spec §4.5), and validation
+of a listing's ``custom_fields`` against that schema on write.
 
-The schema is a JSON array of field descriptors stored on
-``ListingType.fields``; the values live on ``Listing.custom_fields`` and are
-validated on listing write in a later PR. ``validate_type_schema`` is the gate
-for every schema edit -- the admin never persists an unvalidated array.
+``validate_type_schema`` is the gate for every schema edit;
+``validate_custom_fields`` is the gate for every listing write.
 """
 
 from __future__ import annotations
 
 import re
+from datetime import date
+from decimal import Decimal, InvalidOperation
+
+from django.core.exceptions import ValidationError
+from django.core.validators import EmailValidator, URLValidator
 
 # Closed set (spec §4.5). A tenant cannot extend it.
 FIELD_TYPES = frozenset(
@@ -175,3 +179,121 @@ def normalize_type_schema(fields) -> list[dict]:
             ]
         out.append(normalized)
     return out
+
+
+def _coerce(descriptor: dict, raw):
+    """Coerce one raw custom-field value to its JSON-storable form, or raise
+    ``ValueError`` with a human message."""
+    ftype = descriptor["type"]
+
+    if ftype in ("text", "long_text"):
+        return str(raw).strip() or None
+
+    if ftype == "integer":
+        try:
+            return int(raw) if not isinstance(raw, str) else int(raw.strip())
+        except (TypeError, ValueError):
+            raise ValueError("must be a whole number")
+
+    if ftype == "decimal":
+        try:
+            return str(Decimal(str(raw).strip()))
+        except (InvalidOperation, ValueError):
+            raise ValueError("must be a number")
+
+    if ftype == "boolean":
+        if raw in (True, "true", "True", "1", 1):
+            return True
+        if raw in (False, "false", "False", "0", 0):
+            return False
+        raise ValueError("must be true or false")
+
+    if ftype == "date":
+        try:
+            return date.fromisoformat(str(raw).strip()).isoformat()
+        except ValueError:
+            raise ValueError("must be a date (YYYY-MM-DD)")
+
+    if ftype == "url":
+        value = str(raw).strip()
+        try:
+            URLValidator()(value)
+        except ValidationError:
+            raise ValueError("must be a valid URL")
+        return value
+
+    if ftype == "email":
+        value = str(raw).strip().lower()
+        try:
+            EmailValidator()(value)
+        except ValidationError:
+            raise ValueError("must be a valid email address")
+        return value
+
+    if ftype == "select":
+        value = str(raw).strip()
+        if value not in descriptor.get("options", []):
+            raise ValueError("is not one of the allowed options")
+        return value
+
+    if ftype == "multi_select":
+        if not isinstance(raw, (list, tuple)):
+            raise ValueError("must be a list")
+        values = [str(v).strip() for v in raw]
+        bad = [v for v in values if v not in descriptor.get("options", [])]
+        if bad:
+            raise ValueError(f"not allowed: {', '.join(bad)}")
+        return values
+
+    raise ValueError(f"unknown field type {ftype!r}")
+
+
+def validate_custom_fields(
+    listing_type, values, *, creating: bool, enforce_required: bool = True
+) -> dict:
+    """Validate and coerce ``values`` (a *partial* custom_fields document)
+    against the type schema.
+
+    - An unknown key is rejected (ruling 3).
+    - ``required`` is enforced on create, and on any write that touches the
+      key, when ``enforce_required`` is set -- never retroactively (spec §4.5).
+      Callers pass ``enforce_required=False`` for CSV import only (ruling 4).
+    - An explicit ``None`` clears the key; a blank string is treated as ``None``.
+
+    Returns ``{key: coerced_value_or_None}`` for the keys present in ``values``.
+    Raises ``SchemaError`` on any problem.
+    """
+    schema = {f["key"]: f for f in listing_type.fields}
+    errors: list[str] = []
+    cleaned: dict = {}
+
+    for key in values:
+        if key not in schema:
+            errors.append(f"'{key}' is not a field on this listing type")
+
+    for key, descriptor in schema.items():
+        label = descriptor.get("label", key)
+        present = key in values
+        raw = values.get(key)
+        if isinstance(raw, str) and not raw.strip():
+            raw = None
+
+        if present and raw is None:
+            cleaned[key] = None
+            if descriptor.get("required") and enforce_required:
+                errors.append(f"'{label}' is required")
+            continue
+
+        if present:
+            try:
+                cleaned[key] = _coerce(descriptor, raw)
+            except ValueError as exc:
+                errors.append(f"'{label}' {exc}")
+            continue
+
+        if creating and descriptor.get("required") and enforce_required:
+            errors.append(f"'{label}' is required")
+
+    if errors:
+        raise SchemaError(errors)
+    return cleaned
