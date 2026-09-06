@@ -39,4 +39,30 @@ urlpatterns = [
         views.category_delete,
         name="category-delete",
     ),
+    # listings
+    path(
+        "listing-types/<slug:key>/listings/",
+        views.listing_list,
+        name="listing-list",
+    ),
+    path(
+        "listing-types/<slug:key>/listings/new/",
+        views.listing_create,
+        name="listing-create",
+    ),
+    path(
+        "listing-types/<slug:key>/listings/<str:public_id>/edit/",
+        views.listing_edit,
+        name="listing-edit",
+    ),
+    path(
+        "listing-types/<slug:key>/listings/<str:public_id>/publish/",
+        views.listing_publish,
+        name="listing-publish",
+    ),
+    path(
+        "listing-types/<slug:key>/listings/<str:public_id>/unpublish/",
+        views.listing_unpublish,
+        name="listing-unpublish",
+    ),
 ]

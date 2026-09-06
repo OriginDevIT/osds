@@ -1,0 +1,33 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}{{ mode|title }} listing — {{ listing_type.key }}{% endblock %}
+{% block content %}
+<h1>{{ mode|title }} {{ listing_type.label_singular }}</h1>
+
+{% if conflict %}
+  <p class="errors">
+    A listing with that slug already exists —
+    <a href="{% url 'directory_admin:listing-edit' key=listing_type.key public_id=conflict.public_id %}">edit “{{ conflict.name }}”</a>.
+  </p>
+{% endif %}
+{% if form.non_field_errors %}
+  <ul class="errors">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>
+{% endif %}
+
+<form method="post">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit">Save</button>
+</form>
+
+{% if mode == "edit" %}
+  <p class="muted">Visibility: <strong>{{ listing.visibility }}</strong></p>
+  <form method="post" action="{% url 'directory_admin:listing-publish' key=listing_type.key public_id=listing.public_id %}" style="display:inline">
+    {% csrf_token %}<button type="submit">Publish</button>
+  </form>
+  <form method="post" action="{% url 'directory_admin:listing-unpublish' key=listing_type.key public_id=listing.public_id %}" style="display:inline">
+    {% csrf_token %}<button type="submit">Unpublish</button>
+  </form>
+{% endif %}
+
+<p><a href="{% url 'directory_admin:listing-list' key=listing_type.key %}">Back to listings</a></p>
+{% endblock %}
