@@ -1,7 +1,7 @@
 # OSDS — Event Schema, Adapter Interface & Entitlements
 
 **Open Source Directory Site**
-**Status:** Draft v0.5 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
+**Status:** Draft v0.6 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
 **Audience:** core maintainers, adapter authors
 
 This document defines the contract between the OSDS core and everything outside it. The core is a multi-tenant directory engine. It knows nothing about email providers, CRMs, payment gateways, or messaging platforms. It emits facts and accepts commands. Adapters translate.
@@ -9,13 +9,12 @@ This document defines the contract between the OSDS core and everything outside 
 If you are writing an adapter, sections 3, 7 and 8 are the ones you need.
 If you are implementing the paid tiers, section 5 is the whole job.
 
-### Changes from v0.4
+### Changes from v0.5
 
-- **§7.1 added.** `listing.upsert` payload, match key, partial-state semantics, rejected fields.
-- **§9.5 added.** Verification code lifetime per method, tenant-configurable within core-enforced bounds. §9.2's flat 21 days becomes the postcard default.
-- **§4.3 added**, plus the `user.*` namespace in §3.2 and §3.3. There is no `user.create` command; a row is minted inside the command that needs one and `user.created` is emitted.
-- **§11.2 expanded.** The command log is written outside the command transaction, and `command_log`'s nullable `tenant_id` is stated as a bounded exception rather than a violation.
-- **`staff.*` added** to §3.2 and §3.3, plus the events subsection in §4.4. Membership changes emit events; `subject` is the operator id. Superadmin elevation stays command-log-only — it is installation-scoped and fits neither envelope.
+- **§4.5 added.** Listing types, their field schemas, routing and claimability.
+- **§7.1.** `visibility` joins `tier` and `status` as a rejected field on `listing.upsert`.
+- **§12.1.** Radius search is `lat`/`lon` plus raw SQL; PostGIS is planned, not required.
+- **§4.2.** Tiers are rows; the JSON is illustrative.
 
 ---
 
@@ -413,6 +412,8 @@ Core does not hardcode `free`/`featured`/`premium`. A tenant defines an ordered 
   { "key": "featured", "rank": 2, "purchasable": true,  "uses_slot": true  }
 ]
 ```
+
+The JSON above is the shape of the tier list, not its storage. Tiers are rows in a `Tier` table keyed on the tenant; the ordering and the `rank 0` fallback rule are unchanged.
 
 `rank 0` is the fallback tier. A tenant may define **no rank-0 tier**, meaning there is no free listing — this changes downgrade behaviour (§6.4).
 
@@ -1072,14 +1073,17 @@ Required on create: `slug`, `name`.
 
 #### Rejected fields
 
-`tier` and `status` are refused when the key is present at all, even set to `null`.
+`tier`, `status` and `visibility` are refused when the key is present at all, even set to `null`.
 
-| Field    | Why                          | Where it belongs                                      |
-| -------- | ---------------------------- | ----------------------------------------------------- |
-| `tier`   | Derived from entitlement     | `entitlement.reportPayment`, `entitlement.grant` (§6) |
-| `status` | Moves through the claim flow | `claim.approve` (§9)                                  |
+| Field        | Why                              | Where it belongs                                      |
+| ------------ | -------------------------------- | ----------------------------------------------------- |
+| `tier`       | Derived from entitlement         | `entitlement.reportPayment`, `entitlement.grant` (§6) |
+| `status`     | Moves through the claim flow     | `claim.approve` (§9)                                  |
+| `visibility` | Has its own lifecycle and events | `listing.setVisibility` (§3.3)                        |
 
 Rejection is a `422` naming the field. Silently ignoring them is worse — the caller believes the write landed.
+
+`visibility` is refused for the same reason as the other two: publishing and unpublishing emit `listing.published` and `listing.unpublished`, and an upsert that could flip it would either emit those events from a command whose outcome table names only `listing.created` and `listing.updated`, or bury a publication state change inside a JSON Patch. A CSV re-import must never publish a draft as a side effect of touching a phone number.
 
 #### Outcomes
 
@@ -1486,7 +1490,7 @@ Required, always present, working on a fresh install with no configuration and n
 
 - **Postgres full-text** for name, description and category
 - **pg_trgm** for fuzzy matching and typo tolerance
-- **PostGIS** for radius and bounding-box queries
+- **`lat`/`lon` columns plus raw-SQL distance** for radius and bounding-box queries. PostGIS is planned server-side and is not a requirement — see `docs/decisions.md`, "Geo is `lat`/`lon` plus raw-SQL distance".
 
 The `search.index` capability remains an optional upgrade. A default deployment must never produce a directory that cannot be searched.
 
