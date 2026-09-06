@@ -7,6 +7,8 @@ manager (``objects``) and the ``all_tenants`` escape hatch.
 from __future__ import annotations
 
 from django.conf import settings
+from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import SearchVectorField
 from django.db import models
 from django.utils import timezone
 
@@ -232,6 +234,15 @@ class ImportBatch(models.Model):
         return self.public_id
 
 
+class ListingQuerySet(models.QuerySet):
+    def published(self):
+        """The only rows the public site may ever show (ruling 13)."""
+        return self.filter(visibility=Listing.Visibility.PUBLISHED)
+
+
+ListingManager = TenantScopedManager.from_queryset(ListingQuerySet)
+
+
 class Listing(models.Model):
     """The listing record and its published state (spec §4.1). The fixed common
     core lives in columns; type-specific fields live in ``custom_fields``."""
@@ -346,16 +357,32 @@ class Listing(models.Model):
     )
     provenance_notes = models.TextField(blank=True)
 
+    # Full-text document (spec §12). Application-computed by
+    # directory.search.recompute_search_vector on every write; never a
+    # generated column or trigger (ruling 11).
+    search_vector = SearchVectorField(null=True, editable=False)
+
     created_at = models.DateTimeField(default=timezone.now, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
-    objects = TenantScopedManager()
-    all_tenants = models.Manager()
+    objects = ListingManager()
+    all_tenants = models.Manager.from_queryset(ListingQuerySet)()
 
     class Meta:
         db_table = "listings"
         indexes = [
             models.Index(fields=["tenant", "visibility", "status"]),
+            GinIndex(fields=["search_vector"], name="listings_search_gin"),
+            GinIndex(
+                name="listings_name_trgm",
+                fields=["name"],
+                opclasses=["gin_trgm_ops"],
+            ),
+            models.Index(
+                fields=["lat", "lon"],
+                name="listings_lat_lon",
+                condition=models.Q(lat__isnull=False),
+            ),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -636,3 +663,35 @@ class SuppressionKey(models.Model):
 
     def __str__(self) -> str:
         return self.key_hash
+
+
+class SearchReindexJob(models.Model):
+    """A marker that some listings' search vectors are stale -- a listing
+    type's field schema changed (searchable flags), or a category was renamed
+    (its name feeds weight B). Drained by ``rebuild_search_index``; the worker
+    tick will drain it too once that exists (ruling 7).
+    """
+
+    class Scope(models.TextChoices):
+        TENANT = "tenant", "Whole tenant"
+        LISTING_TYPE = "listing_type", "Listing type"
+        CATEGORY = "category", "Category"
+
+    tenant = models.ForeignKey(
+        "tenants.Tenant", on_delete=models.CASCADE, related_name="reindex_jobs"
+    )
+    scope = models.CharField(max_length=16, choices=Scope.choices)
+    scope_ref = models.CharField(max_length=40, blank=True)  # public_id; "" for tenant
+    reason = models.CharField(max_length=120, blank=True)
+    requested_at = models.DateTimeField(default=timezone.now, editable=False)
+    done_at = models.DateTimeField(null=True, blank=True)
+
+    objects = TenantScopedManager()
+    all_tenants = models.Manager()
+
+    class Meta:
+        db_table = "search_reindex_jobs"
+        indexes = [models.Index(fields=["done_at", "id"])]
+
+    def __str__(self) -> str:
+        return f"{self.scope}:{self.scope_ref or '*'}"
