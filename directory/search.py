@@ -78,8 +78,30 @@ def _searchable_custom_text(listing) -> str:
     return " ".join(parts)
 
 
-def recompute_search_vector(listing) -> None:
-    """Rebuild one listing's ``search_vector``. Call with the tenant in scope."""
+def reindex_queryset():
+    """Base queryset for bulk recompute: the FK and M2M that
+    ``recompute_search_vector_v1`` reads, prefetched so a backfill over N
+    listings is O(N) UPDATEs, not O(4N) queries. Shared by
+    ``rebuild_search_index`` and migration 0004. Iterate with
+    ``.iterator(chunk_size=...)`` -- prefetch_related requires it.
+    """
+    return Listing.objects.select_related("listing_type").prefetch_related(
+        "categories"
+    )
+
+
+def recompute_search_vector_v1(listing) -> None:
+    """FROZEN migration history -- the signature and behaviour of this function
+    must not change.
+
+    Migration ``directory/0004_search_vector`` backfills through this exact
+    function. A different weighting, a different input set, or a different
+    signature is a NEW function and a NEW migration -- never an edit here.
+    ``recompute_search_vector`` delegates to it today.
+
+    Weights: A name, B category names, C description, D searchable custom
+    fields + locality + region (spec §12.1, §4.5).
+    """
     cfg = search_config_for(listing.tenant)
     category_text = " ".join(c.name for c in listing.categories.all())
     d_text = " ".join(
@@ -98,6 +120,11 @@ def recompute_search_vector(listing) -> None:
         + SearchVector(Value(d_text), weight="D", config=cfg)
     )
     Listing.all_tenants.filter(pk=listing.pk).update(search_vector=vector)
+
+
+def recompute_search_vector(listing) -> None:
+    """Rebuild one listing's ``search_vector``. Call with the tenant in scope."""
+    recompute_search_vector_v1(listing)
 
 
 def search(tenant, listing_type, *, q="", near=None, page=1, per_page=20):

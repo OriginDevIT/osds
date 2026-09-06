@@ -4,13 +4,42 @@ text-search config, and searchable custom fields.
 
 from __future__ import annotations
 
+import importlib
+import inspect
+
 from django.contrib.postgres.search import SearchQuery
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 
 from directory.models import Category, Listing, ListingType
-from directory.search import recompute_search_vector, search_config_for
+from directory.search import (
+    recompute_search_vector,
+    recompute_search_vector_v1,
+    reindex_queryset,
+    search_config_for,
+)
 from osds.tenancy import tenant_context
 from tenants.models import Tenant
+
+
+class FrozenContractTests(SimpleTestCase):
+    def test_v1_takes_exactly_one_listing_arg(self):
+        self.assertEqual(
+            list(inspect.signature(recompute_search_vector_v1).parameters), ["listing"]
+        )
+
+    def test_recompute_delegates_to_v1(self):
+        self.assertIn(
+            "recompute_search_vector_v1(listing)",
+            inspect.getsource(recompute_search_vector),
+        )
+
+    def test_migration_0004_uses_the_frozen_name_and_shared_queryset(self):
+        mig = importlib.import_module("directory.migrations.0004_search_vector")
+        src = inspect.getsource(mig.backfill_search_vectors)
+        self.assertIn("recompute_search_vector_v1", src)
+        self.assertIn("reindex_queryset()", src)
+        self.assertNotIn("Listing.objects.all()", src)
+
 
 
 class RecomputeTests(TestCase):
@@ -86,3 +115,9 @@ class RecomputeTests(TestCase):
 
     def test_config_default_is_english(self):
         self.assertEqual(search_config_for(self.tenant), "english")
+
+    def test_reindex_queryset_prefetches_what_v1_reads(self):
+        with tenant_context(self.tenant):
+            qs = reindex_queryset()
+        self.assertIn("listing_type", qs.query.select_related)
+        self.assertEqual(qs._prefetch_related_lookups, ("categories",))

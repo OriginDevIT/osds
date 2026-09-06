@@ -13,7 +13,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from directory.models import Listing, SearchReindexJob
-from directory.search import recompute_search_vector
+from directory.search import recompute_search_vector, reindex_queryset
 from osds.tenancy import tenant_context
 from tenants.models import Tenant
 
@@ -42,7 +42,7 @@ class Command(BaseCommand):
 
     def _reindex_tenant(self, tenant, *, force_all: bool) -> int:
         if force_all:
-            return self._recompute(self._base_qs())
+            return self._recompute(reindex_queryset())
 
         jobs = SearchReindexJob.objects.filter(tenant=tenant, done_at__isnull=True)
         pending = list(jobs)
@@ -53,15 +53,9 @@ class Command(BaseCommand):
         for job in pending:
             listing_ids.update(self._listings_for(job).values_list("id", flat=True))
 
-        count = self._recompute(self._base_qs().filter(id__in=listing_ids))
+        count = self._recompute(reindex_queryset().filter(id__in=listing_ids))
         jobs.update(done_at=timezone.now())
         return count
-
-    @staticmethod
-    def _base_qs():
-        return Listing.objects.select_related("listing_type").prefetch_related(
-            "categories"
-        )
 
     @staticmethod
     def _listings_for(job):

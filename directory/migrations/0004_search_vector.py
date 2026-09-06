@@ -16,17 +16,20 @@ from django.db import migrations, models
 
 def backfill_search_vectors(apps, schema_editor):
     """Populate search_vector for existing rows. A no-op on a fresh install
-    (no tenants yet); backfills an upgrade. Uses the real recompute function
-    so the weighting stays in one place (ruling 19)."""
-    from directory.models import Listing
-    from directory.search import recompute_search_vector
+    (no tenants yet); backfills an upgrade.
+
+    Runs through directory.search.recompute_search_vector_v1 -- a function
+    frozen by contract for exactly this reason (ruling 19). The prefetched
+    reindex_queryset keeps this O(N) UPDATEs rather than O(4N) queries.
+    """
+    from directory.search import recompute_search_vector_v1, reindex_queryset
     from osds.tenancy import tenant_context
     from tenants.models import Tenant
 
     for tenant in Tenant.objects.all().iterator():
         with tenant_context(tenant):
-            for listing in Listing.objects.all().iterator():
-                recompute_search_vector(listing)
+            for listing in reindex_queryset().iterator(chunk_size=200):
+                recompute_search_vector_v1(listing)
 
 
 class Migration(migrations.Migration):
