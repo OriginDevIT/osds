@@ -1,11 +1,11 @@
-<!doctype html>
+{% load static %}<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Directory admin{% endblock %}</title>
-  {# TODO: vendor htmx as a static asset before release. #}
-  <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
+  {# Vendored, no CDN: this is an authenticated admin surface. #}
+  <script src="{% static 'directory/vendor/htmx-2.0.4.min.js' %}" defer></script>
   <style>
     body { font: 15px/1.5 system-ui, sans-serif; max-width: 52rem; margin: 2rem auto; padding: 0 1rem; }
     h1 { font-size: 1.4rem; }

@@ -190,6 +190,12 @@ class SchemaBuilderViewTests(TestCase):
             ListingType.all_tenants.get(key="business").fields[0]["type"], "integer"
         )
 
+    def test_builder_loads_vendored_htmx_not_a_cdn(self):
+        self._make_type()
+        resp = self._get(self._client(self.admin), "type-fields", key="business")
+        self.assertContains(resp, "/static/directory/vendor/htmx-2.0.4.min.js")
+        self.assertNotContains(resp, "unpkg")
+
     def test_add_field_row_returns_a_row_fragment(self):
         self._make_type()
         resp = self._get(self._client(self.admin), "type-fields-row", key="business")
