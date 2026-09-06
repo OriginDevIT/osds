@@ -18,14 +18,15 @@ from urllib.parse import unquote, urlparse
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
+# Required from the environment; the process does not start without them, the
+# same as DATABASE_URL. There is no checked-in fallback for either.
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-tqc962$(_m9!g(n)dff+9im0d_0)dj!0s8u7=0^k8icl40n^c!'
+# SECURITY WARNING: keep the secret key secret.
+SECRET_KEY = os.environ['DJANGO_SECRET_KEY']
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# SECURITY WARNING: never enable in production. Off unless DJANGO_DEBUG is set
+# to a truthy value; any DEBUG-only behaviour must stay gated on this.
+DEBUG = os.environ.get('DJANGO_DEBUG', '').strip().lower() in {'1', 'true', 'yes', 'on'}
 
 # TenantResolutionMiddleware is the authoritative Host header gate: it runs
 # first and returns 404 for any host that is neither the console nor a known
@@ -35,15 +36,16 @@ ALLOWED_HOSTS = ['*']
 
 # Deployment topology, from the environment. The console host is where the
 # first-run wizard runs and where operators accept invitations; empty means no
-# host resolves as the console. The dev slug is a DEBUG-only fallback so a
-# developer without DNS still reaches a directory on localhost.
+# host resolves as the console. The dev slug is consulted only when DEBUG is on
+# (see TenantResolutionMiddleware) so a developer without DNS still reaches a
+# directory on localhost; it is inert in production.
 OSDS_CONSOLE_HOST = os.environ.get('OSDS_CONSOLE_HOST', '')
 OSDS_DEV_TENANT_SLUG = os.environ.get('OSDS_DEV_TENANT_SLUG', '')
 
-# Key material for encrypting stored configuration secrets (tenants.secrets).
-# Separate from SECRET_KEY on purpose: rotating session signing must not force
-# re-encryption of every stored credential. Empty until a secret is written.
-OSDS_SECRET_KEY = os.environ.get('OSDS_SECRET_KEY', '')
+# Key material for encrypting stored configuration secrets (tenants.secrets),
+# separate from SECRET_KEY. Required from the environment so a misconfiguration
+# fails at boot rather than at the storage step of the first-run wizard.
+OSDS_SECRET_KEY = os.environ['OSDS_SECRET_KEY']
 
 
 # Application definition

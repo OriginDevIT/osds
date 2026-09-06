@@ -82,9 +82,12 @@ class TenantResolutionMiddleware:
             # Routing keys on primary_domain regardless of domain verification.
             return "tenant", tenant, None
 
-        dev_tenant = self._dev_tenant()
-        if dev_tenant is not None:
-            return "tenant", dev_tenant, None
+        # DEBUG-only: lets a developer without DNS reach a directory on
+        # localhost. Inert in production, where DEBUG is off.
+        if settings.DEBUG:
+            dev_tenant = self._dev_tenant()
+            if dev_tenant is not None:
+                return "tenant", dev_tenant, None
 
         return "unknown", None, self._not_found(host)
 
@@ -97,6 +100,8 @@ class TenantResolutionMiddleware:
 
     @staticmethod
     def _dev_tenant():
+        # Callers gate on settings.DEBUG; this re-checks so it can never fire
+        # from a stray call.
         if not settings.DEBUG:
             return None
         slug = getattr(settings, "OSDS_DEV_TENANT_SLUG", "") or ""
