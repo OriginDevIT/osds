@@ -28,8 +28,21 @@ from directory.field_schema import (
     validate_custom_fields,
     validate_type_schema,
 )
-from directory.models import Category, Listing, ListingType, PathRedirect
+from directory.models import (
+    Category,
+    Listing,
+    ListingType,
+    PathRedirect,
+    SearchReindexJob,
+)
 from directory.patch import diff, project
+from directory.search import recompute_search_vector
+
+# Slugs that would collide with fixed public routes (ruling 20). Rejected in
+# create_category and upsert_listing.
+RESERVED_SLUGS = frozenset(
+    {"search", "admin", "robots.txt", "sitemap.xml", ".well-known"}
+)
 
 
 def _actor(operator) -> dict:
@@ -125,6 +138,7 @@ def update_listing_type(listing_type: ListingType, *, actor, **changes) -> Listi
 
     tenant = listing_type.tenant
     old_segment = listing_type.path_segment
+    old_fields = listing_type.fields
 
     if "fields" in changes:
         errors = validate_type_schema(
@@ -144,6 +158,16 @@ def update_listing_type(listing_type: ListingType, *, actor, **changes) -> Listi
         if attr in changes:
             setattr(listing_type, attr, changes[attr])
     listing_type.save()
+
+    # A schema change can flip a field's `searchable` flag, so every listing of
+    # this type needs its vector rebuilt (ruling 7).
+    if "fields" in changes and changes["fields"] != old_fields:
+        SearchReindexJob.objects.create(
+            tenant=tenant,
+            scope=SearchReindexJob.Scope.LISTING_TYPE,
+            scope_ref=listing_type.public_id,
+            reason="field schema changed",
+        )
 
     # A segment change only affects public URLs once the tenant is multi-type.
     if (
@@ -195,6 +219,8 @@ def delete_listing_type(listing_type: ListingType, *, actor) -> None:
 def create_category(
     listing_type: ListingType, *, name: str, slug: str, parent, order: int, actor
 ) -> Category:
+    if slug in RESERVED_SLUGS:
+        raise SchemaError([f"'{slug}' is a reserved slug"])
     tenant = listing_type.tenant
     category = Category.objects.create(
         tenant=tenant,
@@ -229,8 +255,11 @@ def _category_url_prefix(listing_type: ListingType) -> str:
 
 @transaction.atomic
 def update_category(category: Category, *, actor, **changes) -> Category:
+    if changes.get("slug") in RESERVED_SLUGS:
+        raise SchemaError([f"'{changes['slug']}' is a reserved slug"])
     tenant = category.tenant
     old_slug = category.slug
+    old_name = category.name
     for attr in ("name", "slug", "parent", "order"):
         if attr in changes:
             setattr(category, attr, changes[attr])
@@ -245,6 +274,15 @@ def update_category(category: Category, *, actor, **changes) -> Category:
             tenant=tenant,
             old_prefix=f"{prefix}/{old_slug}",
             defaults={"new_prefix": f"{prefix}/{category.slug}"},
+        )
+
+    # The category name feeds weight B of every listing in it (ruling 7).
+    if "name" in changes and category.name != old_name:
+        SearchReindexJob.objects.create(
+            tenant=tenant,
+            scope=SearchReindexJob.Scope.CATEGORY,
+            scope_ref=category.public_id,
+            reason="renamed",
         )
 
     _emit_settings_change(
@@ -401,7 +439,11 @@ def _apply_payload(listing, payload, *, listing_type, creating, enforce_required
             raise SchemaError(["name cannot be empty"])
         listing.name = name
     if "slug" in payload:
-        listing.slug = normalize.slug(payload["slug"])
+        raw = str(payload["slug"] or "").strip().lower()
+        slug = normalize.slug(payload["slug"])
+        if raw in RESERVED_SLUGS or slug in RESERVED_SLUGS:
+            raise SchemaError([f"'{payload['slug']}' is a reserved slug"])
+        listing.slug = slug
     if "description" in payload:
         listing.description = normalize.text(payload["description"]) or ""
     if "reviews_disabled" in payload:
@@ -536,6 +578,9 @@ def _apply_upsert(
             listing.categories.set(
                 _resolve_categories(listing_type, payload["categories"])
             )
+
+        # Rebuild the full-text vector on every write (ruling 11).
+        recompute_search_vector(listing)
 
         after = project(listing)
 
