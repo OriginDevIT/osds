@@ -117,6 +117,12 @@ DATABASES = {
         'PASSWORD': unquote(_db.password or ''),
         'HOST': _db.hostname or '',
         'PORT': str(_db.port or ''),
+        # Must stay False. directory.services.upsert_listing raises inside an
+        # open transaction (its command-log rows commit independently of the
+        # command, spec §11.2), so wrapping requests in a transaction would
+        # break every listing write path. This is the default, but set
+        # explicitly so flipping it is a deliberate, visible act.
+        'ATOMIC_REQUESTS': False,
     }
 }
 

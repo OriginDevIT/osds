@@ -1,42 +1,46 @@
 """directory.services.upsert_listing -- create / update / unchanged, rejected
-fields, categories, normalisation, and idempotency + the command log.
+fields, categories, normalisation, idempotency + the command log, and the
+autocommit guard.
+
+upsert_listing refuses to run inside an open transaction, so these tests use
+TransactionTestCase (a plain TestCase wraps every test in one).
 """
 
 from __future__ import annotations
 
 from unittest import mock
 
+from django.db import transaction
 from django.test import TestCase, TransactionTestCase
 
 from audit.models import CommandLog, OutboxEvent
 from directory import services
 from directory.field_schema import SchemaError
 from directory.models import Category, Listing, ListingType
-from directory.services import RejectedField
+from directory.services import MustNotBeInTransaction, RejectedField
 from osds.tenancy import tenant_context
 from tenants.models import Operator, Tenant
 
 ACTOR = {"type": "admin", "id": "op_test"}
 
 
-class _Base(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        cls.tenant = Tenant.objects.create(slug="acme", name="Acme")
-        cls.lt = ListingType.all_tenants.create(
-            tenant=cls.tenant, key="business", label_singular="B",
+class _Base(TransactionTestCase):
+    def setUp(self):
+        self.tenant = Tenant.objects.create(slug="acme", name="Acme")
+        self.lt = ListingType.all_tenants.create(
+            tenant=self.tenant, key="business", label_singular="B",
             label_plural="Bs", path_segment="businesses",
             fields=[
                 {"key": "years", "label": "Years", "type": "integer", "required": False},
             ],
         )
-        cls.lt2 = ListingType.all_tenants.create(
-            tenant=cls.tenant, key="software", label_singular="S",
+        self.lt2 = ListingType.all_tenants.create(
+            tenant=self.tenant, key="software", label_singular="S",
             label_plural="Ss", path_segment="software",
         )
         for slug in ("plumbers", "roofers"):
             Category.all_tenants.create(
-                tenant=cls.tenant, listing_type=cls.lt, slug=slug, name=slug.title()
+                tenant=self.tenant, listing_type=self.lt, slug=slug, name=slug.title()
             )
 
     def upsert(self, payload, **kw):
@@ -221,32 +225,48 @@ class IdempotencyTests(_Base):
         self.assertEqual(row.problem, {"field": "status"})
 
 
-class MidApplyCrashTests(TransactionTestCase):
-    reset_sequences = False
-
-    def setUp(self):
-        self.tenant = Tenant.objects.create(slug="acme", name="Acme")
-        self.lt = ListingType.all_tenants.create(
-            tenant=self.tenant, key="business", label_singular="B",
-            label_plural="Bs", path_segment="businesses",
-        )
-
+class MidApplyCrashTests(_Base):
     def test_command_log_survives_a_service_raising_mid_apply(self):
         with mock.patch(
             "directory.services.emit", side_effect=RuntimeError("boom")
         ):
             with self.assertRaises(RuntimeError):
-                with tenant_context(self.tenant):
-                    services.upsert_listing(
-                        self.tenant,
-                        listing_type=self.lt,
-                        payload={"slug": "acme-co", "name": "Acme Co"},
-                        actor=ACTOR,
-                        source="manual",
-                        idempotency_key="crash1",
-                    )
+                self.upsert(
+                    {"slug": "acme-co", "name": "Acme Co"}, idempotency_key="crash1"
+                )
         row = CommandLog.objects.get(idempotency_key="crash1")
         self.assertIsNone(row.outcome)  # threw mid-apply
         self.assertIsNone(row.concluded_at)
         # the listing write rolled back
         self.assertFalse(Listing.all_tenants.filter(slug="acme-co").exists())
+
+
+class TransactionGuardTests(TestCase):
+    """A plain TestCase runs inside a transaction, which is exactly what the
+    guard forbids."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.tenant = Tenant.objects.create(slug="acme", name="Acme")
+        cls.lt = ListingType.all_tenants.create(
+            tenant=cls.tenant, key="business", label_singular="B",
+            label_plural="Bs", path_segment="businesses",
+        )
+
+    def test_call_inside_a_transaction_is_refused(self):
+        with tenant_context(self.tenant):
+            with self.assertRaises(MustNotBeInTransaction):
+                services.upsert_listing(
+                    self.tenant, listing_type=self.lt,
+                    payload={"slug": "x", "name": "X"},
+                    actor=ACTOR, source="manual",
+                )
+
+    def test_explicit_atomic_wrapper_is_also_refused(self):
+        with tenant_context(self.tenant), transaction.atomic():
+            with self.assertRaises(MustNotBeInTransaction):
+                services.upsert_listing(
+                    self.tenant, listing_type=self.lt,
+                    payload={"slug": "x", "name": "X"},
+                    actor=ACTOR, source="manual",
+                )

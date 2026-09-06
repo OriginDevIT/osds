@@ -277,9 +277,10 @@ def delete_category(category: Category, *, actor) -> None:
 # --- listings -------------------------------------------------------------
 #
 # upsert_listing is the one write path for manual entry, CSV import, owner
-# submission and the write API (spec §7.1). Do NOT wrap a call in your own
-# transaction: the command-log rows must commit independently of the command
-# transaction (spec §11.2), which this function relies on.
+# submission and the write API (spec §7.1). It must run in autocommit: the
+# command-log rows commit independently of the command transaction (spec
+# §11.2). A caller-opened transaction is refused (MustNotBeInTransaction), so
+# a batch loops over independent calls rather than wrapping them.
 
 
 class RejectedField(Exception):
@@ -288,6 +289,15 @@ class RejectedField(Exception):
     def __init__(self, field: str):
         self.field = field
         super().__init__(f"the field {field!r} is not accepted on listing.upsert")
+
+
+class MustNotBeInTransaction(RuntimeError):
+    """upsert_listing was called inside an open transaction. Its command-log
+    rows are committed independently of the command transaction (spec §11.2);
+    a caller-opened transaction would pull them in and lose the very
+    guarantee the log exists for. Loop over independent calls -- do not wrap
+    a batch in one transaction.
+    """
 
 
 @dataclass
@@ -572,6 +582,9 @@ def upsert_listing(
     submitted_by=None,
     must_create: bool = False,
 ) -> UpsertResult:
+    if transaction.get_connection().in_atomic_block:
+        raise MustNotBeInTransaction()
+
     actor = actor or {}
 
     if idempotency_key:

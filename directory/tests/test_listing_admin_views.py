@@ -1,12 +1,17 @@
-"""Tenant-admin listing views: dynamic custom-field form, explicit-null
-clearing on edit, and the publish/unpublish buttons.
+"""Tenant-admin listing views: access control, dynamic custom-field form,
+explicit-null clearing on edit, and the publish/unpublish buttons.
 """
 
 from __future__ import annotations
 
 import functools
 
-from django.test import Client, TestCase, override_settings
+from django.test import (
+    Client,
+    TestCase,
+    TransactionTestCase,
+    override_settings,
+)
 from django.urls import reverse as _reverse
 from django.utils import timezone
 
@@ -18,32 +23,34 @@ from tenants.models import InstallSetup, Operator, StaffMembership, Tenant
 
 reverse = functools.partial(_reverse, urlconf="osds.urls_tenant")
 HOST = "acme.test"
+# MD5 hashing keeps operator creation cheap in these DB-heavy tests.
+_FAST_HASH = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 
 
-@override_settings(ALLOWED_HOSTS=["*"], OSDS_CONSOLE_HOST="console.test")
-class ListingAdminViewTests(TestCase):
-    @classmethod
-    def setUpTestData(cls):
+class _Setup:
+    def setUp(self):
+        super().setUp()
         InstallSetup.objects.create(token_hash="x" * 64, completed_at=timezone.now())
-        cls.tenant = Tenant.objects.create(slug="acme", name="Acme", primary_domain=HOST)
-        cls.lt = ListingType.all_tenants.create(
-            tenant=cls.tenant, key="business", label_singular="Business",
+        self.tenant = Tenant.objects.create(
+            slug="acme", name="Acme", primary_domain=HOST
+        )
+        self.lt = ListingType.all_tenants.create(
+            tenant=self.tenant, key="business", label_singular="Business",
             label_plural="Businesses", path_segment="businesses",
             fields=[
                 {"key": "licence", "label": "Licence no", "type": "text", "required": False},
             ],
         )
         Category.all_tenants.create(
-            tenant=cls.tenant, listing_type=cls.lt, slug="plumbers", name="Plumbers"
+            tenant=self.tenant, listing_type=self.lt, slug="plumbers", name="Plumbers"
         )
-        cls.editor = cls._member("editor@acme.test", StaffMembership.Role.EDITOR)
-        cls.support = cls._member("support@acme.test", StaffMembership.Role.SUPPORT)
+        self.editor = self._member("editor@acme.test", StaffMembership.Role.EDITOR)
+        self.support = self._member("support@acme.test", StaffMembership.Role.SUPPORT)
 
-    @classmethod
-    def _member(cls, email, role):
+    def _member(self, email, role):
         op = Operator.objects.create_user(email=email, password="x")
         StaffMembership.objects.create(
-            operator=op, tenant=cls.tenant, role=role,
+            operator=op, tenant=self.tenant, role=role,
             status=StaffMembership.Status.ACTIVE,
         )
         return op
@@ -59,10 +66,25 @@ class ListingAdminViewTests(TestCase):
 
     def _events(self, subject):
         return set(
-            OutboxEvent.all_tenants.filter(subject=subject).values_list("type", flat=True)
+            OutboxEvent.all_tenants.filter(subject=subject).values_list(
+                "type", flat=True
+            )
         )
 
-    # --- access ---------------------------------------------------------
+    def _make_listing(self, **payload):
+        payload.setdefault("slug", "acme-co")
+        payload.setdefault("name", "Acme Co")
+        with tenant_context(self.tenant):
+            return services.upsert_listing(
+                self.tenant, listing_type=self.lt, payload=payload,
+                actor={"type": "admin", "id": "op_x"}, source="manual",
+            ).listing
+
+
+@override_settings(
+    ALLOWED_HOSTS=["*"], OSDS_CONSOLE_HOST="console.test", PASSWORD_HASHERS=_FAST_HASH
+)
+class ListingAdminAccessTests(_Setup, TestCase):
     def test_editor_can_list(self):
         resp = self._client(self.editor).get(
             self._url("listing-list", key="business"), HTTP_HOST=HOST
@@ -82,13 +104,20 @@ class ListingAdminViewTests(TestCase):
         )
         self.assertEqual(resp.status_code, 404)
 
-    # --- create -------------------------------------------------------------
     def test_create_form_renders_schema_fields(self):
         resp = self._client(self.editor).get(
             self._url("listing-create", key="business"), HTTP_HOST=HOST
         )
         self.assertContains(resp, 'name="cf_licence"')
         self.assertContains(resp, 'name="categories"')
+
+
+@override_settings(
+    ALLOWED_HOSTS=["*"], OSDS_CONSOLE_HOST="console.test", PASSWORD_HASHERS=_FAST_HASH
+)
+class ListingAdminWriteTests(_Setup, TransactionTestCase):
+    # The views call upsert_listing, which refuses to run inside a transaction
+    # (a plain TestCase wraps every test in one).
 
     def test_create_redirects_to_edit_and_emits_listing_created(self):
         resp = self._client(self.editor).post(
@@ -102,12 +131,7 @@ class ListingAdminViewTests(TestCase):
         self.assertIn("listing.created", self._events(listing.public_id))
 
     def test_create_on_existing_slug_shows_conflict_link(self):
-        with tenant_context(self.tenant):
-            services.upsert_listing(
-                self.tenant, listing_type=self.lt,
-                payload={"slug": "taken", "name": "Already here"},
-                actor={"type": "admin", "id": "op_x"}, source="manual",
-            )
+        self._make_listing(slug="taken", name="Already here")
         resp = self._client(self.editor).post(
             self._url("listing-create", key="business"),
             {"name": "Second", "slug": "taken", "categories": []},
@@ -117,20 +141,10 @@ class ListingAdminViewTests(TestCase):
         self.assertContains(resp, "already exists")
         self.assertEqual(Listing.all_tenants.filter(slug="taken").count(), 1)
 
-    # --- edit: explicit null clears --------------------------------------
     def test_blanking_a_field_on_edit_clears_it_via_explicit_null(self):
-        with tenant_context(self.tenant):
-            created = services.upsert_listing(
-                self.tenant, listing_type=self.lt,
-                payload={
-                    "slug": "acme-co", "name": "Acme Co",
-                    "description": "We do plumbing",
-                    "custom_fields": {"licence": "L-9"},
-                },
-                actor={"type": "admin", "id": "op_x"}, source="manual",
-            )
-        listing = created.listing
-
+        listing = self._make_listing(
+            description="We do plumbing", custom_fields={"licence": "L-9"}
+        )
         resp = self._client(self.editor).post(
             self._url("listing-edit", key="business", public_id=listing.public_id),
             {"name": "Acme Co", "slug": "acme-co", "description": "",
@@ -148,16 +162,8 @@ class ListingAdminViewTests(TestCase):
         self.assertIn({"op": "remove", "path": "/description"}, patch)
         self.assertIn({"op": "remove", "path": "/custom_fields/licence"}, patch)
 
-    # --- publish / unpublish -------------------------------------------
-    def test_publish_button_sets_visibility_and_emits(self):
-        with tenant_context(self.tenant):
-            created = services.upsert_listing(
-                self.tenant, listing_type=self.lt,
-                payload={"slug": "acme-co", "name": "Acme Co"},
-                actor={"type": "admin", "id": "op_x"}, source="manual",
-            )
-        listing = created.listing
-
+    def test_publish_then_unpublish_button(self):
+        listing = self._make_listing()
         self._client(self.editor).post(
             self._url("listing-publish", key="business", public_id=listing.public_id),
             HTTP_HOST=HOST,
