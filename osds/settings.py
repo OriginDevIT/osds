@@ -40,6 +40,11 @@ ALLOWED_HOSTS = ['*']
 OSDS_CONSOLE_HOST = os.environ.get('OSDS_CONSOLE_HOST', '')
 OSDS_DEV_TENANT_SLUG = os.environ.get('OSDS_DEV_TENANT_SLUG', '')
 
+# Key material for encrypting stored configuration secrets (tenants.secrets).
+# Separate from SECRET_KEY on purpose: rotating session signing must not force
+# re-encryption of every stored credential. Empty until a secret is written.
+OSDS_SECRET_KEY = os.environ.get('OSDS_SECRET_KEY', '')
+
 
 # Application definition
 

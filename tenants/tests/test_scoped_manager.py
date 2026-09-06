@@ -35,6 +35,12 @@ _ALLOWLIST = {
         "Records console and superadmin access, which has no tenant; the "
         "tenant FK is nullable and rows are written without a tenant in scope."
     ),
+    "tenants.Secret": (
+        "Resolution deliberately spans a tenant-scoped row and a "
+        "deployment-level row (tenant IS NULL); the lookup in tenants.secrets "
+        "queries both scopes explicitly, so a tenant-scoped default manager "
+        "would hide the deployment fallback."
+    ),
 }
 
 

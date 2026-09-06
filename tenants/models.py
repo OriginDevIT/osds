@@ -215,3 +215,89 @@ class OperatorInvite(models.Model):
 
     def __str__(self) -> str:
         return f"invite:{self.operator_id}"
+
+
+class InstallSetup(models.Model):
+    """Installation-level first-run state. A single row (pk=1).
+
+    Holds the hash of the setup token printed to the container logs, and the
+    timestamp at which the first-run wizard finished. ``completed_at IS NULL``
+    is the authoritative "setup is still running" gate -- host resolution and
+    the wizard both read it, so the gate flips for every process the moment the
+    row is written, with no restart.
+    """
+
+    token_hash = models.CharField(max_length=64)  # sha256 hex of the setup token
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "install_setup"
+
+    def __str__(self) -> str:
+        state = "complete" if self.completed_at else "in progress"
+        return f"install setup ({state})"
+
+    def save(self, *args, **kwargs):
+        self.pk = 1  # enforce the singleton
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls) -> "InstallSetup | None":
+        return cls.objects.filter(pk=1).first()
+
+
+class Secret(models.Model):
+    """An encrypted configuration secret (spec §8.1).
+
+    Resolution order is tenant override, then deployment-level, then
+    ``ConfigurationError`` -- see ``tenants.secrets.get_secret``. Ciphertext is
+    Fernet, keyed off ``OSDS_SECRET_KEY`` (separate from Django's
+    ``SECRET_KEY``). Plain manager: resolution deliberately spans a tenant row
+    and a deployment row (``tenant IS NULL``), so it is allowlisted in
+    ``tenants/tests/test_scoped_manager.py``.
+    """
+
+    class Scope(models.TextChoices):
+        DEPLOYMENT = "deployment", "Deployment"
+        TENANT = "tenant", "Tenant"
+
+    scope = models.CharField(max_length=12, choices=Scope.choices)
+    tenant = models.ForeignKey(
+        Tenant,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="secrets",
+    )
+    key = models.CharField(max_length=100)
+    ciphertext = models.TextField()
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = models.Manager()
+
+    class Meta:
+        db_table = "secrets"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["key"],
+                condition=models.Q(tenant__isnull=True),
+                name="uniq_secret_deployment_key",
+            ),
+            models.UniqueConstraint(
+                fields=["tenant", "key"],
+                condition=models.Q(tenant__isnull=False),
+                name="uniq_secret_tenant_key",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(scope="deployment", tenant__isnull=True)
+                    | models.Q(scope="tenant", tenant__isnull=False)
+                ),
+                name="secret_scope_matches_tenant",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.scope}:{self.key}"
