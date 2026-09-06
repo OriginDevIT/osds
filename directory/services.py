@@ -211,13 +211,35 @@ def create_category(
     return category
 
 
+def _category_url_prefix(listing_type: ListingType) -> str:
+    """The URL prefix a category sits under: ``/<segment>`` once the tenant is
+    multi-type, otherwise empty (spec §4.5, ruling 7 -- one level either way)."""
+    multi = (
+        ListingType.objects.filter(tenant=listing_type.tenant).count() > 1
+    )
+    return f"/{listing_type.path_segment}" if multi else ""
+
+
 @transaction.atomic
 def update_category(category: Category, *, actor, **changes) -> Category:
     tenant = category.tenant
+    old_slug = category.slug
     for attr in ("name", "slug", "parent", "order"):
         if attr in changes:
             setattr(category, attr, changes[attr])
     category.save()
+
+    # A slug change moves the category browse page and every listing URL under
+    # it. Record the 301, same as a path_segment change (category pages are
+    # indexed).
+    if "slug" in changes and category.slug != old_slug:
+        prefix = _category_url_prefix(category.listing_type)
+        PathRedirect.objects.update_or_create(
+            tenant=tenant,
+            old_prefix=f"{prefix}/{old_slug}",
+            defaults={"new_prefix": f"{prefix}/{category.slug}"},
+        )
+
     _emit_settings_change(
         tenant,
         actor=actor,

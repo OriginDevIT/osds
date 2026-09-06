@@ -153,6 +153,48 @@ class ConfigServiceTests(TestCase):
         self.assertEqual(change["path"], "/categories/business/plumbers")
         self.assertEqual(change["value"], {"name": "Plumbers", "parent": None, "order": 0})
 
+    def test_category_slug_change_writes_a_redirect_single_type(self):
+        lt = self._make_type()
+        with tenant_context(self.tenant):
+            c = services.create_category(
+                lt, name="Plumbers", slug="plumbers", parent=None, order=0,
+                actor=self.actor,
+            )
+            services.update_category(c, slug="plumbing", actor=self.actor)
+        redirect = PathRedirect.all_tenants.get(
+            tenant=self.tenant, old_prefix="/plumbers"
+        )
+        self.assertEqual(redirect.new_prefix, "/plumbing")
+
+    def test_category_slug_change_uses_the_segment_when_multi_type(self):
+        b = self._make_type(key="business", segment="businesses")
+        self._make_type(key="software", segment="software")
+        with tenant_context(self.tenant):
+            c = services.create_category(
+                b, name="Plumbers", slug="plumbers", parent=None, order=0,
+                actor=self.actor,
+            )
+            services.update_category(c, slug="plumbing", actor=self.actor)
+        self.assertTrue(
+            PathRedirect.all_tenants.filter(
+                tenant=self.tenant,
+                old_prefix="/businesses/plumbers",
+                new_prefix="/businesses/plumbing",
+            ).exists()
+        )
+
+    def test_category_non_slug_change_writes_no_redirect(self):
+        lt = self._make_type()
+        with tenant_context(self.tenant):
+            c = services.create_category(
+                lt, name="Plumbers", slug="plumbers", parent=None, order=0,
+                actor=self.actor,
+            )
+            services.update_category(c, name="Plumbing services", actor=self.actor)
+        self.assertFalse(
+            PathRedirect.all_tenants.filter(tenant=self.tenant).exists()
+        )
+
     def test_delete_category_cascades_children_and_emits_remove(self):
         lt = self._make_type()
         with tenant_context(self.tenant):
