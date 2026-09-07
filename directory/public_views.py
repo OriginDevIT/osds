@@ -264,11 +264,16 @@ def media_asset(request, public_id):
 
     ``MediaAsset.objects`` is tenant-scoped, so a guessed id from another
     tenant is a 404 -- the same app-level isolation every other query relies
-    on. Only the local backend serves through this view; a cloud backend would
-    hand the browser ``storage.url(key)`` directly.
+    on. ``listing__visibility='published'`` keeps a draft or hidden listing's
+    images non-public, the same gate the rest of the public site uses (ruling
+    13, decisions.md §4.1). Only the local backend serves through this view; a
+    cloud backend would hand the browser ``storage.url(key)`` directly.
     """
     asset = get_object_or_404(
-        MediaAsset.objects.filter(status=MediaAsset.Status.READY),
+        MediaAsset.objects.filter(
+            status=MediaAsset.Status.READY,
+            listing__visibility=Listing.Visibility.PUBLISHED,
+        ),
         public_id=public_id,
     )
     storage = get_tenant_storage(request.tenant)

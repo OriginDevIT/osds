@@ -225,6 +225,33 @@ class DetachTests(_Base):
         self.assertEqual(self.patches()[-1][0]["op"], "replace")
 
 
+class RefUrlTests(_Base):
+    def test_ref_url_is_relative_without_a_verified_domain(self):
+        asset = self.attach(role="logo")
+        rel = f"/media/{asset.public_id}"
+        self.assertEqual(self.reload_media()["logo"]["url"], rel)
+        self.assertEqual(self.patches()[-1][0]["value"]["url"], rel)
+
+    def test_ref_url_is_absolute_https_with_a_verified_domain(self):
+        self.tenant.primary_domain = "acme.test"
+        self.tenant.domain_verified_at = timezone.now()
+        self.tenant.save(update_fields=["primary_domain", "domain_verified_at"])
+
+        asset = self.attach(role="logo")
+        absolute = f"https://acme.test/media/{asset.public_id}"
+        self.assertEqual(self.reload_media()["logo"]["url"], absolute)
+        # the value that goes into the durable outbox record
+        self.assertEqual(self.patches()[-1][0]["value"]["url"], absolute)
+
+    def test_unverified_domain_stays_relative(self):
+        self.tenant.primary_domain = "acme.test"  # set but not verified
+        self.tenant.save(update_fields=["primary_domain"])
+        asset = self.attach(role="gallery")
+        self.assertEqual(
+            self.reload_media()["gallery"][0]["url"], f"/media/{asset.public_id}"
+        )
+
+
 class StorageResolverTests(_Base):
     def test_local_backend_is_rooted_per_tenant(self):
         storage = get_tenant_storage(self.tenant)
@@ -286,6 +313,11 @@ class MediaViewTests(TestCase):
 
     def test_unknown_id_is_404(self):
         resp = Client().get("/media/media_00000000000000000000000000", HTTP_HOST=HOST)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_asset_of_an_unpublished_listing_is_not_served(self):
+        Listing.all_tenants.filter(pk=self.listing.pk).update(visibility="draft")
+        resp = Client().get(f"/media/{self.asset.public_id}", HTTP_HOST=HOST)
         self.assertEqual(resp.status_code, 404)
 
     def test_pending_asset_is_not_served(self):

@@ -151,11 +151,28 @@ def _next_sort_order(listing: Listing, role: str) -> int:
     return (last.sort_order + 1) if last is not None else 0
 
 
-def _ref(asset: MediaAsset) -> dict:
+def _asset_url(asset: MediaAsset, tenant) -> str:
+    """Absolute ``https`` URL once the tenant's domain is verified, otherwise
+    the relative path.
+
+    This value is written into ``Listing.media`` and from there into the
+    ``listing.updated`` outbox payload -- a durable record read off-box by
+    adapters, where a relative path is unresolvable. The scheme is always
+    ``https`` and never branches on ``DEBUG`` or ``OSDS_SECURE_COOKIES``: a
+    scheme that varied with a local dev flag would be written into the log
+    permanently (decisions.md §4.1).
+    """
+    path = f"{MEDIA_URL_PREFIX}{asset.public_id}"
+    if tenant.primary_domain and tenant.domain_verified_at is not None:
+        return f"https://{tenant.primary_domain}{path}"
+    return path
+
+
+def _ref(asset: MediaAsset, tenant) -> dict:
     """The render-ready shape embedded in ``Listing.media``."""
     return {
         "asset_id": asset.public_id,
-        "url": f"{MEDIA_URL_PREFIX}{asset.public_id}",
+        "url": _asset_url(asset, tenant),
         "width": asset.width,
         "height": asset.height,
         "alt": asset.alt_text or None,
@@ -168,15 +185,16 @@ def _rebuild_listing_media(listing: Listing) -> None:
     Rebuilt wholesale every time -- never patched in place -- so it cannot
     drift from the ``MediaAsset`` rows.
     """
+    tenant = listing.tenant
     media: dict = {"logo": None, "cover": None, "gallery": []}
     ready = MediaAsset.objects.filter(
         listing=listing, status=MediaAsset.Status.READY
     ).order_by("sort_order", "id")
     for asset in ready:
         if asset.role == MediaAsset.Role.GALLERY:
-            media["gallery"].append(_ref(asset))
+            media["gallery"].append(_ref(asset, tenant))
         else:
-            media[asset.role] = _ref(asset)
+            media[asset.role] = _ref(asset, tenant)
     listing.media = media
 
 
