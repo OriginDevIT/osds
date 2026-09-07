@@ -1541,4 +1541,4 @@ minio          (bundled S3-compatible storage; overridable via S3_* vars)
 3. **Data model and migrations** — entitlement and slot tables are specified behaviourally, not yet as schema.
 4. **Owner dashboard scope** — what an owner can edit without re-verification, and what re-opens moderation.
 5. **Import pipeline detail** — CSV column mapping, dedupe strategy against `suppression_key`, batch rollback mechanics.
-6. **Rate limiting and abuse** — public API limits, claim attempt limits, review submission limits. Includes a ceiling for the attempt counter on claim.verification_failed (§9.5).
+6. **Rate limiting and abuse** — public API limits, claim attempt limits, review submission limits, and operator login attempt limits. Includes a ceiling for the attempt counter on claim.verification_failed (§9.5). Operator login ships unthrottled; the Node-era `operator_login_attempts` design is superseded and is not the answer.

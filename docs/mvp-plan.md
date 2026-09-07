@@ -79,7 +79,10 @@ constants module and its test.
 First-run wizard: setup token to logs, superadmin, first tenant, domain with
 the DNS record shown and a verification check, storage selection, SMTP.
 
-**Done when** a fresh stack walks an operator to a logged-in admin.
+**Done when** a fresh stack walks an operator to a logged-in admin. Met
+2026-09-07 — the wizard shipped in block 1 but the login form it hands off to
+did not land until #127, so this criterion was unmet for two sessions while
+block 1 was marked complete.
 
 ### 2 — Directory
 

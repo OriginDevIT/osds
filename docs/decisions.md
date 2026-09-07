@@ -8,7 +8,7 @@ replaying prior conversations.
 information, not a fresh opinion. If you disagree, open an issue arguing the
 new information — do not relitigate in code or in a chat session.
 
-Last updated: 2026-09-06
+Last updated: 2026-09-07
 
 ---
 
@@ -246,6 +246,16 @@ correctly refuses to invent event names not present in the spec.
 **Push back on generated bulk-rewrite scripts.** When it proposed a regex
 rewrite of imports across 25 files, the right answer was to fix the compiler
 setting so each site was identified individually.
+
+**Numbers in a completion report are counted or omitted.** It reported "263
+tests passing" and "30 new tests" in the same sentence with the same
+confidence; the first was counted and correct, the second was estimated and
+wrong by seven. Ask for the count command, not the number.
+
+**A green suite cannot see cookie flags.** The Django test Client ignores
+`Secure` and never sets `wsgi.url_scheme='https'`. Anything touching cookie
+security is verified with a raw HTTP request against a non-loopback host, or
+it is not verified.
 
 **Unit tests that mock the database will not catch a missing table.** Run the
 browser pass.
