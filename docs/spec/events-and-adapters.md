@@ -1,13 +1,17 @@
 # OSDS — Event Schema, Adapter Interface & Entitlements
 
 **Open Source Directory Site**
-**Status:** Draft v0.6 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
+**Status:** Draft v0.7 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
 **Audience:** core maintainers, adapter authors
 
 This document defines the contract between the OSDS core and everything outside it. The core is a multi-tenant directory engine. It knows nothing about email providers, CRMs, payment gateways, or messaging platforms. It emits facts and accepts commands. Adapters translate.
 
 If you are writing an adapter, sections 3, 7 and 8 are the ones you need.
 If you are implementing the paid tiers, section 5 is the whole job.
+
+### Changes from v0.6
+
+- **§7.1.** `media` joins `tier`, `status` and `visibility` as a rejected field on `listing.upsert`. The listing's `media` document is a projection of stored assets, not client-supplied JSON.
 
 ### Changes from v0.5
 
@@ -1073,17 +1077,20 @@ Required on create: `slug`, `name`.
 
 #### Rejected fields
 
-`tier`, `status` and `visibility` are refused when the key is present at all, even set to `null`.
+`tier`, `status`, `visibility` and `media` are refused when the key is present at all, even set to `null`.
 
 | Field        | Why                              | Where it belongs                                      |
 | ------------ | -------------------------------- | ----------------------------------------------------- |
 | `tier`       | Derived from entitlement         | `entitlement.reportPayment`, `entitlement.grant` (§6) |
 | `status`     | Moves through the claim flow     | `claim.approve` (§9)                                  |
 | `visibility` | Has its own lifecycle and events | `listing.setVisibility` (§3.3)                        |
+| media        | Assets are rows, not client JSON | listing.attachMedia (§15.2)                           |
 
 Rejection is a `422` naming the field. Silently ignoring them is worse — the caller believes the write landed.
 
 `visibility` is refused for the same reason as the other two: publishing and unpublishing emit `listing.published` and `listing.unpublished`, and an upsert that could flip it would either emit those events from a command whose outcome table names only `listing.created` and `listing.updated`, or bury a publication state change inside a JSON Patch. A CSV re-import must never publish a draft as a side effect of touching a phone number.
+
+`media` is refused for the same reason. The listing's `media` document is a projection of `MediaAsset` rows written only by the media service from stored, validated bytes. A caller that could set it would put arbitrary external URLs on a public page without any asset ever existing.
 
 #### Outcomes
 
