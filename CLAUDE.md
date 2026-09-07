@@ -178,6 +178,17 @@ The development machine is **Windows with PowerShell 7**. Commands you propose
 must be PowerShell. Use here-strings for file creation — `>` writes UTF-16 and
 breaks everything downstream.
 
+Eight environment variables. `DJANGO_SECRET_KEY`, `OSDS_SECRET_KEY` and
+`DATABASE_URL` raise at import if unset. `DATABASE_URL_ADMIN` is used by the
+entrypoint to migrate as the database owner. `DJANGO_DEBUG` and
+`OSDS_CONSOLE_HOST` configure the install. `OSDS_SECURE_COOKIES` defaults true
+and must be false on an HTTP-only install or no login POST can pass CSRF.
+`OSDS_DEV_TENANT_SLUG` is DEBUG-only.
+
+`python manage.py ensure_setup_token` mints the `InstallSetup` row and prints
+the first-run token. Nothing else creates it — a fresh database 404s the wizard
+until it has run.
+
 ## What requires a human
 
 Do not do these autonomously. Prepare the work, then stop and say what you
