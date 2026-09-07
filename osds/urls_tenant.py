@@ -8,6 +8,7 @@ depends on the tenant's live listing-type count -- see directory/public_views.
 
 from django.http import HttpResponse
 from django.urls import include, path, re_path
+from django.views.generic.base import RedirectView
 
 from directory import public_views
 
@@ -25,6 +26,14 @@ def _challenge(request):
 urlpatterns = [
     path(".well-known/osds-challenge", _challenge, name="domain-challenge"),
     path("admin/", include("directory.admin_urls")),
+    # The wizard's completion screen tells the operator to sign in at
+    # "<domain>/admin"; without this the greedy public catch-all below swallows
+    # the slashless form and returns a 404 instead of the login redirect.
+    # query_string=True carries a bookmarked "?next=" through to /admin/.
+    path(
+        "admin",
+        RedirectView.as_view(url="/admin/", permanent=False, query_string=True),
+    ),
     path("search/", public_views.search_results, name="public-search"),
     path("", public_views.home, name="public-home"),
     re_path(r"^(?P<path>.+)$", public_views.public_dispatch, name="public-dispatch"),

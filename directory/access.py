@@ -9,15 +9,19 @@ from __future__ import annotations
 
 from functools import wraps
 
+from django.contrib.auth.views import redirect_to_login
 from django.http import Http404, HttpResponseForbidden
+from django.urls import reverse
 
 from tenants.models import StaffMembership
 
 
 def tenant_admin_required(min_role: int = StaffMembership.Role.ADMIN):
     """Require an authenticated operator with an active membership on
-    ``request.tenant`` of at least ``min_role``. No membership -> 404 (the
-    admin surface is not discoverable); too low a rank -> 403.
+    ``request.tenant`` of at least ``min_role``. Anonymous -> redirect to the
+    login form. Authenticated but no membership -> 404 (the admin surface is
+    not discoverable, and the response must not vary with who is asking); too
+    low a rank -> 403.
     """
 
     def decorator(view):
@@ -28,7 +32,10 @@ def tenant_admin_required(min_role: int = StaffMembership.Role.ADMIN):
                 raise Http404()
             user = request.user
             if not user.is_authenticated:
-                raise Http404()
+                return redirect_to_login(
+                    request.get_full_path(),
+                    login_url=reverse("directory_admin:login"),
+                )
             membership = StaffMembership.objects.filter(
                 operator=user,
                 tenant=tenant,

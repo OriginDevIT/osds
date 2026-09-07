@@ -24,6 +24,39 @@ from tenants.models import Tenant
 from tenants.setup_state import setup_complete
 
 
+class SetupCookieSecurityMiddleware:
+    """Drop the ``Secure`` flag from the session and CSRF cookies on first-run
+    wizard responses.
+
+    ``SESSION_COOKIE_SECURE`` and ``CSRF_COOKIE_SECURE`` default on
+    (``OSDS_SECURE_COOKIES``). The wizard, though, is reached over plain http
+    on a bare IP before any TLS exists, and a browser drops a ``Secure`` cookie
+    set from an insecure origin -- so the wizard could neither keep its unlock
+    flag in the session nor pass CSRF, and first boot would be impossible.
+
+    The gate is the route plus setup being incomplete. There is no reference to
+    ``request.is_secure()``: outside ``/setup/``, and the moment an operator
+    completes the wizard, ``Secure`` is left untouched. The setup URLconf stops
+    resolving at that point, so the relaxation self-destructs.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+        self._cookie_names = (
+            settings.SESSION_COOKIE_NAME,
+            settings.CSRF_COOKIE_NAME,
+        )
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        if request.path.startswith("/setup/") and not setup_complete():
+            for name in self._cookie_names:
+                morsel = response.cookies.get(name)
+                if morsel is not None:
+                    morsel["secure"] = ""
+        return response
+
+
 class TenantResolutionMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
