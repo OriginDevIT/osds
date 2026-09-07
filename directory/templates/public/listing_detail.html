@@ -10,11 +10,30 @@
   / {{ listing.name }}
 </nav>
 
-<h1>{{ listing.name }}
+{% if listing.media.cover %}
+  <img class="cover" src="{{ listing.media.cover.url }}" alt="{{ listing.media.cover.alt|default:listing.name }}"
+       width="{{ listing.media.cover.width }}" height="{{ listing.media.cover.height }}">
+{% endif %}
+
+<h1>
+  {% if listing.media.logo %}
+    <img class="logo" src="{{ listing.media.logo.url }}" alt="{{ listing.media.logo.alt|default:listing.name }}"
+         width="{{ listing.media.logo.width }}" height="{{ listing.media.logo.height }}">
+  {% endif %}
+  {{ listing.name }}
   {% if listing.current_tier.rank %}<span class="badge">{{ listing.current_tier.badge_label|default:listing.current_tier.name }}</span>{% endif %}
 </h1>
 
 {% if listing.description %}<p>{{ listing.description|linebreaksbr }}</p>{% endif %}
+
+{% if listing.media.gallery %}
+  <div class="gallery">
+    {% for img in listing.media.gallery %}
+      <img src="{{ img.url }}" alt="{{ img.alt|default:listing.name }}"
+           width="{{ img.width }}" height="{{ img.height }}">
+    {% endfor %}
+  </div>
+{% endif %}
 
 {% if listing.address_line1 or listing.locality %}
   <p class="muted">

@@ -35,6 +35,9 @@ urlpatterns = [
         RedirectView.as_view(url="/admin/", permanent=False, query_string=True),
     ),
     path("search/", public_views.search_results, name="public-search"),
+    # Local media store. Matched ahead of the public catch-all; "media" is a
+    # reserved slug so no listing or category can shadow it.
+    path("media/<str:public_id>", public_views.media_asset, name="media-asset"),
     path("", public_views.home, name="public-home"),
     re_path(r"^(?P<path>.+)$", public_views.public_dispatch, name="public-dispatch"),
 ]

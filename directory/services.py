@@ -41,7 +41,7 @@ from directory.search import recompute_search_vector
 # Slugs that would collide with fixed public routes (ruling 20). Rejected in
 # create_category and upsert_listing.
 RESERVED_SLUGS = frozenset(
-    {"search", "admin", "robots.txt", "sitemap.xml", ".well-known"}
+    {"search", "admin", "media", "robots.txt", "sitemap.xml", ".well-known"}
 )
 
 
@@ -346,7 +346,9 @@ class UpsertResult:
     changes: "list | None"
 
 
-_REJECTED_KEYS = ("tier", "status", "visibility")
+# media is owned by the media service (directory.media), not writable here:
+# spec §7.1 (v0.7) rejects it like tier/status/visibility.
+_REJECTED_KEYS = ("tier", "status", "visibility", "media")
 
 _LOCATION_KEYS = (
     "address_line1",
@@ -482,10 +484,6 @@ def _apply_payload(listing, payload, *, listing_type, creating, enforce_required
                 setattr(listing, blob, value)
             else:
                 raise SchemaError([f"{blob} must be an object"])
-
-    if "media" in payload:
-        media = payload["media"]
-        listing.media = media if isinstance(media, dict) else {}
 
     if "custom_fields" in payload:
         cleaned = validate_custom_fields(

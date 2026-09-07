@@ -116,8 +116,10 @@ class CreateUpdateUnchangedTests(_Base):
 
 
 class RejectedFieldTests(_Base):
-    def test_visibility_tier_status_are_rejected_even_when_null(self):
-        for field in ("visibility", "tier", "status"):
+    def test_visibility_tier_status_media_are_rejected_even_when_null(self):
+        # media is owned by directory.media, not writable through upsert
+        # (spec §7.1, v0.7).
+        for field in ("visibility", "tier", "status", "media"):
             with self.subTest(field=field):
                 with self.assertRaises(RejectedField) as ctx:
                     self.upsert({"slug": "x", "name": "X", field: None})
