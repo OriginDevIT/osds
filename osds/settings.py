@@ -47,6 +47,14 @@ OSDS_DEV_TENANT_SLUG = os.environ.get('OSDS_DEV_TENANT_SLUG', '')
 # fails at boot rather than at the storage step of the first-run wizard.
 OSDS_SECRET_KEY = os.environ['OSDS_SECRET_KEY']
 
+# Marks the session and CSRF cookies Secure. Default true, parsed like
+# DJANGO_DEBUG, and deliberately NOT gated on DEBUG: an operator running a
+# genuine HTTP-only install needs a way to opt out without also turning DEBUG
+# on. Set OSDS_SECURE_COOKIES=false only for such an install.
+OSDS_SECURE_COOKIES = os.environ.get(
+    'OSDS_SECURE_COOKIES', 'true'
+).strip().lower() in {'1', 'true', 'yes', 'on'}
+
 # Listings per page on the public category-browse and search pages.
 OSDS_PUBLIC_PAGE_SIZE = 20
 
@@ -75,6 +83,9 @@ MIDDLEWARE = [
     # First: nothing else validates the Host header (ALLOWED_HOSTS=['*']), and
     # SecurityMiddleware's SSL redirect would build a URL from the raw host.
     'osds.middleware.TenantResolutionMiddleware',
+    # Above Session/Csrf so its response pass runs after they set their
+    # cookies: it strips Secure from those two on first-run wizard responses.
+    'osds.middleware.SetupCookieSecurityMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -171,3 +182,52 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+# Sessions and operator login
+# ---------------------------------------------------------------------------
+# The operator login form is served at /admin/login/ on a tenant's own domain
+# and at /login/ on the console host. The two sessions must not carry between
+# hosts (decisions.md section 3): clicking a directory in the console opens
+# that tenant's /admin and the operator authenticates again there.
+
+# Behind TLS termination the app sees plain http on the wire while the browser
+# used https. Without this, CsrfViewMiddleware builds its expected Origin as
+# http://<host>, compares it to the browser's https://<host> Origin header,
+# and rejects every login POST with a 403. Safe ONLY because the deployment
+# proxy strips any client-supplied X-Forwarded-Proto before setting its own --
+# otherwise a client could forge it and defeat the SSL redirect. A deployment
+# terminating TLS elsewhere must guarantee the same.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# Secure flag is env-controlled (OSDS_SECURE_COOKIES, default true), not
+# DEBUG-gated -- see the variable's definition above.
+SESSION_COOKIE_SECURE = OSDS_SECURE_COOKIES
+CSRF_COOKIE_SECURE = OSDS_SECURE_COOKIES
+
+# Host-only cookies: never a parent domain. Tenant domains are arbitrary
+# customer domains, generally not subdomains of the console host, so a
+# shared-parent cookie is impossible anyway -- pinned here so it stays that
+# way and a console session can never be presented at a tenant's /admin.
+SESSION_COOKIE_DOMAIN = None
+CSRF_COOKIE_DOMAIN = None
+
+# No JavaScript access to the session cookie; Lax keeps it off cross-site
+# POSTs while still allowing an operator to follow a link into the admin.
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+
+# 12 hours, fixed. No "remember me". The cookie is not rewritten on every
+# request (SESSION_SAVE_EVERY_REQUEST stays False), so this is a hard cap on
+# an idle admin session, not a sliding window.
+SESSION_COOKIE_AGE = 43200
+SESSION_SAVE_EVERY_REQUEST = False
+
+# Nothing in OSDS resolves LOGIN_URL today -- directory.access and the console
+# views each pass their own reverse()d login URL. It is kept only as the bare
+# framework fallback a future @login_required would use; note the value is the
+# tenant-admin path and would be wrong on the console host, so any console-side
+# login guard must pass its own login_url. LOGIN_REDIRECT_URL and
+# LOGOUT_REDIRECT_URL are deliberately unset: every login and logout view names
+# its own redirect target.
+LOGIN_URL = "/admin/login/"

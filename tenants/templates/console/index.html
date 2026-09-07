@@ -1,0 +1,37 @@
+{% extends "console/base.html" %}
+{% block title %}Directories &middot; OSDS console{% endblock %}
+{% block heading %}Directories{% endblock %}
+{% block content %}
+<p class="muted">Signed in as {{ request.user.email }}.
+  <form method="post" action="{% url 'console-logout' %}" style="display:inline">
+    {% csrf_token %}<button type="submit">Sign out</button>
+  </form>
+</p>
+
+{% if active %}
+  <ul>
+  {% for m in active %}
+    <li>
+      {% if m.tenant.primary_domain %}
+        <a href="https://{{ m.tenant.primary_domain }}/admin/">{{ m.tenant.name }}</a>
+      {% else %}
+        {{ m.tenant.name }}
+      {% endif %}
+      <span class="muted">({{ m.get_role_display }})</span>
+    </li>
+  {% endfor %}
+  </ul>
+{% else %}
+  <p class="muted">You have no directories yet.</p>
+{% endif %}
+
+{% if pending %}
+  <h2>Pending invitations</h2>
+  <ul>
+  {% for m in pending %}
+    <li>{{ m.tenant.name }} <span class="muted">({{ m.get_role_display }})</span></li>
+  {% endfor %}
+  </ul>
+  <p class="muted">Accepting an invitation arrives in a later change.</p>
+{% endif %}
+{% endblock %}

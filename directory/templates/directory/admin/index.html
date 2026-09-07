@@ -1,0 +1,23 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}{{ tenant.name }} admin{% endblock %}
+{% block content %}
+<h1>{{ tenant.name }}</h1>
+{% if membership %}
+  <p class="muted">Signed in as {{ request.user.email }}.</p>
+  <ul>
+    <li><a href="{% url 'directory_admin:type-list' %}">Listing types, categories and listings</a></li>
+  </ul>
+  <form method="post" action="{% url 'directory_admin:logout' %}">
+    {% csrf_token %}<button type="submit">Sign out</button>
+  </form>
+{% else %}
+  <p>This account has no access to <strong>{{ tenant.name }}</strong>.</p>
+  {% if pending %}
+    <p>You have a pending invitation to this directory. Accept it from the
+    installation console.</p>
+  {% endif %}
+  <form method="post" action="{% url 'directory_admin:logout' %}">
+    {% csrf_token %}<button type="submit">Sign out</button>
+  </form>
+{% endif %}
+{% endblock %}

@@ -69,8 +69,11 @@ class SchemaBuilderViewTests(TestCase):
         )
 
     # --- access -----------------------------------------------------------
-    def test_anonymous_gets_404(self):
-        self.assertEqual(self._get(self._client(), "type-list").status_code, 404)
+    def test_anonymous_is_redirected_to_the_login_form(self):
+        resp = self._get(self._client(), "type-list")
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/admin/login/", resp["Location"])
+        self.assertIn("next=", resp["Location"])
 
     def test_editor_role_is_forbidden(self):
         self.assertEqual(

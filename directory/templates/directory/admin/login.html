@@ -1,0 +1,15 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block content %}
+<h1>Sign in</h1>
+{% if form.non_field_errors %}
+  <ul class="errors">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>
+{% endif %}
+<form method="post" action="{% url 'directory_admin:login' %}">
+  {% csrf_token %}
+  <input type="hidden" name="next" value="{{ next }}">
+  {{ form.username.label_tag }}{{ form.username }}
+  {{ form.password.label_tag }}{{ form.password }}
+  <button type="submit">Sign in</button>
+</form>
+{% endblock %}
