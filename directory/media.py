@@ -29,6 +29,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from audit import events
 from audit.outbox import emit
+from directory import routing
 from directory.models import Listing, MediaAsset
 from directory.patch import diff, project
 from directory.storage import get_tenant_storage
@@ -152,20 +153,11 @@ def _next_sort_order(listing: Listing, role: str) -> int:
 
 
 def _asset_url(asset: MediaAsset, tenant) -> str:
-    """Absolute ``https`` URL once the tenant's domain is verified, otherwise
-    the relative path.
-
-    This value is written into ``Listing.media`` and from there into the
-    ``listing.updated`` outbox payload -- a durable record read off-box by
-    adapters, where a relative path is unresolvable. The scheme is always
-    ``https`` and never branches on ``DEBUG`` or ``OSDS_SECURE_COOKIES``: a
-    scheme that varied with a local dev flag would be written into the log
-    permanently (decisions.md §4.1).
-    """
-    path = f"{MEDIA_URL_PREFIX}{asset.public_id}"
-    if tenant.primary_domain and tenant.domain_verified_at is not None:
-        return f"https://{tenant.primary_domain}{path}"
-    return path
+    """The ref ``url``: absolute ``https`` once the tenant's domain is
+    verified, relative until then. One implementation of that rule lives in
+    ``directory.routing.absolute_url`` -- shared with public URL construction
+    and, later, sitemaps."""
+    return routing.absolute_url(tenant, f"{MEDIA_URL_PREFIX}{asset.public_id}")
 
 
 def _ref(asset: MediaAsset, tenant) -> dict:
