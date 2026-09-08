@@ -16,17 +16,22 @@ from django.conf import settings
 from django.core.paginator import Paginator
 from django.db.models import Value
 from django.db.models.functions import Coalesce
-from django.http import FileResponse, Http404, HttpResponsePermanentRedirect
+from django.http import (
+    FileResponse,
+    Http404,
+    HttpResponse,
+    HttpResponsePermanentRedirect,
+)
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_safe
 
-from directory import routing
+from directory import routing, sitemaps
 from directory.models import Category, Listing, ListingType, MediaAsset, PathRedirect
 from directory.search import search
 from directory.storage import get_tenant_storage
 
-_MIN_INDEXABLE = 3  # a category with fewer published listings gets noindex
-_RESERVED_TOP = {"robots.txt", "sitemap.xml"}  # PR 4 routes these
+# Top-level paths with their own routes, never rewritten by a PathRedirect.
+_RESERVED_TOP = {"robots.txt", "sitemap.xml", "sitemaps"}
 
 
 # --- helpers ------------------------------------------------------------------
@@ -204,7 +209,6 @@ def _category_page(request, listing_type, slug, *, multi):
     )
     total = base.count()
     page_obj = Paginator(base, _page_size()).get_page(request.GET.get("page", 1))
-    noindex = page_obj.number > 1 or total < _MIN_INDEXABLE
     children = Category.objects.filter(listing_type=listing_type, parent=category)
     return render(
         request,
@@ -215,10 +219,10 @@ def _category_page(request, listing_type, slug, *, multi):
             "children": children,
             "page_obj": page_obj,
             "total": total,
-            "noindex": noindex,
             "multi": multi,
-            "canonical_url": routing.category_url(
-                listing_type, category, multi=multi
+            "canonical_url": routing.absolute_url(
+                request.tenant,
+                routing.category_url(listing_type, category, multi=multi),
             ),
         },
     )
@@ -235,8 +239,13 @@ def _listing_detail(request, listing_type, category_slug, listing_slug, *, multi
         raise Http404  # the listing is not in that category
 
     canonical = routing.canonical_category(listing) or category
-    canonical_url = routing.listing_url(
+    canonical_path = routing.listing_url(
         listing_type, canonical, listing, multi=multi
+    )
+    canonical_url = (
+        routing.absolute_url(request.tenant, canonical_path)
+        if canonical_path
+        else None
     )
     public_fields = [
         (f["label"], listing.custom_fields.get(f["key"]))
@@ -283,6 +292,41 @@ def media_asset(request, public_id):
         raise Http404 from exc
     response = FileResponse(handle, content_type=asset.content_type or None)
     response["Cache-Control"] = "public, max-age=86400"
+    return response
+
+
+@require_safe
+def robots_txt(request):
+    return HttpResponse(
+        sitemaps.build_robots(request.tenant),
+        content_type="text/plain; charset=utf-8",
+    )
+
+
+@require_safe
+def sitemap_index(request):
+    # <loc> must be absolute; a tenant with no verified domain has no absolute
+    # form yet, so the sitemap does not exist for it.
+    if not routing.has_absolute_base(request.tenant):
+        raise Http404
+    return _sitemap_response(sitemaps.build_index(request.tenant))
+
+
+@require_safe
+def sitemap_child(request, kind, shard):
+    if not routing.has_absolute_base(request.tenant):
+        raise Http404
+    body = sitemaps.build_child(request.tenant, kind, int(shard))
+    if body is None:
+        raise Http404
+    return _sitemap_response(body)
+
+
+def _sitemap_response(body: str):
+    response = HttpResponse(body, content_type="application/xml; charset=utf-8")
+    # Regenerated live on every hit -- no server-side cache, no stored
+    # artifact. Worker precompute is #159.
+    response["Cache-Control"] = "public, max-age=3600"
     return response
 
 

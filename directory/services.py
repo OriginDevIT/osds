@@ -41,7 +41,15 @@ from directory.search import recompute_search_vector
 # Slugs that would collide with fixed public routes (ruling 20). Rejected in
 # create_category and upsert_listing.
 RESERVED_SLUGS = frozenset(
-    {"search", "admin", "media", "robots.txt", "sitemap.xml", ".well-known"}
+    {
+        "search",
+        "admin",
+        "media",
+        "robots.txt",
+        "sitemap.xml",
+        "sitemaps",
+        ".well-known",
+    }
 )
 
 

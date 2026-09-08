@@ -15,6 +15,13 @@ would only concatenate the path anyway -- see ``docs/decisions.md`` §4.1.
 from __future__ import annotations
 
 
+def has_absolute_base(tenant) -> bool:
+    """Whether ``tenant`` has a verified domain, i.e. whether an absolute URL
+    can be built for it. Until this is true a public URL only exists as a
+    relative path."""
+    return bool(tenant.primary_domain) and tenant.domain_verified_at is not None
+
+
 def absolute_url(tenant, path: str) -> str:
     """Absolute ``https`` URL for a root-relative tenant ``path``, or ``path``
     unchanged until the tenant's domain is verified.
@@ -26,7 +33,7 @@ def absolute_url(tenant, path: str) -> str:
     permanently. A tenant with no verified domain has no absolute form yet, so
     the relative path is returned.
     """
-    if tenant.primary_domain and tenant.domain_verified_at is not None:
+    if has_absolute_base(tenant):
         return f"https://{tenant.primary_domain}{path}"
     return path
 
@@ -51,8 +58,19 @@ def listing_url(listing_type, category, listing, *, multi: bool) -> "str | None"
 
 def canonical_category(listing):
     """The category with the lowest ``(order, slug)`` among the listing's
-    categories -- the one its canonical detail URL uses (ruling 3)."""
-    categories = list(listing.categories.all())
+    categories *of the listing's own type* -- the one its canonical detail URL
+    uses (ruling 3).
+
+    A category of another type could otherwise win the ``(order, slug)`` sort
+    and produce a URL the site 404s: the detail view resolves the category
+    under the listing's type. Constraining here keeps the on-page
+    ``rel=canonical`` and the sitemap ``<loc>`` on a path that resolves. The
+    write-path hole that lets a cross-type membership exist is #158.
+    """
+    categories = [
+        c for c in listing.categories.all()
+        if c.listing_type_id == listing.listing_type_id
+    ]
     if not categories:
         return None
     return min(categories, key=lambda c: (c.order, c.slug))

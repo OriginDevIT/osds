@@ -237,8 +237,8 @@ class RedirectTests(_Base):
         PathRedirect.all_tenants.create(
             tenant=self.tenant, old_prefix="", new_prefix="/businesses"
         )
-        # robots.txt has no route yet (PR 4) -> 404, not a 301
-        self.assertEqual(self.get("/robots.txt").status_code, 404)
+        # robots.txt has its own route -> 200, never rewritten to a 301
+        self.assertEqual(self.get("/robots.txt").status_code, 200)
 
 
 class PublishedGuardTests(SimpleTestCase):
@@ -247,12 +247,18 @@ class PublishedGuardTests(SimpleTestCase):
     The narrow form of this guard -- grep for ``Listing.objects.*`` -- missed
     the media-serving view entirely, because it queries ``MediaAsset`` (a
     child of ``Listing``). The broad form below inspects every
-    ``<Model>.objects`` reference in the public views and requires a
+    ``<Model>.objects`` reference in the public read paths and requires a
     published/visibility constraint on any model that can carry an unpublished
     listing's content, whichever model name it is queried through.
+
+    ``sitemaps.py`` is a public read path too -- it is served at
+    ``/sitemap.xml`` -- so it is scanned alongside the views.
     """
 
-    _SRC = (pathlib.Path(__file__).parents[1] / "public_views.py").read_text("utf-8")
+    _SRC = "\n".join(
+        (pathlib.Path(__file__).parents[1] / name).read_text("utf-8")
+        for name in ("public_views.py", "sitemaps.py")
+    )
 
     def test_listing_is_only_ever_reached_through_published(self):
         import re
