@@ -96,7 +96,8 @@ Public site: home, category, listing detail, search. Full-text plus trigram,
 radius filter. Sitemap index and `robots.txt`.
 
 **Done when** an operator creates a directory type, adds listings with images,
-and the public site renders and searches them.
+and the public site renders and searches them. Met 2026-09-08 across six PRs,
+closing with the sitemap index and `robots.txt`.
 
 ### 3 — Population and claims
 
