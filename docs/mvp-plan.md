@@ -36,7 +36,9 @@ Everything else is a later release.
 - Categories per type, listing CRUD, publish and unpublish
 - Public site: home, category browse, listing detail, search
 - Postgres full-text plus trigram search; `lat`/`lon` radius search
-- Media upload with per-tenant storage — local, S3, Azure or GCP
+- Media upload with per-tenant storage — local disk at launch. S3, Azure and
+  GCP are wizard options that raise a deferred-feature error; each needs a
+  human-gated SDK (#150)
 - CSV import, worker-processed, with batch rollback
 - Claims: manual review and email OTP, consent capture, anti-hijack
   notification, dispute queue
