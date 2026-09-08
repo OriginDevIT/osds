@@ -19,6 +19,7 @@ from django.conf import settings
 from django.http import HttpResponse, HttpResponseNotFound
 
 from osds.tenancy import reset_current_tenant, set_current_tenant
+from osds.urlconf import CONSOLE_URLCONF, SETUP_URLCONF, TENANT_URLCONF
 from tenants.dns_check import CHALLENGE_PATH
 from tenants.models import Tenant
 from tenants.setup_state import setup_complete
@@ -68,11 +69,11 @@ class TenantResolutionMiddleware:
         request.osds_host_kind = kind
         request.tenant = tenant
         if kind == "console":
-            request.urlconf = "osds.urls_console"
+            request.urlconf = CONSOLE_URLCONF
         elif kind == "tenant":
-            request.urlconf = "osds.urls_tenant"
+            request.urlconf = TENANT_URLCONF
         elif kind == "setup":
-            request.urlconf = "osds.urls_setup"
+            request.urlconf = SETUP_URLCONF
 
         token = set_current_tenant(tenant)
         try:
