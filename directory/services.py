@@ -16,9 +16,15 @@ from dataclasses import dataclass
 
 from django.db import transaction
 from django.db.models import ProtectedError
-from django.utils import timezone
 
 from audit import events
+from audit.command_log import (
+    MustNotBeInTransaction,
+    log_conclude,
+    log_received,
+    log_replay,
+    require_autocommit,
+)
 from audit.models import CommandLog
 from audit.outbox import emit
 from directory import normalize
@@ -337,15 +343,6 @@ class RejectedField(Exception):
         super().__init__(f"the field {field!r} is not accepted on listing.upsert")
 
 
-class MustNotBeInTransaction(RuntimeError):
-    """upsert_listing was called inside an open transaction. Its command-log
-    rows are committed independently of the command transaction (spec §11.2);
-    a caller-opened transaction would pull them in and lose the very
-    guarantee the log exists for. Loop over independent calls -- do not wrap
-    a batch in one transaction.
-    """
-
-
 @dataclass
 class UpsertResult:
     listing: "Listing | None"
@@ -366,45 +363,6 @@ _LOCATION_KEYS = (
     "postal_code",
     "country",
 )
-
-
-def _log_received(*, command, tenant, idempotency_key, actor, trace_id, origin, payload):
-    return CommandLog.objects.create(
-        command=command,
-        tenant=tenant,
-        idempotency_key=idempotency_key or None,
-        adapter_id=origin or "",
-        actor=actor or {},
-        trace_id=trace_id or "",
-        payload=payload,
-    )
-
-
-def _log_conclude(row, *, outcome, result_event_id=None, problem=None):
-    row.outcome = outcome
-    row.result_event_id = result_event_id or ""
-    row.problem = problem
-    row.concluded_at = timezone.now()
-    row.save(
-        update_fields=["outcome", "result_event_id", "problem", "concluded_at"]
-    )
-
-
-def _log_replay(*, command, tenant, idempotency_key, actor, trace_id, prior):
-    now = timezone.now()
-    CommandLog.objects.create(
-        command=command,
-        tenant=tenant,
-        idempotency_key=idempotency_key or None,
-        actor=actor or {},
-        trace_id=trace_id or "",
-        payload=None,
-        outcome="applied",
-        result_event_id=prior.result_event_id or "",
-        problem={"idempotent_replay": True},
-        received_at=now,
-        concluded_at=now,
-    )
 
 
 def _resolve_categories(listing_type: ListingType, slugs) -> list[Category]:
@@ -633,8 +591,7 @@ def upsert_listing(
     submitted_by=None,
     must_create: bool = False,
 ) -> UpsertResult:
-    if transaction.get_connection().in_atomic_block:
-        raise MustNotBeInTransaction()
+    require_autocommit()
 
     actor = actor or {}
 
@@ -650,7 +607,7 @@ def upsert_listing(
             .first()
         )
         if prior is not None:
-            _log_replay(
+            log_replay(
                 command="listing.upsert",
                 tenant=tenant,
                 idempotency_key=idempotency_key,
@@ -664,7 +621,7 @@ def upsert_listing(
 
     # Written and committed now, independent of the command transaction below:
     # a log row that vanished on rollback would miss the very case it exists for.
-    row = _log_received(
+    row = log_received(
         command="listing.upsert",
         tenant=tenant,
         idempotency_key=idempotency_key,
@@ -689,15 +646,15 @@ def upsert_listing(
             must_create=must_create,
         )
     except RejectedField as exc:
-        _log_conclude(row, outcome="rejected", problem={"field": exc.field})
+        log_conclude(row, outcome="rejected", problem={"field": exc.field})
         raise
     except SchemaError as exc:
-        _log_conclude(row, outcome="rejected", problem={"errors": exc.errors})
+        log_conclude(row, outcome="rejected", problem={"errors": exc.errors})
         raise
     # Any other exception: the row keeps outcome=NULL, concluded_at=NULL --
     # that is the "threw mid-apply" record (spec §11.2). Propagate.
 
-    _log_conclude(
+    log_conclude(
         row,
         outcome="applied",
         result_event_id=result.event_id,  # None for an unchanged write (ruling 5)
