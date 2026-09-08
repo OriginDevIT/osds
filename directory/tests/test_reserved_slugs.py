@@ -1,5 +1,5 @@
 """Reserved slugs (ruling 20): search, admin, media, robots.txt, sitemap.xml,
-.well-known are rejected by create_category and upsert_listing.
+sitemaps, .well-known are rejected by create_category and upsert_listing.
 """
 
 from __future__ import annotations
@@ -12,7 +12,10 @@ from directory.models import Category, ListingType
 from osds.tenancy import tenant_context
 from tenants.models import Operator, Tenant
 
-RESERVED = ["search", "admin", "media", "robots.txt", "sitemap.xml", ".well-known"]
+RESERVED = [
+    "search", "admin", "media", "robots.txt", "sitemap.xml", "sitemaps",
+    ".well-known",
+]
 
 
 class ReservedCategorySlugTests(TestCase):

@@ -1,7 +1,7 @@
 {% extends "public/base.html" %}
 {% load public_urls %}
 {% block title %}{{ category.name }} &middot; {{ request.tenant.name }}{% endblock %}
-{% block robots %}{% if noindex %}<meta name="robots" content="noindex,follow">{% endif %}{% endblock %}
+{% block robots %}{% category_indexable total page_obj.number as indexable %}{% if not indexable %}<meta name="robots" content="noindex,follow">{% endif %}{% endblock %}
 {% block canonical %}<link rel="canonical" href="{{ canonical_url }}">{% endblock %}
 {% block content %}
 <nav class="crumbs">

@@ -3,7 +3,8 @@ challenge, the tenant admin, and the public directory site.
 
 The public site is a single catch-all (``public_dispatch``) because routing
 depends on the tenant's live listing-type count -- see directory/public_views.
-``robots.txt`` and the sitemap arrive in PR 4.
+``robots.txt`` and the sitemap index have their own routes, ahead of the
+catch-all.
 """
 
 from django.http import HttpResponse
@@ -38,6 +39,15 @@ urlpatterns = [
     # Local media store. Matched ahead of the public catch-all; "media" is a
     # reserved slug so no listing or category can shadow it.
     path("media/<str:public_id>", public_views.media_asset, name="media-asset"),
+    # robots.txt and the sitemap. "sitemap.xml" / "sitemaps" are reserved
+    # slugs; all three sit ahead of the catch-all.
+    path("robots.txt", public_views.robots_txt, name="robots-txt"),
+    path("sitemap.xml", public_views.sitemap_index, name="sitemap-index"),
+    re_path(
+        r"^sitemaps/(?P<kind>listings|categories)-(?P<shard>[1-9][0-9]*)\.xml$",
+        public_views.sitemap_child,
+        name="sitemap-child",
+    ),
     path("", public_views.home, name="public-home"),
     re_path(r"^(?P<path>.+)$", public_views.public_dispatch, name="public-dispatch"),
 ]
