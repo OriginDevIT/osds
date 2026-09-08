@@ -132,6 +132,13 @@ reasoning is in `docs/decisions.md`.
 Adding any runtime dependency requires a human. Say what you would add and why,
 then stop.
 
+The runtime tree is Django, psycopg 3, `cryptography` (encrypts `Secret`
+values), `gunicorn` (the container server), `whitenoise` (static files) and
+**Pillow**. Pillow is the only dependency added since the reset — it decodes
+uploads for validation, reads dimensions, and strips EXIF by rebuilding from
+raw pixels. Anything else you believe you need is a conversation, not a
+`requirements.txt` edit.
+
 ## Conventions
 
 - Python 3.12, Django 5. Type hints on service-layer functions.
@@ -178,12 +185,14 @@ The development machine is **Windows with PowerShell 7**. Commands you propose
 must be PowerShell. Use here-strings for file creation — `>` writes UTF-16 and
 breaks everything downstream.
 
-Eight environment variables. `DJANGO_SECRET_KEY`, `OSDS_SECRET_KEY` and
+Nine environment variables. `DJANGO_SECRET_KEY`, `OSDS_SECRET_KEY` and
 `DATABASE_URL` raise at import if unset. `DATABASE_URL_ADMIN` is used by the
 entrypoint to migrate as the database owner. `DJANGO_DEBUG` and
 `OSDS_CONSOLE_HOST` configure the install. `OSDS_SECURE_COOKIES` defaults true
 and must be false on an HTTP-only install or no login POST can pass CSRF.
-`OSDS_DEV_TENANT_SLUG` is DEBUG-only.
+`OSDS_DEV_TENANT_SLUG` is DEBUG-only. `OSDS_MEDIA_ROOT` sets the local storage
+root and defaults to `BASE_DIR/media`; per-tenant media lands under
+`<OSDS_MEDIA_ROOT>/<tenant.public_id>/`.
 
 `python manage.py ensure_setup_token` mints the `InstallSetup` row and prints
 the first-run token. Nothing else creates it — a fresh database 404s the wizard
