@@ -21,6 +21,7 @@ from osds.ids import (
     lead_id,
     listing_id,
     lt_id,
+    media_id,
     usr_id,
 )
 
@@ -407,6 +408,83 @@ class Listing(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+
+class MediaAsset(models.Model):
+    """One uploaded image attached to a listing.
+
+    ``MediaAsset`` rows are canonical for asset facts -- bytes, dimensions,
+    processing state, storage location, provenance. ``Listing.media`` is a
+    denormalised projection rebuilt from the ``ready`` rows on every attach or
+    detach; it holds the render-ready refs the public page and the
+    ``listing.updated`` JSON Patch consume (spec §4.1, decisions.md §4.1).
+
+    ``media.*`` events stay deferred (spec §3.4): a row moving ``pending →
+    ready`` is internal state, and attaching or detaching emits
+    ``listing.updated`` -- nothing else.
+    """
+
+    class Role(models.TextChoices):
+        LOGO = "logo", "Logo"
+        COVER = "cover", "Cover"
+        GALLERY = "gallery", "Gallery"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        READY = "ready", "Ready"
+        FAILED = "failed", "Failed"
+        # Reserved for the abuse-scan pipeline (spec §15.2). No code path sets
+        # it today and no scan hook exists -- the value only holds its place.
+        QUARANTINED = "quarantined", "Quarantined"
+
+    tenant = models.ForeignKey(
+        "tenants.Tenant", on_delete=models.CASCADE, related_name="media_assets"
+    )
+    listing = models.ForeignKey(
+        Listing, on_delete=models.CASCADE, related_name="media_assets"
+    )
+    public_id = models.CharField(
+        max_length=40, unique=True, editable=False, default=media_id
+    )
+    role = models.CharField(max_length=10, choices=Role.choices)
+    status = models.CharField(
+        max_length=12, choices=Status.choices, default=Status.PENDING
+    )
+
+    original_filename = models.CharField(max_length=255, blank=True)
+    content_type = models.CharField(max_length=100, blank=True)  # sniffed, not trusted
+    byte_size = models.PositiveBigIntegerField(default=0)
+    width = models.PositiveIntegerField(null=True, blank=True)
+    height = models.PositiveIntegerField(null=True, blank=True)
+    checksum_sha256 = models.CharField(max_length=64, blank=True)
+    # Tenant-relative key within the resolved backend -- never an absolute URL.
+    storage_key = models.CharField(max_length=500, blank=True)
+    # Worker-produced sizes land here once the media pipeline exists (spec
+    # §15.2). Empty until then.
+    derivatives = models.JSONField(default=dict, blank=True)
+    alt_text = models.CharField(max_length=255, blank=True)
+    sort_order = models.PositiveIntegerField(default=0)
+
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="media_assets_uploaded",
+    )
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = TenantScopedManager()
+    all_tenants = models.Manager()
+
+    class Meta:
+        db_table = "media_assets"
+        indexes = [models.Index(fields=["tenant", "listing", "role"])]
+        ordering = ["sort_order", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.public_id} ({self.role})"
 
 
 class Claim(models.Model):

@@ -79,3 +79,7 @@ def ent_id() -> str:
 
 def imp_id() -> str:
     return _prefixed("imp_")
+
+
+def media_id() -> str:
+    return _prefixed("media_")

@@ -242,14 +242,58 @@ class RedirectTests(_Base):
 
 
 class PublishedGuardTests(SimpleTestCase):
-    def test_public_views_only_query_listings_through_published(self):
+    """`visibility='published'` is the sole public filter (decisions.md §4.1).
+
+    The narrow form of this guard -- grep for ``Listing.objects.*`` -- missed
+    the media-serving view entirely, because it queries ``MediaAsset`` (a
+    child of ``Listing``). The broad form below inspects every
+    ``<Model>.objects`` reference in the public views and requires a
+    published/visibility constraint on any model that can carry an unpublished
+    listing's content, whichever model name it is queried through.
+    """
+
+    _SRC = (pathlib.Path(__file__).parents[1] / "public_views.py").read_text("utf-8")
+
+    def test_listing_is_only_ever_reached_through_published(self):
         import re
 
-        src = (
-            pathlib.Path(__file__).parents[1] / "public_views.py"
-        ).read_text("utf-8")
-        calls = re.findall(r"Listing\.objects\.(\w+)", src)
+        calls = re.findall(r"Listing\.objects\.(\w+)", self._SRC)
         self.assertTrue(calls, "expected at least one Listing.objects.published() call")
         self.assertEqual(
             set(calls), {"published"}, f"unguarded Listing.objects.* : {calls}"
+        )
+
+    def test_every_visibility_bearing_model_is_gated(self):
+        import ast
+
+        from django.apps import apps
+
+        tree = ast.parse(self._SRC)
+        lines = self._SRC.splitlines()
+        offenders = []
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Attribute) and node.attr == "objects"):
+                continue
+            if not isinstance(node.value, ast.Name) or not node.value.id[:1].isupper():
+                continue
+            name = node.value.id
+            try:
+                model = apps.get_model("directory", name)
+            except LookupError:
+                continue
+            fields = {f.name for f in model._meta.get_fields()}
+            # Visibility-bearing = has the column itself, or a FK to Listing
+            # that reaches it. Pure config models (Category, ListingType,
+            # PathRedirect) have neither and need no gate.
+            if "visibility" not in fields and "listing" not in fields:
+                continue
+            segment = "\n".join(lines[node.lineno - 1 : (node.end_lineno or node.lineno) + 4])
+            if "published(" in segment or "visibility" in segment:
+                continue
+            offenders.append(name)
+        self.assertEqual(
+            offenders,
+            [],
+            f"public_views queries these visibility-bearing models without a "
+            f"published()/visibility constraint: {offenders}",
         )

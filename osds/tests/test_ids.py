@@ -28,6 +28,7 @@ _FACTORIES = [
     (ids.tier_id, "tier_"),
     (ids.ent_id, "ent_"),
     (ids.imp_id, "imp_"),
+    (ids.media_id, "media_"),
 ]
 
 

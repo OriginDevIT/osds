@@ -69,4 +69,15 @@ urlpatterns = [
         views.listing_unpublish,
         name="listing-unpublish",
     ),
+    path(
+        "listing-types/<slug:key>/listings/<str:public_id>/media/add/",
+        views.listing_media_add,
+        name="listing-media-add",
+    ),
+    path(
+        "listing-types/<slug:key>/listings/<str:public_id>/media/"
+        "<str:asset_public_id>/remove/",
+        views.listing_media_remove,
+        name="listing-media-remove",
+    ),
 ]

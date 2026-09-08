@@ -14,15 +14,17 @@ from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.crypto import get_random_string
 
-from directory import normalize, services
+from directory import media, normalize, services
 from directory.access import tenant_admin_required
 from directory.admin_forms import (
     CategoryForm,
     ListingTypeForm,
+    MediaUploadForm,
     build_listing_form_class,
 )
 from directory.field_schema import FIELD_TYPES, SchemaError, validate_type_schema
-from directory.models import Category, Listing, ListingType
+from directory.models import Category, Listing, ListingType, MediaAsset
+from directory.storage import DeferredFeatureError
 from tenants.models import StaffMembership
 
 _ADMIN = tenant_admin_required()
@@ -468,7 +470,16 @@ def listing_edit(request, key, public_id):
     return render(
         request,
         "directory/admin/listing_form.html",
-        {"form": form, "listing_type": listing_type, "mode": "edit", "listing": listing},
+        {
+            "form": form,
+            "listing_type": listing_type,
+            "mode": "edit",
+            "listing": listing,
+            "media_form": MediaUploadForm(),
+            "media_assets": MediaAsset.objects.filter(listing=listing).order_by(
+                "role", "sort_order", "id"
+            ),
+        },
     )
 
 
@@ -499,4 +510,60 @@ def listing_publish(request, key, public_id):
 def listing_unpublish(request, key, public_id):
     return _set_visibility(
         request, key, public_id, Listing.Visibility.DRAFT, "Unpublished"
+    )
+
+
+def _get_listing(request, key, public_id) -> Listing:
+    return get_object_or_404(
+        Listing,
+        tenant=request.tenant,
+        listing_type=_get_type(request, key),
+        public_id=public_id,
+    )
+
+
+@_EDITOR
+def listing_media_add(request, key, public_id):
+    listing = _get_listing(request, key, public_id)
+    if request.method == "POST":
+        form = MediaUploadForm(request.POST, request.FILES)
+        if not form.is_valid():
+            messages.error(request, "Choose an image and a placement.")
+        else:
+            try:
+                media.attach_media(
+                    listing,
+                    role=form.cleaned_data["role"],
+                    upload=form.cleaned_data["image"],
+                    actor=_actor(request),
+                    alt_text=form.cleaned_data["alt_text"],
+                    uploaded_by=request.user,
+                )
+            except (media.MediaError, DeferredFeatureError) as exc:
+                messages.error(request, str(exc))
+            else:
+                messages.success(request, "Image added.")
+    return redirect(
+        "directory_admin:listing-edit", key=key, public_id=public_id
+    )
+
+
+@_EDITOR
+def listing_media_remove(request, key, public_id, asset_public_id):
+    listing = _get_listing(request, key, public_id)
+    asset = get_object_or_404(
+        MediaAsset,
+        tenant=request.tenant,
+        listing=listing,
+        public_id=asset_public_id,
+    )
+    if request.method == "POST":
+        try:
+            media.detach_media(asset, actor=_actor(request))
+        except DeferredFeatureError as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, "Image removed.")
+    return redirect(
+        "directory_admin:listing-edit", key=key, public_id=public_id
     )

@@ -34,6 +34,21 @@ class ListingTypeForm(forms.Form):
             )
 
 
+class MediaUploadForm(forms.Form):
+    """One image upload on the listing edit page. All validation of the bytes
+    themselves happens in ``directory.media`` so the error text is consistent
+    between this form and the write API."""
+
+    ROLE_CHOICES = [
+        ("gallery", "Gallery image"),
+        ("logo", "Logo"),
+        ("cover", "Cover image"),
+    ]
+    role = forms.ChoiceField(choices=ROLE_CHOICES)
+    image = forms.FileField()
+    alt_text = forms.CharField(max_length=255, required=False, label="Alt text")
+
+
 class CategoryForm(forms.Form):
     name = forms.CharField(max_length=200)
     slug = forms.SlugField(max_length=100)

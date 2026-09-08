@@ -16,13 +16,14 @@ from django.conf import settings
 from django.core.paginator import Paginator
 from django.db.models import Value
 from django.db.models.functions import Coalesce
-from django.http import Http404, HttpResponsePermanentRedirect
+from django.http import FileResponse, Http404, HttpResponsePermanentRedirect
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_safe
 
 from directory import routing
-from directory.models import Category, Listing, ListingType, PathRedirect
+from directory.models import Category, Listing, ListingType, MediaAsset, PathRedirect
 from directory.search import search
+from directory.storage import get_tenant_storage
 
 _MIN_INDEXABLE = 3  # a category with fewer published listings gets noindex
 _RESERVED_TOP = {"robots.txt", "sitemap.xml"}  # PR 4 routes these
@@ -255,6 +256,34 @@ def _listing_detail(request, listing_type, category_slug, listing_slug, *, multi
             "multi": multi,
         },
     )
+
+
+@require_safe
+def media_asset(request, public_id):
+    """Stream one ``ready`` media asset from the current tenant's storage.
+
+    ``MediaAsset.objects`` is tenant-scoped, so a guessed id from another
+    tenant is a 404 -- the same app-level isolation every other query relies
+    on. ``listing__visibility='published'`` keeps a draft or hidden listing's
+    images non-public, the same gate the rest of the public site uses (ruling
+    13, decisions.md §4.1). Only the local backend serves through this view; a
+    cloud backend would hand the browser ``storage.url(key)`` directly.
+    """
+    asset = get_object_or_404(
+        MediaAsset.objects.filter(
+            status=MediaAsset.Status.READY,
+            listing__visibility=Listing.Visibility.PUBLISHED,
+        ),
+        public_id=public_id,
+    )
+    storage = get_tenant_storage(request.tenant)
+    try:
+        handle = storage.open(asset.storage_key)
+    except FileNotFoundError as exc:
+        raise Http404 from exc
+    response = FileResponse(handle, content_type=asset.content_type or None)
+    response["Cache-Control"] = "public, max-age=86400"
+    return response
 
 
 def not_found(request, exception=None):

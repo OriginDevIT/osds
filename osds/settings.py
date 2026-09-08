@@ -58,6 +58,13 @@ OSDS_SECURE_COOKIES = os.environ.get(
 # Listings per page on the public category-browse and search pages.
 OSDS_PUBLIC_PAGE_SIZE = 20
 
+# Root of the local-disk media store. Per-tenant subdirectories hang off this,
+# resolved at runtime by directory.storage.get_tenant_storage -- never through
+# settings.STORAGES, which django-storages reads at import time (decisions.md
+# §4). Cloud backends (S3, Azure, GCP) are configured per tenant in the wizard
+# and are a later release (#150); only the local backend is wired today.
+OSDS_MEDIA_ROOT = os.environ.get('OSDS_MEDIA_ROOT', '').strip() or str(BASE_DIR / 'media')
+
 
 # Application definition
 

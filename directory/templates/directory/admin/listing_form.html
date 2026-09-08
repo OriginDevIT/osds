@@ -20,6 +20,31 @@
 </form>
 
 {% if mode == "edit" %}
+  <h2>Media</h2>
+  {% if media_assets %}
+    <ul class="media-list">
+      {% for asset in media_assets %}
+        <li>
+          <img src="/media/{{ asset.public_id }}" alt="{{ asset.alt_text }}" width="120">
+          <span>{{ asset.get_role_display }} — {{ asset.width }}×{{ asset.height }}</span>
+          <form method="post"
+                action="{% url 'directory_admin:listing-media-remove' key=listing_type.key public_id=listing.public_id asset_public_id=asset.public_id %}"
+                style="display:inline">
+            {% csrf_token %}<button type="submit">Remove</button>
+          </form>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">No images yet.</p>
+  {% endif %}
+  <form method="post" enctype="multipart/form-data"
+        action="{% url 'directory_admin:listing-media-add' key=listing_type.key public_id=listing.public_id %}">
+    {% csrf_token %}
+    {{ media_form.as_p }}
+    <button type="submit">Add image</button>
+  </form>
+
   <p class="muted">Visibility: <strong>{{ listing.visibility }}</strong></p>
   <form method="post" action="{% url 'directory_admin:listing-publish' key=listing_type.key public_id=listing.public_id %}" style="display:inline">
     {% csrf_token %}<button type="submit">Publish</button>
