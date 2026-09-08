@@ -6,10 +6,10 @@ from __future__ import annotations
 
 import hashlib
 
-from django.test import Client, TestCase, override_settings
+from django.test import Client, TransactionTestCase, override_settings
 from django.utils import timezone
 
-from audit.models import OutboxEvent
+from audit.models import CommandLog, OutboxEvent
 from tenants.models import InstallSetup, Operator, StaffMembership, Tenant
 
 TOKEN = "known-first-run-token"
@@ -21,7 +21,10 @@ def _final_path(response) -> str:
     return response.request["PATH_INFO"]
 
 
-class WizardBase(TestCase):
+class WizardBase(TransactionTestCase):
+    # create_tenant is a command orchestrator now: it writes the command log
+    # outside the state-change transaction and refuses to run inside one, so
+    # the wizard flow cannot be exercised under a plain TestCase.
     def setUp(self):
         InstallSetup.objects.create(token_hash=TOKEN_HASH)
 
@@ -136,6 +139,23 @@ class HappyPathTests(WizardBase):
         # domain not set yet
         client.post("/setup/done/", {})
         self.assertIsNone(InstallSetup.load().completed_at)
+
+    def test_directory_step_writes_a_tenant_create_command_log_row(self):
+        client = Client()
+        self.unlock(client)
+        self.do_account(client)
+        self.do_directory(client)
+
+        tenant = Tenant.objects.get()
+        row = CommandLog.objects.get(command="tenant.create")
+        self.assertIsNone(row.tenant_id)  # #164: the tenant is not backfilled
+        self.assertEqual(row.outcome, "applied")
+        self.assertEqual(
+            row.result_event_id,
+            OutboxEvent.all_tenants.get(
+                type="tenant.created", subject=tenant.public_id
+            ).event_id,
+        )
 
 
 class ResumeAfterAbandonmentTests(WizardBase):
