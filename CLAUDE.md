@@ -79,7 +79,9 @@ rejected regardless of how well it is written.
 6. **Writes go through the service layer, not the ORM directly.** A view,
    management command, or adapter that saves a model bypasses event emission
    and the command log. Django admin is disabled for tenant data for this
-   reason.
+   reason. The console admin registers `Tenant`, `Operator` and
+   `StaffMembership` — principal and structural models, not tenant data — and
+   writes them through their service functions, never `save_model`.
 
 7. **Consent is a required field** on claim submission and lead capture. Reject
    the write without it. Records granted, timestamp, IP, and the version of the
