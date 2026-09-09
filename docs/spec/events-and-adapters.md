@@ -1,13 +1,20 @@
 # OSDS — Event Schema, Adapter Interface & Entitlements
 
 **Open Source Directory Site**
-**Status:** Draft v0.7 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
+**Status:** Draft v0.8 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
 **Audience:** core maintainers, adapter authors
 
 This document defines the contract between the OSDS core and everything outside it. The core is a multi-tenant directory engine. It knows nothing about email providers, CRMs, payment gateways, or messaging platforms. It emits facts and accepts commands. Adapters translate.
 
 If you are writing an adapter, sections 3, 7 and 8 are the ones you need.
 If you are implementing the paid tiers, section 5 is the whole job.
+
+### Changes from v0.7
+
+- **§3.3.** `import.rolled_back` gains `listings_restored`. Rollback
+  restores updated rows from a pre-image, writes no suppression key, and
+  emits no per-listing `listing.deleted`. Pre-images are nulled at 90 days
+  and a batch past that cannot be rolled back.
 
 ### Changes from v0.6
 
@@ -285,13 +292,32 @@ The only namespace without a `tenant` block on the envelope, since the tenant is
 
 #### `import.*`
 
-| Type                 | Notable data                                                        |
-| -------------------- | ------------------------------------------------------------------- |
-| `import.started`     | `batch_id`, `source`, `row_count`, `started_by`                     |
-| `import.completed`   | `batch_id`, `created`, `updated`, `skipped`, `suppressed`, `errors` |
-| `import.rolled_back` | `batch_id`, `listings_removed`, `rolled_back_by`                    |
+| Type                 | Notable data                                                          |
+| -------------------- | --------------------------------------------------------------------- |
+| `import.started`     | `batch_id`, `source`, `row_count`, `started_by`                       |
+| `import.completed`   | `batch_id`, `created`, `updated`, `skipped`, `suppressed`, `errors`   |
+| `import.rolled_back` | `batch_id`, `listings_removed`, `listings_restored`, `rolled_back_by` |
 
 `suppressed` counts rows matching a `suppression_key` from a prior `listing.deleted` — see §4.1.1.
+
+A batch both creates and updates. **Rollback removes the rows it created
+and restores the rows it updated** to the values they held before the
+batch touched them; `listings_removed` and `listings_restored` count each.
+A rollback that only removed creations would leave every updated row
+carrying imported values with no way back, which is not an undo.
+
+Restoration requires a pre-image of each updated row, captured at update
+time. **A pre-image is a second copy of personal data and is nulled at 90
+days like any other payload (§11.2).** A batch whose pre-images have been
+nulled can no longer be rolled back; the admin UI says so on the batch
+page rather than offering a button that half-works.
+
+**Rollback writes no `suppression_key` and emits no per-listing
+`listing.deleted`.** The suppression key exists so a business an operator
+removed does not reappear on the next upload (§4.1.1). A listing removed
+because the operator undid their own import is not that case, and
+suppressing it would make the undo permanent. `import.rolled_back` is the
+only event a rollback emits.
 
 #### `postal.*`
 
