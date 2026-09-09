@@ -265,7 +265,7 @@ class NoSubscribersTests(_DrainBase):
     def test_event_with_no_subscribers_goes_straight_to_dispatched(self):
         e = self.emit("listing_S", etype="listing.created")
 
-        fan_out_once()
+        fan_out_once(now=timezone.now())
         e.refresh_from_db()
         self.assertEqual(e.status, OutboxEvent.Status.DISPATCHED)
         self.assertIsNotNone(e.dispatched_at)
@@ -302,7 +302,7 @@ class IdempotentFanOutTests(_DrainBase):
         self.register(OkSubscriber())
         e = self.emit("listing_S")
 
-        fan_out_once()
+        fan_out_once(now=timezone.now())
         self.assertEqual(
             OutboxDelivery.all_tenants.filter(event=e).count(), 1
         )
@@ -311,7 +311,7 @@ class IdempotentFanOutTests(_DrainBase):
         OutboxEvent.all_tenants.filter(pk=e.pk).update(
             status=OutboxEvent.Status.PENDING
         )
-        fan_out_once()
+        fan_out_once(now=timezone.now())
 
         self.assertEqual(
             OutboxDelivery.all_tenants.filter(event=e).count(), 1
@@ -345,7 +345,7 @@ class StaleRecordTests(_DrainBase):
         sub = ScriptedSubscriber(["retry", "ok", "retry"])
         self.register(sub)
         e = self.emit("listing_S")
-        fan_out_once()
+        fan_out_once(now=timezone.now())
         d_pk = self.delivery(e).pk
 
         t0 = timezone.now()
@@ -432,7 +432,7 @@ class ClockResolutionRegressionTests(_DrainBase):
 
         self.register(OkSubscriber())
         self.emit("listing_S")
-        with mock.patch("audit.worker.drain.timezone.now", strictly_monotonic):
+        with mock.patch("django.utils.timezone.now", strictly_monotonic):
             stats = drain_once(now=strictly_monotonic())
 
         self.assertEqual(stats.delivered, 1)
@@ -441,7 +441,16 @@ class ClockResolutionRegressionTests(_DrainBase):
 class WorkerSourceInvariantTests(SimpleTestCase):
     def _sources(self):
         root = pathlib.Path(audit.worker.__file__).parent
-        return sorted(root.glob("*.py"))
+        paths = sorted(root.glob("*.py"))
+        # the run_worker command drives the worker and lives outside the
+        # package -- hold it to the same two rules
+        paths.append(
+            pathlib.Path(audit.__file__).parent
+            / "management"
+            / "commands"
+            / "run_worker.py"
+        )
+        return paths
 
     def test_worker_imports_no_adapter_code(self):
         for path in self._sources():
