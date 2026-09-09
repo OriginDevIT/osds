@@ -1,0 +1,12 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<div id="content-main">
+  <form method="post" novalidate>{% csrf_token %}
+    {{ form.as_div }}
+    <div class="submit-row">
+      <input type="submit" value="Save" class="default">
+    </div>
+  </form>
+</div>
+{% endblock %}
