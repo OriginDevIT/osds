@@ -104,7 +104,7 @@ def _delivery_tenant(event: OutboxEvent):
     return None if event.type.startswith(_TENANT_PREFIX) else event.tenant
 
 
-def fan_out_once() -> FanOutResult:
+def fan_out_once(*, now=None) -> FanOutResult:
     """Create the missing ``OutboxDelivery`` rows for every ``pending`` event
     and mark each event ``dispatched``.
 
@@ -112,8 +112,13 @@ def fan_out_once() -> FanOutResult:
     flip finds the rows through ``get_or_create`` and only flips the status.
     An event with no subscribers goes straight to ``dispatched`` with zero
     deliveries.
+
+    ``now`` is the drain pass's clock. A fresh delivery is stamped
+    ``next_attempt_at = now`` -- *the same value the pass then claims with* --
+    so it is due immediately regardless of clock resolution. ``drain_once``
+    always passes it; a standalone caller may omit it and get wall-clock time.
     """
-    now = timezone.now()
+    now = now or timezone.now()
     events = created = 0
 
     pending = list(
@@ -290,11 +295,12 @@ def attempt_delivery(delivery: OutboxDelivery, *, now) -> str:
 def drain_once(*, now, batch: int = 100) -> DrainStats:
     """One pass: fan out pending events, then attempt every due,
     head-of-line-clear delivery. No loop -- the caller schedules the next
-    pass. ``now`` is injected; it must not be behind the wall clock (fresh
-    deliveries are stamped ``next_attempt_at = timezone.now()`` at fan-out)."""
+    pass. ``now`` is the pass's clock: it is used to stamp fresh deliveries,
+    to select what is due, and as the attempt timestamp, so a pass is
+    self-consistent whatever the clock's resolution."""
     stats = DrainStats()
 
-    fanned = fan_out_once()
+    fanned = fan_out_once(now=now)
     stats.events_fanned_out = fanned.events
     stats.deliveries_created = fanned.deliveries
 

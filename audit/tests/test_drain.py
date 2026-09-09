@@ -8,6 +8,7 @@ injected via ``now=``; jitter is handled with bounds and sampling.
 from __future__ import annotations
 
 import ast
+import itertools
 import pathlib
 from datetime import timedelta
 from unittest import mock
@@ -16,7 +17,6 @@ from django.test import SimpleTestCase, TransactionTestCase
 from django.utils import timezone
 
 import audit.worker
-import osds.adapters
 from audit.models import CommandLog, OutboxDelivery, OutboxEvent
 from audit.outbox import emit
 from audit.worker import drain
@@ -28,7 +28,7 @@ from audit.worker.drain import (
     drain_once,
     fan_out_once,
 )
-from osds.adapters import Result
+from osds.adapters import Result, override_subscribers
 from osds.tenancy import get_current_tenant, tenant_context
 from tenants.models import Tenant
 
@@ -141,18 +141,17 @@ class KeyboardInterruptSubscriber:
 # --------------------------------------------------------------------------
 class _DrainBase(TransactionTestCase):
     def setUp(self):
-        # An empty registry and a silenced NOTIFY -- neither is under test here.
-        reg = mock.patch.object(osds.adapters, "_REGISTRY", [])
-        reg.start()
-        self.addCleanup(reg.stop)
-        notify = mock.patch("audit.outbox._notify_outbox")
+        # The supported seam: an empty registry for the test, restored on
+        # cleanup. ``self.subscribers`` is the live list.
+        self.subscribers = self.enterContext(override_subscribers())
+        notify = mock.patch("audit.outbox._notify_outbox")  # neither under test
         notify.start()
         self.addCleanup(notify.stop)
 
         self.tenant = Tenant.objects.create(slug="acme", name="Acme")
 
     def register(self, subscriber):
-        osds.adapters._REGISTRY.append(subscriber)
+        self.subscribers.append(subscriber)
 
     def emit(self, subject, *, tenant=None, etype="listing.updated"):
         return emit(etype, subject=subject, tenant=tenant or self.tenant)
@@ -400,11 +399,43 @@ class KeyboardInterruptTests(_DrainBase):
         self.assertGreater(d.next_attempt_at, t0)  # only the deadline moved
 
         # once the deadline passes it is picked up again like any other row
-        osds.adapters._REGISTRY[:] = [OkSubscriber()]
+        self.subscribers[:] = [OkSubscriber()]
         drain_once(now=t0 + timedelta(seconds=CLAIM_VISIBILITY_SECONDS + 5))
         d.refresh_from_db()
         self.assertEqual(d.status, OutboxDelivery.Status.DELIVERED)
         self.assertEqual(d.attempt, 1)
+
+
+class ClockResolutionRegressionTests(_DrainBase):
+    """A drain pass must be self-consistent whatever the clock's resolution --
+    the CI failure was fan_out_once stamping ``next_attempt_at`` with a fresh
+    ``timezone.now()`` strictly later than the ``now`` the same pass claims
+    with (invisible on Windows's coarse clock, fatal on Linux's fine one)."""
+
+    def test_fan_out_stamps_deliveries_with_the_injected_now(self):
+        self.register(OkSubscriber())
+        e = self.emit("listing_S")
+        marker = timezone.now() + HOUR  # deliberately not wall-clock "now"
+
+        fan_out_once(now=marker)
+
+        self.assertEqual(self.delivery(e).next_attempt_at, marker)
+        e.refresh_from_db()
+        self.assertEqual(e.dispatched_at, marker)
+
+    def test_drain_delivers_when_the_clock_never_repeats(self):
+        real_now = timezone.now
+        ticks = itertools.count(1)
+
+        def strictly_monotonic():  # a fine-grained (Linux) clock
+            return real_now() + timedelta(microseconds=next(ticks))
+
+        self.register(OkSubscriber())
+        self.emit("listing_S")
+        with mock.patch("audit.worker.drain.timezone.now", strictly_monotonic):
+            stats = drain_once(now=strictly_monotonic())
+
+        self.assertEqual(stats.delivered, 1)
 
 
 class WorkerSourceInvariantTests(SimpleTestCase):

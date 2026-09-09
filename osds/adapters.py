@@ -13,6 +13,8 @@ registered -- which is nothing.
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -75,3 +77,24 @@ def subscribers_for(event_type: str) -> "list[Subscriber]":
     """Subscribers that want ``event_type``. Empty until an adapter registers
     (mvp-plan block 5); ``subscribes`` pattern matching lands with the drain."""
     return list(_REGISTRY)
+
+
+@contextlib.contextmanager
+def override_subscribers(
+    *subscribers: Subscriber,
+) -> "Iterator[list[Subscriber]]":
+    """Install exactly ``subscribers`` for the duration of the block, then
+    restore whatever was registered before.
+
+    The registry is module state; a test that appends to ``_REGISTRY`` and
+    trusts a later test to have cleared it is relying on isolation by
+    convention. This is the supported seam: a ``with`` block, or
+    ``self.enterContext(override_subscribers(...))`` in ``setUp``. The yielded
+    list is live -- append to it or slice-assign it within the block.
+    """
+    global _REGISTRY
+    saved, _REGISTRY = _REGISTRY, list(subscribers)
+    try:
+        yield _REGISTRY
+    finally:
+        _REGISTRY = saved
