@@ -99,7 +99,13 @@ radius filter. Sitemap index and `robots.txt`.
 and the public site renders and searches them. Met 2026-09-08 across six PRs,
 closing with the sitemap index and `robots.txt`.
 
-### 3 — Population and claims
+### 3 — Worker, population and claims
+
+Worker first (#171). `run_worker`, the tick loop, and the outbox drain with
+retry and dead-letter. Pulled forward from block 5: CSV import is specified as
+worker-processed, and a several-hundred-row import cannot run in a request.
+The SMTP and webhook adapters stay in block 5 — the worker runs with an empty
+adapter registry and drains to nothing, which is all import needs from it.
 
 CSV import: upload stores the file and creates a batch, the worker processes
 it, the admin page polls status. Column mapping, suppression-key check, batch
@@ -109,8 +115,8 @@ Claims: submission with consent, email OTP, manual review with mandatory notes,
 existing-contact notification on approval, dispute to queue. Lead capture with
 consent. Owner dashboard — enough to see leads and edit the listing.
 
-**Done when** several hundred listings import cleanly and an owner claims one
-and receives a lead.
+**Done when** several hundred listings import cleanly on the worker and an
+owner claims one and receives a lead.
 
 ### 4 — Money
 
@@ -127,12 +133,12 @@ published.
 
 ### 5 — Integration and release
 
-Outbox drain with retry and dead-letter. Worker tick loop for scheduled jobs.
-SMTP and webhook adapters. Command log and access log wired to the service
-layer. Adapter documentation. README, compose file, release tag.
+SMTP and webhook adapters. Scheduled tick jobs registered — payload nulling at
+90 days, sitemap regeneration (#159), `SearchReindexJob` drain (#132). Command
+log and access log wired to the service layer. Adapter documentation. README,
+compose file, release tag.
 
-**Done when** a webhook fires on every event a third party would care about,
-and the install instructions are one command plus a browser.
+The drain and the tick loop themselves moved to block 3 (#171).
 
 ---
 
