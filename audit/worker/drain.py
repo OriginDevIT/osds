@@ -48,7 +48,6 @@ from datetime import timedelta
 
 from django.db import transaction
 from django.db.models import Exists, OuterRef
-from django.utils import timezone
 
 from audit.envelope import to_wire
 from audit.models import OutboxDelivery, OutboxEvent
@@ -104,7 +103,7 @@ def _delivery_tenant(event: OutboxEvent):
     return None if event.type.startswith(_TENANT_PREFIX) else event.tenant
 
 
-def fan_out_once(*, now=None) -> FanOutResult:
+def fan_out_once(*, now) -> FanOutResult:
     """Create the missing ``OutboxDelivery`` rows for every ``pending`` event
     and mark each event ``dispatched``.
 
@@ -113,12 +112,11 @@ def fan_out_once(*, now=None) -> FanOutResult:
     An event with no subscribers goes straight to ``dispatched`` with zero
     deliveries.
 
-    ``now`` is the drain pass's clock. A fresh delivery is stamped
-    ``next_attempt_at = now`` -- *the same value the pass then claims with* --
-    so it is due immediately regardless of clock resolution. ``drain_once``
-    always passes it; a standalone caller may omit it and get wall-clock time.
+    ``now`` is the drain pass's clock and is required -- ``drain_once`` always
+    passes it. A fresh delivery is stamped ``next_attempt_at = now``, *the same
+    value the pass then claims with*, so it is due immediately regardless of
+    clock resolution.
     """
-    now = now or timezone.now()
     events = created = 0
 
     pending = list(
