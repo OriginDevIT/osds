@@ -80,4 +80,14 @@ urlpatterns = [
         views.listing_media_remove,
         name="listing-media-remove",
     ),
+    # CSV import (upload + mapping; the worker is a later PR)
+    path("imports/", views.import_list, name="import-list"),
+    path("imports/new/", views.import_create, name="import-create"),
+    path("imports/<str:public_id>/", views.import_detail, name="import-detail"),
+    path(
+        "imports/<str:public_id>/mapping/",
+        views.import_mapping,
+        name="import-mapping",
+    ),
+    path("imports/<str:public_id>/run/", views.import_run, name="import-run"),
 ]

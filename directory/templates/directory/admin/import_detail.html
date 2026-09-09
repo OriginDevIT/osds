@@ -1,0 +1,69 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Import {{ batch.public_id }}{% endblock %}
+{% block content %}
+<h1>CSV import</h1>
+<table>
+  <tr><th>File</th><td>{{ batch.original_filename|default:"—" }}</td></tr>
+  <tr><th>Listing type</th><td>{{ batch.listing_type.key|default:"—" }}</td></tr>
+  <tr><th>Uploaded by</th><td>{{ batch.started_by.email|default:"—" }}</td></tr>
+  <tr><th>Uploaded</th><td>{{ batch.created_at }}</td></tr>
+  <tr><th>Delimiter</th><td><code>{{ batch.delimiter }}</code></td></tr>
+  <tr><th>Encoding</th><td>{{ batch.encoding }}</td></tr>
+  <tr><th>Status</th><td>{{ batch.get_status_display }}</td></tr>
+  <tr><th>Rows</th><td class="muted">— (counted when processing runs)</td></tr>
+</table>
+
+<h2>Column mapping</h2>
+{% if can_map %}
+<form method="post" action="{% url 'directory_admin:import-mapping' public_id=batch.public_id %}">
+  {% csrf_token %}
+{% endif %}
+<table>
+  <thead><tr><th>CSV column</th><th>Maps to</th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td>{{ row.header }}</td>
+      <td>
+        {% if can_map %}
+          <select name="map__{{ row.index }}">
+            <option value="">— ignore —</option>
+            {% for value, label in targets %}
+              <option value="{{ value }}"{% if row.selected == value %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        {% else %}
+          {{ row.selected|default:"— ignored —" }}
+        {% endif %}
+      </td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="2" class="muted">No columns detected.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% if can_map %}
+  <button type="submit">Save mapping</button>
+</form>
+<form method="post" action="{% url 'directory_admin:import-run' public_id=batch.public_id %}">
+  {% csrf_token %}
+  <button type="submit"{% if not batch.column_mapping %} disabled{% endif %}>Run import</button>
+</form>
+{% else %}
+  <p class="muted">Mapping is locked once the import is queued.</p>
+{% endif %}
+
+<h2>Result</h2>
+{% if batch.status == "pending" %}
+  <p class="muted">Queued — the importer will process this. No worker in this build yet.</p>
+{% endif %}
+<table>
+  <tr><th>Created</th><td>{{ batch.created_count }}</td></tr>
+  <tr><th>Updated</th><td>{{ batch.updated_count }}</td></tr>
+  <tr><th>Skipped</th><td>{{ batch.skipped_count }}</td></tr>
+  <tr><th>Suppressed</th><td>{{ batch.suppressed_count }}</td></tr>
+  <tr><th>Errors</th><td>{{ batch.error_count }}</td></tr>
+</table>
+<p class="muted">Counts populate when processing runs.</p>
+<p><a href="{% url 'directory_admin:import-list' %}">Back to imports</a></p>
+{% endblock %}

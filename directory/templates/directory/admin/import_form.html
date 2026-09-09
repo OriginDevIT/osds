@@ -1,0 +1,23 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}New CSV import{% endblock %}
+{% block content %}
+<h1>New CSV import</h1>
+{% if form.non_field_errors %}
+  <ul class="errors">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>
+{% endif %}
+<form method="post" enctype="multipart/form-data">
+  {% csrf_token %}
+  <label for="id_listing_type">Listing type</label>
+  {{ form.listing_type }}
+  {% for e in form.listing_type.errors %}<div class="errors">{{ e }}</div>{% endfor %}
+  <label for="id_file">CSV file</label>
+  {{ form.file }}
+  {% for e in form.file.errors %}<div class="errors">{{ e }}</div>{% endfor %}
+  <p class="muted">
+    Only the header row is read now. Data rows are processed after you map the
+    columns and run the import.
+  </p>
+  <button type="submit">Upload</button>
+</form>
+<p><a href="{% url 'directory_admin:import-list' %}">Back</a></p>
+{% endblock %}
