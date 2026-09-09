@@ -1,9 +1,19 @@
-"""The three logs (spec §11).
+"""The event outbox and the three logs (spec §11).
 
-- ``OutboxEvent`` -- the Postgres outbox / event log. Written in the same
-  transaction as the state change (by the service layer, next PR), drained by
-  the worker. Tenant-scoped: ``tenant`` is NOT NULL and the row records it even
-  though the serialised envelope omits the tenant block for ``tenant.*`` types.
+- ``OutboxEvent`` -- the Postgres outbox / event log, written in the same
+  transaction as the state change it records. ``status`` tracks *fan-out*, not
+  delivery: ``pending`` until the worker creates one ``OutboxDelivery`` per
+  subscribed adapter, then ``dispatched``. Per-adapter delivery progress --
+  attempts, backoff, dead-lettering -- lives on ``OutboxDelivery``. ``tenant``
+  is NOT NULL here; the serialised envelope still omits the tenant block for
+  ``tenant.*`` types (``audit.envelope.to_wire``).
+- ``OutboxDelivery`` -- one row per ``(event, adapter)``, carrying the retry
+  state machine. ``tenant`` is nullable (a ``tenant.*`` event has no tenant
+  block, spec §8) and ``subject`` is denormalised off the event so the
+  per-subject head-of-line check never has to join ``outbox_events``. Managers
+  mirror ``OutboxEvent`` -- scoped default plus ``all_tenants``; the worker
+  drains it through ``all_tenants`` and enters each delivery's tenant
+  explicitly. Not the §11.2 ``command_log`` exception.
 - ``CommandLog`` -- every command attempted, including rejected and blocked.
   Written *outside* the command transaction (spec §11.2), so ``tenant`` is
   nullable: a malformed command may name no resolvable tenant. Plain manager,
@@ -22,8 +32,16 @@ from osds.ids import new_ulid
 
 
 class OutboxEvent(models.Model):
+    """An emitted event. ``status`` is about fan-out, not delivery: it goes
+    ``pending`` -> ``dispatched`` once the worker has written an
+    ``OutboxDelivery`` row for every subscribed adapter (zero or more). Whether
+    each adapter actually received it -- and how many attempts that took -- is
+    on the ``OutboxDelivery`` rows, never here.
+    """
+
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
+        DISPATCHED = "dispatched", "Dispatched"
         DELIVERED = "delivered", "Delivered"
         DEAD = "dead", "Dead-lettered"
 
@@ -63,6 +81,9 @@ class OutboxEvent(models.Model):
     )
     payload_nulled_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(default=timezone.now, editable=False)
+    # Set when fan-out completes -- OutboxDelivery rows now exist for every
+    # subscriber (or there were none). Not "delivered".
+    dispatched_at = models.DateTimeField(null=True, blank=True)
     delivered_at = models.DateTimeField(null=True, blank=True)
 
     objects = TenantScopedManager()
@@ -79,6 +100,75 @@ class OutboxEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.type}:{self.event_id}"
+
+
+class OutboxDelivery(models.Model):
+    """One event's delivery to one adapter. Created by the worker on fan-out;
+    it then carries the retry state machine (spec §8.2): exponential jittered
+    backoff, 12 attempts, then ``dead`` in the tenant DLQ with the envelope
+    still reachable through ``event``.
+
+    Managers mirror ``OutboxEvent``: the scoped default plus ``all_tenants``
+    for the drain. This is *not* the §11.2 ``command_log`` exception -- a
+    nullable ``tenant`` is not a licence for a plain manager, and
+    ``OutboxEvent`` already carries null-tenant-adjacent ``tenant.*`` rows
+    under the scoped default. The drain reaches across tenants through
+    ``all_tenants`` and enters each delivery's tenant explicitly.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        DELIVERED = "delivered", "Delivered"
+        DEAD = "dead", "Dead-lettered"
+
+    event = models.ForeignKey(
+        OutboxEvent, on_delete=models.PROTECT, related_name="deliveries"
+    )
+    # Nullable: a tenant.* event carries no tenant block (spec §8), and
+    # tenant.created is emitted on every tenant creation.
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="deliveries",
+    )
+    # Denormalised from ``event.subject``: the per-subject head-of-line
+    # NOT EXISTS runs on every claim and must not join ``outbox_events``.
+    subject = models.CharField(max_length=40)
+    adapter_id = models.CharField(max_length=100)
+
+    status = models.CharField(
+        max_length=10, choices=Status.choices, default=Status.PENDING
+    )
+    # Count of *completed* attempts. A crash mid-attempt is not an attempt.
+    attempt = models.PositiveSmallIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(default=timezone.now)
+    first_attempted_at = models.DateTimeField(null=True, blank=True)
+    last_attempted_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    objects = TenantScopedManager()
+    all_tenants = models.Manager()
+
+    class Meta:
+        db_table = "outbox_deliveries"
+        ordering = ["id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["event", "adapter_id"],
+                name="uniq_delivery_event_adapter",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["status", "next_attempt_at"]),
+            models.Index(fields=["adapter_id", "subject", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.adapter_id}:{self.status}(attempt {self.attempt})"
 
 
 class CommandLog(models.Model):
