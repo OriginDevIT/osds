@@ -10,21 +10,30 @@ parallel arrays.
 from __future__ import annotations
 
 from django.contrib import messages
+from django.core.files.base import ContentFile
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.crypto import get_random_string
 
-from directory import media, normalize, services
+from audit.command_log import log_conclude, log_received, require_autocommit
+from directory import csv_import, media, normalize, services
 from directory.access import tenant_admin_required
 from directory.admin_forms import (
     CategoryForm,
+    ImportUploadForm,
     ListingTypeForm,
     MediaUploadForm,
     build_listing_form_class,
 )
 from directory.field_schema import FIELD_TYPES, SchemaError, validate_type_schema
-from directory.models import Category, Listing, ListingType, MediaAsset
-from directory.storage import DeferredFeatureError
+from directory.models import (
+    Category,
+    ImportBatch,
+    Listing,
+    ListingType,
+    MediaAsset,
+)
+from directory.storage import DeferredFeatureError, get_tenant_storage
 from tenants.models import StaffMembership
 
 _ADMIN = tenant_admin_required()
@@ -567,3 +576,173 @@ def listing_media_remove(request, key, public_id, asset_public_id):
     return redirect(
         "directory_admin:listing-edit", key=key, public_id=public_id
     )
+
+
+# --- CSV import: upload and column mapping (spec §4.1.1, §7.1) -------------
+#
+# PR 1 only. No worker, no row processing, no import.* events. The upload
+# writes one ImportBatch row and a matching import.upload command-log pair
+# (§11.2); the file lands in tenant storage. "Run import" just moves the batch
+# to `pending` -- nothing consumes it yet.
+
+
+@_EDITOR
+def import_list(request):
+    return render(
+        request,
+        "directory/admin/import_list.html",
+        {"batches": ImportBatch.objects.order_by("-id")},
+    )
+
+
+def _store_upload(request, *, upload, raw, listing_type, headers, delimiter, encoding):
+    """Write the ImportBatch row and the stored file, bracketed by an
+    import.upload command-log pair. Runs in autocommit (§11.2)."""
+    require_autocommit()
+    row = log_received(
+        command="import.upload",
+        tenant=request.tenant,
+        idempotency_key=None,
+        actor=_actor(request),
+        trace_id=None,
+        origin="",
+        payload={
+            "filename": (upload.name or "")[:255],
+            "listing_type": listing_type.key,
+            "bytes": len(raw),
+            "delimiter": delimiter,
+            "encoding": encoding,
+            "headers": headers,
+            "started_by": request.user.public_id,
+        },
+    )
+    try:
+        storage = get_tenant_storage(request.tenant)
+    except DeferredFeatureError as exc:
+        log_conclude(row, outcome="rejected", problem={"storage": str(exc)})
+        raise
+
+    # Any failure past here leaves the row unconcluded -- the "threw mid-apply"
+    # record (§11.2).
+    batch = ImportBatch(
+        tenant=request.tenant,
+        listing_type=listing_type,
+        source="csv",
+        status=ImportBatch.Status.MAPPING,
+        original_filename=(upload.name or "")[:255],
+        detected_headers=headers,
+        delimiter=delimiter,
+        encoding=encoding,
+        has_header=True,
+        started_by=request.user,
+    )
+    batch.stored_path = storage.save(
+        f"imports/{batch.public_id}.csv", ContentFile(raw)
+    )
+    batch.save()
+
+    log_conclude(row, outcome="applied")
+    return batch
+
+
+@_EDITOR
+def import_create(request):
+    form = ImportUploadForm(request.POST or None, request.FILES or None)
+    if request.method == "POST" and form.is_valid():
+        upload = form.cleaned_data["file"]
+        listing_type = form.cleaned_data["listing_type"]
+        raw = upload.read()
+        headers, delimiter, encoding = csv_import.read_header(raw)
+        if not headers:
+            form.add_error("file", "No header row found in the file.")
+        elif len(headers) > csv_import.HEADER_LIMIT:
+            form.add_error(
+                "file",
+                f"{len(headers)} columns detected; the limit is "
+                f"{csv_import.HEADER_LIMIT}.",
+            )
+        else:
+            try:
+                batch = _store_upload(
+                    request,
+                    upload=upload,
+                    raw=raw,
+                    listing_type=listing_type,
+                    headers=headers,
+                    delimiter=delimiter,
+                    encoding=encoding,
+                )
+            except DeferredFeatureError as exc:
+                form.add_error(None, str(exc))
+            else:
+                messages.success(
+                    request, "Uploaded. Map the columns, then run the import."
+                )
+                return redirect(
+                    "directory_admin:import-detail", public_id=batch.public_id
+                )
+    return render(request, "directory/admin/import_form.html", {"form": form})
+
+
+def _get_batch(request, public_id) -> ImportBatch:
+    return get_object_or_404(
+        ImportBatch, tenant=request.tenant, public_id=public_id
+    )
+
+
+@_EDITOR
+def import_detail(request, public_id):
+    batch = _get_batch(request, public_id)
+    mapping = batch.column_mapping or {}
+    rows = [
+        {"index": i, "header": h, "selected": mapping.get(h, "")}
+        for i, h in enumerate(batch.detected_headers or [])
+    ]
+    return render(
+        request,
+        "directory/admin/import_detail.html",
+        {
+            "batch": batch,
+            "rows": rows,
+            "targets": csv_import.allowed_targets(batch.listing_type),
+            "can_map": batch.status == ImportBatch.Status.MAPPING,
+        },
+    )
+
+
+@_EDITOR
+def import_mapping(request, public_id):
+    batch = _get_batch(request, public_id)
+    if request.method == "POST" and batch.status == ImportBatch.Status.MAPPING:
+        submitted = {
+            header: request.POST.get(f"map__{i}", "")
+            for i, header in enumerate(batch.detected_headers or [])
+        }
+        try:
+            cleaned = csv_import.validate_mapping(
+                submitted,
+                headers=batch.detected_headers or [],
+                listing_type=batch.listing_type,
+            )
+        except csv_import.MappingError as exc:
+            messages.error(request, str(exc))
+        else:
+            batch.column_mapping = cleaned
+            batch.save(update_fields=["column_mapping"])
+            messages.success(request, "Column mapping saved.")
+    return redirect("directory_admin:import-detail", public_id=public_id)
+
+
+@_EDITOR
+def import_run(request, public_id):
+    batch = _get_batch(request, public_id)
+    if request.method == "POST" and batch.status == ImportBatch.Status.MAPPING:
+        if not batch.column_mapping:
+            messages.error(request, "Save a column mapping first.")
+        else:
+            batch.status = ImportBatch.Status.PENDING
+            batch.save(update_fields=["status"])
+            messages.success(
+                request, "Import queued. (No worker in this build yet.)"
+            )
+    return redirect("directory_admin:import-detail", public_id=public_id)

@@ -180,6 +180,7 @@ class ImportBatch(models.Model):
     is block 3; the model exists now so provenance FKs have a target."""
 
     class Status(models.TextChoices):
+        MAPPING = "mapping", "Awaiting column mapping"
         PENDING = "pending", "Pending"
         PROCESSING = "processing", "Processing"
         COMPLETED = "completed", "Completed"
@@ -189,17 +190,34 @@ class ImportBatch(models.Model):
     tenant = models.ForeignKey(
         "tenants.Tenant", on_delete=models.CASCADE, related_name="import_batches"
     )
+    # The type every row in this file is upserted as. Nullable only so the
+    # migration applies to a zero-row table; the upload form always sets it.
+    listing_type = models.ForeignKey(
+        ListingType,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="import_batches",
+    )
     public_id = models.CharField(
         max_length=40, unique=True, editable=False, default=imp_id
     )
     source = models.CharField(max_length=20, default="csv")
     status = models.CharField(
-        max_length=12, choices=Status.choices, default=Status.PENDING
+        max_length=12, choices=Status.choices, default=Status.MAPPING
     )
     original_filename = models.CharField(max_length=255, blank=True)
     stored_path = models.CharField(max_length=500, blank=True)
+    # Header row read from the file at upload (no data rows are parsed then);
+    # drives the mapping UI. ``column_mapping`` is {csv header: upsert target}.
+    detected_headers = models.JSONField(default=list, blank=True)
+    delimiter = models.CharField(max_length=4, default=",")
+    encoding = models.CharField(max_length=32, default="utf-8-sig")
+    has_header = models.BooleanField(default=True)
     column_mapping = models.JSONField(default=dict, blank=True)
     row_count = models.PositiveIntegerField(default=0)
+    # Resume cursor for the chunked worker pass (PR 3): rows consumed so far.
+    processed_row_count = models.PositiveIntegerField(default=0)
     created_count = models.PositiveIntegerField(default=0)
     updated_count = models.PositiveIntegerField(default=0)
     skipped_count = models.PositiveIntegerField(default=0)

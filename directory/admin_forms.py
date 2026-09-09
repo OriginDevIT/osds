@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from django import forms
 
-from directory.models import Category, Listing
+from directory.csv_import import MAX_UPLOAD_BYTES
+from directory.models import Category, Listing, ListingType
 
 
 class ListingTypeForm(forms.Form):
@@ -47,6 +48,30 @@ class MediaUploadForm(forms.Form):
     role = forms.ChoiceField(choices=ROLE_CHOICES)
     image = forms.FileField()
     alt_text = forms.CharField(max_length=255, required=False, label="Alt text")
+
+
+class ImportUploadForm(forms.Form):
+    """The CSV upload: a listing type and the file. The header row is read in
+    the view; this form only bounds the size and scopes the type choice to the
+    tenant."""
+
+    listing_type = forms.ModelChoiceField(
+        queryset=ListingType.all_tenants.none(), empty_label=None
+    )
+    file = forms.FileField(label="CSV file")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Tenant in ambient scope (this is a request); ``objects`` is scoped.
+        self.fields["listing_type"].queryset = ListingType.objects.order_by("key")
+
+    def clean_file(self):
+        upload = self.cleaned_data["file"]
+        if upload.size > MAX_UPLOAD_BYTES:
+            raise forms.ValidationError(
+                f"File is {upload.size} bytes; the limit is {MAX_UPLOAD_BYTES}."
+            )
+        return upload
 
 
 class CategoryForm(forms.Form):
