@@ -26,6 +26,8 @@ from audit.worker.tick import (
     register_tick_job,
     tick_once,
 )
+from directory.csv_import import ROWS_PER_PASS
+from directory.importing import ImportStats
 
 MINUTE = timedelta(seconds=60)
 
@@ -38,10 +40,14 @@ class WorkerPassTests(SimpleTestCase):
         self.drain = self.enterContext(
             mock.patch("audit.worker.loop.drain_once")
         )
+        self.imp = self.enterContext(
+            mock.patch("audit.worker.loop.import_once")
+        )
         self.tick = self.enterContext(
             mock.patch("audit.worker.loop.tick_once")
         )
         self.drain.return_value = DrainStats()  # idle unless a test says otherwise
+        self.imp.return_value = ImportStats()
 
     def _pass(self, *, now, last_tick, wait):
         return worker_pass(
@@ -85,10 +91,17 @@ class WorkerPassTests(SimpleTestCase):
         self._pass(now=timezone.now(), last_tick=None, wait=wait)
         wait.assert_not_called()
 
-    def test_one_clock_value_threads_through_drain_and_tick(self):
+    def test_pass_that_processed_import_rows_does_not_wait(self):
+        self.imp.return_value = ImportStats(rows_processed=5)
+        wait = mock.Mock()
+        self._pass(now=timezone.now(), last_tick=None, wait=wait)
+        wait.assert_not_called()
+
+    def test_one_clock_value_threads_through_drain_import_and_tick(self):
         now = timezone.now()
         self._pass(now=now, last_tick=None, wait=mock.Mock())
         self.drain.assert_called_once_with(now=now)
+        self.imp.assert_called_once_with(now=now, limit=ROWS_PER_PASS)
         self.tick.assert_called_once_with(now=now)
 
 

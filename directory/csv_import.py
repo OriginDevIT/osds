@@ -22,6 +22,13 @@ HEADER_LIMIT = 200
 # the request.
 _HEADER_SNIFF_BYTES = 64 * 1024
 
+# Data rows a single worker pass processes before returning. Bounds how long
+# one import can hold the worker off the drain.
+ROWS_PER_PASS = 50
+
+# A single "categories" column carries several slugs, e.g. "plumbers|emergency".
+CATEGORY_SPLIT = "|"
+
 # The upsert targets a CSV column may be mapped to. Every entry is a key path
 # that ``directory.services._apply_payload`` / ``_apply_upsert`` actually reads
 # -- a drift test enforces it. ``tier``, ``status``, ``visibility`` and
@@ -122,3 +129,32 @@ def validate_mapping(
     if "id" not in seen and "name" not in seen:
         raise MappingError("map a column to the name (needed to create a listing)")
     return cleaned
+
+
+def build_payload(cells, headers: "list[str]", column_mapping: dict) -> dict:
+    """Turn one CSV data row into a ``listing.upsert`` payload.
+
+    Cells are matched to headers by position. Dotted targets (``location.*``,
+    ``contact.*``, ``custom_fields.*``) nest; ``categories`` splits on
+    ``CATEGORY_SPLIT``. An unmapped column and an empty cell are both left out
+    -- an omitted field is untouched on update (spec §7.1), which is what an
+    absent CSV value should mean.
+    """
+    row = dict(zip(headers, cells))
+    payload: dict = {}
+    for header, target in column_mapping.items():
+        value = (row.get(header) or "").strip()
+        if not value:
+            continue
+        if target == "categories":
+            payload["categories"] = [
+                part.strip()
+                for part in value.split(CATEGORY_SPLIT)
+                if part.strip()
+            ]
+        elif "." in target:
+            head, leaf = target.split(".", 1)
+            payload.setdefault(head, {})[leaf] = value
+        else:
+            payload[target] = value
+    return payload

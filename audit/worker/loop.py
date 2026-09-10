@@ -4,12 +4,14 @@
 tests drive it directly:
 
 * it reads the clock once (the caller passes the value) and threads that one
-  value through the drain, the tick-due check and the tick jobs;
-* it drains the outbox, then runs the tick jobs if ``tick_period`` has elapsed
-  since ``last_tick``, and returns the new ``last_tick``;
+  value through the drain, the CSV import row loop, the tick-due check and the
+  tick jobs;
+* it drains the outbox, pushes one bounded chunk of any in-progress CSV
+  import, then runs the tick jobs if ``tick_period`` has elapsed since
+  ``last_tick``, and returns the new ``last_tick``;
 * it calls ``wait`` only when the pass found nothing to do. A pass that fanned
-  out an event or attempted a delivery goes straight round again -- a backlog
-  drains without sleeping between passes.
+  out an event, attempted a delivery or processed an import row goes straight
+  round again -- a backlog drains without sleeping between passes.
 
 ``run_loop`` is the ``while True`` around it. It holds ``last_tick``, reads the
 clock once per pass, and is imported by no test. It has no iteration count and
@@ -23,6 +25,8 @@ from datetime import datetime, timedelta
 
 from audit.worker.drain import drain_once
 from audit.worker.tick import tick_once
+from directory.csv_import import ROWS_PER_PASS
+from directory.importing import import_once
 
 # The latency floor when a NOTIFY is missed (listener reconnecting, Postgres
 # restarted): the drain still runs every poll interval, selecting on status and
@@ -40,15 +44,20 @@ def worker_pass(*, now, last_tick, tick_period, wait) -> datetime:
     ``wait`` is the idle-wait seam -- ``OutboxListener.wait`` in the command,
     a spy in tests. Returns the tick time to carry into the next pass.
     """
-    stats = drain_once(now=now)
+    drain = drain_once(now=now)
+    imp = import_once(now=now, limit=ROWS_PER_PASS)
 
     new_last_tick = last_tick
     if last_tick is None or now - last_tick >= tick_period:
         tick_once(now=now)
         new_last_tick = now
 
-    claimed_work = bool(stats.events_fanned_out or stats.deliveries_attempted)
-    if not claimed_work:
+    did_work = bool(
+        drain.events_fanned_out
+        or drain.deliveries_attempted
+        or imp.rows_processed
+    )
+    if not did_work:
         wait()
     return new_last_tick
 
