@@ -8,6 +8,7 @@ TransactionTestCase (a plain TestCase wraps every test in one).
 
 from __future__ import annotations
 
+from decimal import Decimal
 from unittest import mock
 
 from django.db import transaction
@@ -253,6 +254,53 @@ class MidApplyCrashTests(_Base):
         self.assertIsNone(row.concluded_at)
         # the listing write rolled back
         self.assertFalse(Listing.all_tenants.filter(slug="acme-co").exists())
+
+
+class JsonablePayloadTests(_Base):
+    """A payload value that is not JSON-native (a Decimal coordinate from the
+    admin form, a date) must be coerced before it reaches the command log --
+    the JSONField uses the stdlib encoder (spec §7.1, §11.2)."""
+
+    def test_decimal_coordinates_are_logged_as_numbers_and_applied(self):
+        result = self.upsert(
+            {
+                "slug": "acme-co",
+                "name": "Acme Co",
+                "location": {
+                    "lat": Decimal("41.850000"),
+                    "lon": Decimal("-87.650000"),
+                    "geo_precision": "locality",
+                },
+            },
+            idempotency_key="dec1",
+        )
+        self.assertEqual(result.outcome, "created")
+        result.listing.refresh_from_db()
+        self.assertEqual(result.listing.lat, Decimal("41.850000"))
+        self.assertEqual(result.listing.lon, Decimal("-87.650000"))
+
+        row = CommandLog.objects.get(idempotency_key="dec1", problem__isnull=True)
+        self.assertEqual(row.outcome, "applied")
+        lat = row.payload["location"]["lat"]
+        self.assertIsInstance(lat, float)  # a JSON number, not "41.85"
+        self.assertEqual(lat, 41.85)
+
+    def test_non_finite_coordinate_is_a_422_and_is_logged_rejected(self):
+        with self.assertRaises(SchemaError):
+            self.upsert(
+                {
+                    "slug": "x",
+                    "name": "X",
+                    "location": {"lat": float("nan"), "lon": 1.0},
+                },
+                idempotency_key="nan1",
+            )
+        # jsonb cannot store nan/inf; the attempt is refused, still logged
+        row = CommandLog.objects.get(idempotency_key="nan1")
+        self.assertEqual(row.outcome, "rejected")
+        self.assertIn("payload", row.problem)
+        self.assertIsNone(row.payload)
+        self.assertFalse(Listing.all_tenants.filter(slug="x").exists())
 
 
 class TransactionGuardTests(TestCase):

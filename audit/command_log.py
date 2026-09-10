@@ -25,6 +25,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from audit.models import CommandLog
+from directory.normalize import jsonable
 
 
 class MustNotBeInTransaction(RuntimeError):
@@ -63,15 +64,22 @@ def log_received(
     has settled. ``tenant`` may be ``None`` -- a malformed command that never
     resolved one still has to leave a trace (spec §11.2). ``origin`` is the
     originating adapter id and is stored as ``adapter_id``.
+
+    ``actor`` and ``payload`` are coerced to JSON-native types
+    (``directory.normalize.jsonable``): the ``JSONField`` uses the stdlib
+    encoder, so a ``Decimal`` coordinate or a ``date`` would otherwise raise at
+    write time. A value with no JSON representation raises ``ValueError`` --
+    the command orchestrator normalises the payload itself first and turns that
+    into a 422, so this is a backstop for the other fields and other callers.
     """
     return CommandLog.objects.create(
         command=command,
         tenant=tenant,
         idempotency_key=idempotency_key or None,
         adapter_id=origin or "",
-        actor=actor or {},
+        actor=jsonable(actor or {}),
         trace_id=trace_id or "",
-        payload=payload,
+        payload=jsonable(payload),
     )
 
 
@@ -87,10 +95,15 @@ def log_conclude(
     ``outcome`` is one of ``CommandLog.Outcome`` (``applied`` / ``rejected`` /
     ``blocked``). A row this is never called on keeps ``outcome`` and
     ``concluded_at`` null -- the "threw mid-apply" record.
+
+    ``problem`` is coerced to JSON-native types (``jsonable``). This write
+    happens *after* the command committed; a ``Decimal`` or ``date`` in
+    ``problem`` raising here would leave the row unconcluded and read as a
+    mid-apply crash on a write that actually succeeded.
     """
     row.outcome = outcome
     row.result_event_id = result_event_id or ""
-    row.problem = problem
+    row.problem = None if problem is None else jsonable(problem)
     row.concluded_at = timezone.now()
     row.save(
         update_fields=["outcome", "result_event_id", "problem", "concluded_at"]
@@ -115,7 +128,7 @@ def log_replay(
         command=command,
         tenant=tenant,
         idempotency_key=idempotency_key or None,
-        actor=actor or {},
+        actor=jsonable(actor or {}),
         trace_id=trace_id or "",
         payload=None,
         outcome="applied",

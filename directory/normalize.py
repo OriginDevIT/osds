@@ -8,7 +8,9 @@ string collapses to ``None`` -- "cleared" and "never set" are the same state
 
 from __future__ import annotations
 
+import math
 import re
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 from django.utils.text import slugify
@@ -65,6 +67,47 @@ def country(value):
 def slug(value):
     value = text(value)
     return slugify(value) if value else value
+
+
+def jsonable(value):
+    """Recursively coerce ``value`` to JSON-native types for the command log
+    and event payloads (spec §7.1, §11.2).
+
+    ``Decimal`` -> ``float`` -- so a coordinate is a JSON *number* from every
+    write path, matching ``directory.patch.project`` -- and ``date`` /
+    ``datetime`` -> ISO 8601 string. A non-finite float (``nan`` / ``inf``)
+    raises ``ValueError``: Postgres ``jsonb`` cannot store it even though
+    ``json.dumps`` emits it. So does any value with no JSON representation
+    (``set``, ``bytes``, a model instance, ``time``, ``timedelta``). Object
+    keys must already be strings. The caller turns ``ValueError`` into a 422.
+    """
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{value!r} has no JSON representation")
+        return value
+    if isinstance(value, Decimal):
+        num = float(value)
+        if not math.isfinite(num):
+            raise ValueError(f"{value!r} has no JSON representation")
+        return num
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValueError(f"object key {key!r} is not a string")
+            out[key] = jsonable(item)
+        return out
+    if isinstance(value, (list, tuple)):
+        return [jsonable(item) for item in value]
+    raise ValueError(f"{type(value).__name__} has no JSON representation")
 
 
 def decimal6(value):

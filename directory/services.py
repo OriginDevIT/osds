@@ -649,7 +649,7 @@ def upsert_listing(
 ) -> UpsertResult:
     require_autocommit()
 
-    actor = actor or {}
+    actor = normalize.jsonable(actor or {})
 
     if idempotency_key:
         prior = (
@@ -674,6 +674,27 @@ def upsert_listing(
             return UpsertResult(
                 None, "replayed", prior.result_event_id or None, None
             )
+
+    # The payload is stored in the command log and echoed into the event, so it
+    # has to be a JSON document before either. Decimal coordinates from the
+    # admin form are the common case -- normalize.jsonable turns them into
+    # floats, matching directory.patch.project so lat/lon is a JSON number from
+    # every write path. A value with no JSON representation (nan/inf, a set,
+    # bytes) is a 422, still logged as a rejected attempt (spec §11.2).
+    try:
+        payload = normalize.jsonable(payload)
+    except ValueError as exc:
+        rejected = log_received(
+            command="listing.upsert",
+            tenant=tenant,
+            idempotency_key=idempotency_key,
+            actor=actor,
+            trace_id=trace_id,
+            origin=origin,
+            payload=None,
+        )
+        log_conclude(rejected, outcome="rejected", problem={"payload": str(exc)})
+        raise SchemaError([str(exc)]) from exc
 
     # Written and committed now, independent of the command transaction below:
     # a log row that vanished on rollback would miss the very case it exists for.
