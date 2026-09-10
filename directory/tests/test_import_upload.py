@@ -155,6 +155,48 @@ class ReadHeaderTests(SimpleTestCase):
         self.assertEqual(enc, "cp1252")
 
 
+class BuildPayloadTests(SimpleTestCase):
+    HEADERS = ["Name", "Slug", "City", "Phone", "Cats", "Licence", "Ignored"]
+    MAPPING = {
+        "Name": "name",
+        "Slug": "slug",
+        "City": "location.locality",
+        "Phone": "contact.phone_e164",
+        "Cats": "categories",
+        "Licence": "custom_fields.licence",
+    }
+
+    def _build(self, cells):
+        return csv_import.build_payload(cells, self.HEADERS, self.MAPPING)
+
+    def test_flat_dotted_and_custom_targets_nest(self):
+        payload = self._build(
+            ["Hoffman", "hoffman", "Chicago", "+13125550100",
+             "plumbers|emergency", "L-9", "whatever"]
+        )
+        self.assertEqual(
+            payload,
+            {
+                "name": "Hoffman",
+                "slug": "hoffman",
+                "location": {"locality": "Chicago"},
+                "contact": {"phone_e164": "+13125550100"},
+                "categories": ["plumbers", "emergency"],
+                "custom_fields": {"licence": "L-9"},
+            },
+        )
+
+    def test_empty_cells_and_unmapped_columns_are_omitted(self):
+        payload = self._build(["Hoffman", "hoffman", "   ", "", "", "", "x"])
+        self.assertEqual(payload, {"name": "Hoffman", "slug": "hoffman"})
+
+    def test_short_row_just_maps_what_is_present(self):
+        self.assertEqual(
+            self._build(["Hoffman", "hoffman"]),
+            {"name": "Hoffman", "slug": "hoffman"},
+        )
+
+
 # ---------------------------------------------------------------------------
 # the views
 # ---------------------------------------------------------------------------

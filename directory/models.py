@@ -216,14 +216,20 @@ class ImportBatch(models.Model):
     has_header = models.BooleanField(default=True)
     column_mapping = models.JSONField(default=dict, blank=True)
     row_count = models.PositiveIntegerField(default=0)
-    # Resume cursor for the chunked worker pass (PR 3): rows consumed so far.
+    # Resume cursor for the chunked worker row loop: data rows consumed so far.
+    # A pass processes the next ``ROWS_PER_PASS`` rows and advances this.
     processed_row_count = models.PositiveIntegerField(default=0)
     created_count = models.PositiveIntegerField(default=0)
     updated_count = models.PositiveIntegerField(default=0)
     skipped_count = models.PositiveIntegerField(default=0)
     suppressed_count = models.PositiveIntegerField(default=0)
     error_count = models.PositiveIntegerField(default=0)
+    # Per-row failures; feeds import.completed's ``errors`` array.
     errors = models.JSONField(default=list, blank=True)
+    # Non-error provenance notes (e.g. a row reprocessed after a worker
+    # restart). Kept out of ``errors`` so an adapter reading import.completed
+    # never reads a restart note as a failure.
+    notes = models.JSONField(default=list, blank=True)
     started_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,

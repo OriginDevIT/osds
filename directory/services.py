@@ -27,7 +27,7 @@ from audit.command_log import (
 )
 from audit.models import CommandLog
 from audit.outbox import emit
-from directory import normalize
+from directory import normalize, suppression
 from directory.field_schema import (
     SchemaError,
     normalize_type_schema,
@@ -40,6 +40,7 @@ from directory.models import (
     ListingType,
     PathRedirect,
     SearchReindexJob,
+    SuppressionKey,
 )
 from directory.patch import diff, project
 from directory.search import recompute_search_vector
@@ -343,6 +344,19 @@ class RejectedField(Exception):
         super().__init__(f"the field {field!r} is not accepted on listing.upsert")
 
 
+class Suppressed(Exception):
+    """A create whose (name, address, phone) fingerprint matches a
+    ``SuppressionKey`` from a prior deletion (spec §4.1.1). Raised only when
+    the caller passes ``suppression_check=True`` -- today just the CSV
+    importer, which counts it as ``suppressed`` rather than an error. The
+    fingerprint is the one implementation in ``directory.suppression``; no
+    matching logic is duplicated here."""
+
+    def __init__(self, key_hash: str):
+        self.key_hash = key_hash
+        super().__init__("listing suppressed by a prior deletion")
+
+
 @dataclass
 class UpsertResult:
     listing: "Listing | None"
@@ -365,6 +379,30 @@ _LOCATION_KEYS = (
 )
 
 
+def _check_suppressed(tenant, payload) -> None:
+    """Raise ``Suppressed`` if this create's fingerprint matches a
+    ``SuppressionKey``. Called from ``_apply_upsert``'s create branch, after
+    the row is known to be a create and before anything is written.
+
+    A blank normalised name is left alone -- ``fingerprint`` would reject it,
+    and ``_apply_payload`` rejects the row as an error a moment later."""
+    if not normalize.text(payload.get("name")):
+        return
+    loc = payload.get("location") or {}
+    contact = payload.get("contact") or {}
+    key_hash = suppression.fingerprint(
+        name=payload["name"],
+        address_line1=loc.get("address_line1"),
+        locality=loc.get("locality"),
+        region=loc.get("region"),
+        postal_code=loc.get("postal_code"),
+        country=loc.get("country"),
+        phone=contact.get("phone_e164"),
+    )
+    if SuppressionKey.objects.filter(tenant=tenant, key_hash=key_hash).exists():
+        raise Suppressed(key_hash)
+
+
 def _resolve_categories(listing_type: ListingType, slugs) -> list[Category]:
     wanted = {s for s in (slugs or []) if s}
     found = list(
@@ -377,10 +415,18 @@ def _resolve_categories(listing_type: ListingType, slugs) -> list[Category]:
 
 
 def _apply_geo(listing, loc: dict) -> None:
-    if "lat" in loc:
-        listing.lat = normalize.decimal6(loc["lat"])
-    if "lon" in loc:
-        listing.lon = normalize.decimal6(loc["lon"])
+    # A value that will not normalise is a schema problem, not a crash: the
+    # write API and CSV import expect a 422 / row error, and the admin form
+    # already renders SchemaError. ``normalize.decimal6`` raises plain
+    # ``ValueError``; ``SchemaError`` (a ``ValueError`` subclass) is not raised
+    # here, so there is nothing to double-wrap.
+    try:
+        if "lat" in loc:
+            listing.lat = normalize.decimal6(loc["lat"])
+        if "lon" in loc:
+            listing.lon = normalize.decimal6(loc["lon"])
+    except ValueError as exc:
+        raise SchemaError([str(exc)]) from exc
     has_coords = listing.lat is not None and listing.lon is not None
     explicit_precision = loc.get("geo_precision")
 
@@ -427,7 +473,13 @@ def _apply_payload(listing, payload, *, listing_type, creating, enforce_required
 
     contact = payload.get("contact") or {}
     if "phone_e164" in contact:
-        listing.phone_e164 = normalize.phone_e164(contact["phone_e164"]) or ""
+        # A malformed number is a row-level validation failure -- SchemaError,
+        # not an unhandled ValueError that would 500 the admin form or fail a
+        # whole CSV batch on one bad cell.
+        try:
+            listing.phone_e164 = normalize.phone_e164(contact["phone_e164"]) or ""
+        except ValueError as exc:
+            raise SchemaError([str(exc)]) from exc
     if "email" in contact:
         listing.email = normalize.email(contact["email"]) or ""
     if "website" in contact:
@@ -480,6 +532,7 @@ def _apply_upsert(
     import_batch,
     submitted_by,
     must_create,
+    suppression_check,
 ) -> UpsertResult:
     with transaction.atomic():
         for key in _REJECTED_KEYS:
@@ -514,6 +567,8 @@ def _apply_upsert(
         if creating:
             if not payload.get("slug") or not payload.get("name"):
                 raise SchemaError(["slug and name are required to create a listing"])
+            if suppression_check:
+                _check_suppressed(tenant, payload)
             listing = Listing(
                 tenant=tenant,
                 listing_type=listing_type,
@@ -590,6 +645,7 @@ def upsert_listing(
     import_batch=None,
     submitted_by=None,
     must_create: bool = False,
+    suppression_check: bool = False,
 ) -> UpsertResult:
     require_autocommit()
 
@@ -644,7 +700,11 @@ def upsert_listing(
             import_batch=import_batch,
             submitted_by=submitted_by,
             must_create=must_create,
+            suppression_check=suppression_check,
         )
+    except Suppressed as exc:
+        log_conclude(row, outcome="rejected", problem={"suppressed": exc.key_hash})
+        raise
     except RejectedField as exc:
         log_conclude(row, outcome="rejected", problem={"field": exc.field})
         raise

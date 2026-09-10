@@ -158,6 +158,18 @@ class RejectedFieldTests(_Base):
                 }
             )
 
+    def test_malformed_phone_is_a_schema_error_not_a_valueerror(self):
+        with self.assertRaises(SchemaError):
+            self.upsert(
+                {"slug": "x", "name": "X", "contact": {"phone_e164": "not-a-phone"}}
+            )
+
+    def test_malformed_coordinate_is_a_schema_error_not_a_valueerror(self):
+        with self.assertRaises(SchemaError):
+            self.upsert(
+                {"slug": "x", "name": "X", "location": {"lat": "north-ish"}}
+            )
+
     def test_coords_without_precision_default_to_locality(self):
         result = self.upsert(
             {"slug": "x", "name": "X", "location": {"lat": 41.9, "lon": -87.6}}
