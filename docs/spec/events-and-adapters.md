@@ -1,13 +1,18 @@
 # OSDS — Event Schema, Adapter Interface & Entitlements
 
 **Open Source Directory Site**
-**Status:** Draft v0.8 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
+**Status:** Draft v0.9 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
 **Audience:** core maintainers, adapter authors
 
 This document defines the contract between the OSDS core and everything outside it. The core is a multi-tenant directory engine. It knows nothing about email providers, CRMs, payment gateways, or messaging platforms. It emits facts and accepts commands. Adapters translate.
 
 If you are writing an adapter, sections 3, 7 and 8 are the ones you need.
 If you are implementing the paid tiers, section 5 is the whole job.
+
+### Changes from v0.8
+
+- **§3.3.** `import.completed` gains `status`. It is emitted for a failed
+  batch as well as a successful one; there is no `import.failed`.
 
 ### Changes from v0.7
 
@@ -292,13 +297,19 @@ The only namespace without a `tenant` block on the envelope, since the tenant is
 
 #### `import.*`
 
-| Type                 | Notable data                                                          |
-| -------------------- | --------------------------------------------------------------------- |
-| `import.started`     | `batch_id`, `source`, `row_count`, `started_by`                       |
-| `import.completed`   | `batch_id`, `created`, `updated`, `skipped`, `suppressed`, `errors`   |
-| `import.rolled_back` | `batch_id`, `listings_removed`, `listings_restored`, `rolled_back_by` |
+| Type                 | Notable data                                                                  |
+| -------------------- | ----------------------------------------------------------------------------- |
+| `import.started`     | `batch_id`, `source`, `row_count`, `started_by`                               |
+| `import.completed`   | `batch_id`, `status`, `created`, `updated`, `skipped`, `suppressed`, `errors` |
+| `import.rolled_back` | `batch_id`, `listings_removed`, `listings_restored`, `rolled_back_by`         |
 
 `suppressed` counts rows matching a `suppression_key` from a prior `listing.deleted` — see §4.1.1.
+
+**`import.completed` is emitted whether the batch succeeded or failed.**
+There is no `import.failed` — a batch that stops on an unexpected error
+still reports what it applied, and rows already written stand. `status` is
+`completed` or `failed`; an adapter treating every `import.completed` as a
+success will act on partial data.
 
 A batch both creates and updates. **Rollback removes the rows it created
 and restores the rows it updated** to the values they held before the
