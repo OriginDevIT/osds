@@ -5,6 +5,7 @@ explicit-null clearing on edit, and the publish/unpublish buttons.
 from __future__ import annotations
 
 import functools
+from decimal import Decimal
 
 from django.test import (
     Client,
@@ -15,7 +16,7 @@ from django.test import (
 from django.urls import reverse as _reverse
 from django.utils import timezone
 
-from audit.models import OutboxEvent
+from audit.models import CommandLog, OutboxEvent
 from directory import services
 from directory.models import Category, Listing, ListingType
 from osds.tenancy import tenant_context
@@ -161,6 +162,25 @@ class ListingAdminWriteTests(_Setup, TransactionTestCase):
         ).latest("id").data["changes"]
         self.assertIn({"op": "remove", "path": "/description"}, patch)
         self.assertIn({"op": "remove", "path": "/custom_fields/licence"}, patch)
+
+    def test_editing_with_coordinates_does_not_500(self):
+        # The form binds lat/lon as Decimal; the command log serialises the
+        # payload before the command runs. Without normalisation this 500s.
+        listing = self._make_listing()
+        resp = self._client(self.editor).post(
+            self._url("listing-edit", key="business", public_id=listing.public_id),
+            {"name": "Acme Co", "slug": "acme-co", "categories": [],
+             "lat": "41.85", "lon": "-87.65", "geo_precision": "locality"},
+            HTTP_HOST=HOST,
+        )
+        self.assertEqual(resp.status_code, 302)
+        listing.refresh_from_db()
+        self.assertEqual(listing.lat, Decimal("41.850000"))
+        self.assertEqual(listing.lon, Decimal("-87.650000"))
+
+        row = CommandLog.objects.filter(command="listing.upsert").latest("id")
+        self.assertEqual(row.outcome, "applied")
+        self.assertIsInstance(row.payload["location"]["lat"], float)
 
     def test_publish_then_unpublish_button(self):
         listing = self._make_listing()
