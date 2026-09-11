@@ -1419,6 +1419,8 @@ A competitor or ex-employee claiming a listing takes control of that business's 
 
 **Disputes go to moderation, never auto-transfer.** A second claim on an already-claimed listing emits `claim.disputed` and opens a `moderation.queued` item. Verification alone never moves ownership away from a sitting owner. Rate-limit claim attempts per IP and per account.
 
+A disputed claim is a `claim.submit` like any other and mints or matches its claimant's `users` row in the same transaction (§4.3), emitting `user.created`, `claim.submitted`, then `claim.disputed`. A person disputing ownership is a person the system has to be able to contact.
+
 ### 9.5 Verification code lifetime
 
 **Core computes `expires_at`, never the caller.** A lifetime is a rule, and rules belong to core. `claim.verification_started` carries the computed value; an adapter that needs to tell a user when their code dies reads it from the event.
