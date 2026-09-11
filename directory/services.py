@@ -13,9 +13,11 @@ Call these with the tenant in ambient scope (a request, or
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 
 from django.db import transaction
 from django.db.models import ProtectedError
+from django.utils import timezone
 
 from audit import events
 from audit.command_log import (
@@ -36,6 +38,8 @@ from directory.field_schema import (
 )
 from directory.models import (
     Category,
+    ImportBatch,
+    ImportBatchListing,
     Listing,
     ListingType,
     PathRedirect,
@@ -403,6 +407,25 @@ def _check_suppressed(tenant, payload) -> None:
         raise Suppressed(key_hash)
 
 
+def _record_import_row(import_batch, listing, action: str, pre_image) -> None:
+    """Provenance for import rollback (spec §3.3). Called from ``_apply_upsert``
+    inside its transaction, so the row commits with the listing change it
+    describes. ``pre_image`` is the full projection for an update, ``None`` for
+    a create. First touch wins: a ``(batch, listing)`` row already present --
+    this batch created the listing and is now updating it in a later CSV row --
+    keeps its original ``action`` and ``pre_image``.
+    """
+    ImportBatchListing.objects.get_or_create(
+        batch=import_batch,
+        listing=listing,
+        defaults={
+            "tenant": listing.tenant,
+            "action": action,
+            "pre_image": pre_image,
+        },
+    )
+
+
 def _resolve_categories(listing_type: ListingType, slugs) -> list[Category]:
     wanted = {s for s in (slugs or []) if s}
     found = list(
@@ -604,6 +627,8 @@ def _apply_upsert(
         after = project(listing)
 
         if creating:
+            if import_batch is not None:
+                _record_import_row(import_batch, listing, "created", None)
             event = emit(
                 events.LISTING_CREATED,
                 subject=listing.public_id,
@@ -618,6 +643,9 @@ def _apply_upsert(
         patch = diff(before, after)
         if not patch:
             return UpsertResult(listing, "unchanged", None, None)
+
+        if import_batch is not None:
+            _record_import_row(import_batch, listing, "updated", before)
 
         event = emit(
             events.LISTING_UPDATED,
@@ -785,3 +813,226 @@ def set_listing_visibility(listing: Listing, visibility: str, *, actor, reason="
         )
     # draft <-> hidden crosses no publication boundary -> no event (ruling 2)
     return listing
+
+
+# --- import rollback -----------------------------------------------------
+#
+# rollback_import_batch undoes one CSV import: it deletes the rows the batch
+# created and restores the rows it updated from the pre-image captured at
+# update time (spec §3.3, decisions.md "Rollback restores updated rows"). It
+# emits import.rolled_back and nothing else -- no suppression key, no
+# per-listing listing.deleted.
+
+
+class RollbackRefused(Exception):
+    """A rollback precondition failed (spec §3.3). ``reason`` is a
+    machine-readable slug for the command-log ``problem``; ``message`` is shown
+    to the operator."""
+
+    def __init__(self, reason: str, message: str):
+        self.reason = reason
+        self.message = message
+        super().__init__(message)
+
+
+_ROLLBACKABLE = frozenset(
+    {ImportBatch.Status.COMPLETED, ImportBatch.Status.FAILED}
+)
+
+
+def _restore_listing(listing: Listing, pre: dict) -> None:
+    """Assign a full §4.1 projection (``directory.patch.project``) back onto a
+    listing and rebuild its derived state -- the inverse of ``project``. Used
+    only by rollback. It deliberately does not touch ``id``, ``status``,
+    ``visibility``, ``tier``, ``owner``, ``listing_type`` or ``media``: the
+    projection carries none of those, so a listing claimed, published or
+    re-tiered since the import keeps that state.
+    """
+    loc = pre.get("location") or {}
+    contact = pre.get("contact") or {}
+    prov = pre.get("provenance") or {}
+
+    listing.slug = pre["slug"]
+    listing.name = pre["name"]
+    listing.description = pre.get("description") or ""
+    listing.reviews_disabled = bool(pre.get("reviews_disabled"))
+
+    listing.address_line1 = loc.get("address_line1") or ""
+    listing.address_line2 = loc.get("address_line2") or ""
+    listing.locality = loc.get("locality") or ""
+    listing.region = loc.get("region") or ""
+    listing.postal_code = loc.get("postal_code") or ""
+    listing.country = loc.get("country") or ""
+    lat, lon = loc.get("lat"), loc.get("lon")
+    listing.lat = None if lat is None else Decimal(str(lat))
+    listing.lon = None if lon is None else Decimal(str(lon))
+    listing.geo_precision = (
+        loc.get("geo_precision") or Listing.GeoPrecision.NONE
+    )
+
+    listing.phone_e164 = contact.get("phone_e164") or ""
+    listing.email = contact.get("email") or ""
+    listing.website = contact.get("website") or ""
+    listing.social = list(contact.get("social") or [])
+
+    listing.external_profiles = dict(pre.get("external_profiles") or {})
+    listing.attributes = dict(pre.get("attributes") or {})
+    listing.custom_fields = dict(pre.get("custom_fields") or {})
+    listing.source = prov.get("source") or listing.source
+    listing.provenance_notes = prov.get("notes") or ""
+
+    listing.save()
+
+    slugs = pre.get("categories") or []
+    listing.categories.set(
+        Category.objects.filter(
+            listing_type_id=listing.listing_type_id, slug__in=slugs
+        )
+    )
+
+    # Rebuilt, never restored -- the vector is derived and excluded from the
+    # projection (ruling 11).
+    recompute_search_vector(listing)
+
+
+def rollback_import_batch(batch: ImportBatch, *, operator) -> str:
+    """Undo one import batch and return the ``import.rolled_back`` event id.
+
+    Deletes the rows the batch created, restores the rows it updated from the
+    pre-image captured at update time, nulls those pre-images, moves the batch
+    to ``rolled_back``, and emits ``import.rolled_back`` -- the only event a
+    rollback emits. No ``suppression_key`` is written and no per-listing
+    ``listing.deleted`` fires (spec §3.3, decisions.md).
+
+    One transaction for the whole batch. Unlike the import row loop this speaks
+    a single command and a single event, so it does not go through
+    ``upsert_listing`` per row: the restores and the delete are direct ORM
+    writes, and ``import.rolled_back`` is emitted inside the transaction, so
+    state and event commit together (spec §11.1).
+
+    Refused (``RollbackRefused``, nothing written): the batch is not
+    ``completed`` or ``failed``; any of its pre-images has been nulled -- the
+    90-day window has passed (spec §11.2); or a row it *created* now carries a
+    ``Claim`` -- deleting a claimed listing is refused and the operator
+    resolves the claim first.
+
+    Overlapping batches get no guard. A row updated first by batch A and then
+    by batch B holds, in B's pre-image, the state A left it in; rolling B back
+    restores whatever the row held when B touched it, and rolling A back
+    afterwards restores the pre-A state. ``listings_removed`` /
+    ``listings_restored`` count only what this call actually changed, so an
+    earlier rollback that removed a shared row simply shrinks a later one's
+    counts. Call with the tenant in ambient scope.
+    """
+    require_autocommit()
+
+    actor = {"type": "admin", "id": operator.public_id}
+    log_row = log_received(
+        command="import.rollback",
+        tenant=batch.tenant,
+        idempotency_key=f"import.rollback:{batch.public_id}",
+        actor=actor,
+        trace_id=None,
+        origin="",
+        payload={"batch_id": batch.public_id},
+    )
+    try:
+        event_id = _do_rollback(batch, actor=actor, operator=operator)
+    except RollbackRefused as exc:
+        log_conclude(
+            log_row, outcome="rejected", problem={exc.reason: exc.message}
+        )
+        raise
+    log_conclude(log_row, outcome="applied", result_event_id=event_id)
+    return event_id
+
+
+def _do_rollback(batch: ImportBatch, *, actor: dict, operator) -> str:
+    if batch.status not in _ROLLBACKABLE:
+        raise RollbackRefused(
+            "not_rollbackable",
+            f"an import in state '{batch.get_status_display()}' cannot be "
+            f"rolled back",
+        )
+
+    with transaction.atomic():
+        locked = ImportBatch.objects.select_for_update().get(pk=batch.pk)
+        if locked.status not in _ROLLBACKABLE:
+            raise RollbackRefused(
+                "not_rollbackable",
+                "this import was already rolled back",
+            )
+
+        rows = list(
+            ImportBatchListing.objects.filter(batch=locked).select_related(
+                "listing"
+            )
+        )
+        if any(r.pre_image_nulled_at is not None for r in rows):
+            raise RollbackRefused(
+                "past_rollback_window",
+                "this import is past its 90-day rollback window -- its "
+                "pre-images have been cleared",
+            )
+
+        created = [
+            r for r in rows if r.action == ImportBatchListing.Action.CREATED
+        ]
+        updated = [
+            r for r in rows if r.action == ImportBatchListing.Action.UPDATED
+        ]
+
+        claimed = [
+            r.listing
+            for r in created
+            if r.listing is not None and r.listing.claims.exists()
+        ]
+        if claimed:
+            names = ", ".join(
+                sorted(f"{lst.name} ({lst.public_id})" for lst in claimed)
+            )
+            raise RollbackRefused(
+                "created_listing_claimed",
+                f"these imported listings now carry a claim and cannot be "
+                f"removed: {names}. Resolve the claims first.",
+            )
+
+        create_ids = [r.listing_id for r in created]
+        listings_removed = len(create_ids)
+        if create_ids:
+            Listing.objects.filter(pk__in=create_ids).delete()
+
+        listings_restored = 0
+        for r in updated:
+            if r.pre_image is None:
+                continue
+            listing = Listing.objects.select_for_update().get(pk=r.listing_id)
+            _restore_listing(listing, r.pre_image)
+            listings_restored += 1
+
+        # The pre-images are a second copy of personal data; a rolled-back
+        # batch has no further use for them (spec §11.2, decisions.md).
+        ImportBatchListing.objects.filter(batch=locked).update(
+            pre_image=None, pre_image_nulled_at=timezone.now()
+        )
+
+        locked.status = ImportBatch.Status.ROLLED_BACK
+        locked.rolled_back_by = operator
+        locked.rolled_back_at = timezone.now()
+        locked.save(
+            update_fields=["status", "rolled_back_by", "rolled_back_at"]
+        )
+
+        event = emit(
+            events.IMPORT_ROLLED_BACK,
+            subject=locked.public_id,
+            tenant=locked.tenant,
+            actor=actor,
+            data={
+                "batch_id": locked.public_id,
+                "listings_removed": listings_removed,
+                "listings_restored": listings_restored,
+                "rolled_back_by": operator.public_id,
+            },
+        )
+    return event.event_id
