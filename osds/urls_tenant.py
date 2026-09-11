@@ -11,7 +11,7 @@ from django.http import HttpResponse
 from django.urls import include, path, re_path
 from django.views.generic.base import RedirectView
 
-from directory import public_views
+from directory import claim_views, public_views
 
 handler404 = "directory.public_views.not_found"
 
@@ -39,6 +39,14 @@ urlpatterns = [
     # Local media store. Matched ahead of the public catch-all; "media" is a
     # reserved slug so no listing or category can shadow it.
     path("media/<str:public_id>", public_views.media_asset, name="media-asset"),
+    # Claim submission (spec §9). "claim" is a reserved slug (directory.services
+    # .RESERVED_SLUGS) so no listing or category can shadow this.
+    path("claim/<str:public_id>/", claim_views.claim_form, name="public-claim"),
+    path(
+        "claim/<str:public_id>/submitted/",
+        claim_views.claim_submitted,
+        name="public-claim-submitted",
+    ),
     # robots.txt and the sitemap. "sitemap.xml" / "sitemaps" are reserved
     # slugs; all three sit ahead of the catch-all.
     path("robots.txt", public_views.robots_txt, name="robots-txt"),

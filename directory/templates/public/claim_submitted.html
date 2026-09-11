@@ -1,0 +1,6 @@
+{% extends "public/base.html" %}
+{% block title %}Claim submitted &middot; {{ request.tenant.name }}{% endblock %}
+{% block content %}
+<h1>Claim submitted</h1>
+<p>Your claim (reference {{ claim.public_id }}) has been received and is pending review.</p>
+{% endblock %}
