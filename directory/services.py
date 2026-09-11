@@ -38,6 +38,10 @@ from directory.field_schema import (
 )
 from directory.models import (
     Category,
+    Claim,
+    Consent,
+    ConsentText,
+    DirectoryUser,
     ImportBatch,
     ImportBatchListing,
     Listing,
@@ -56,6 +60,7 @@ RESERVED_SLUGS = frozenset(
         "search",
         "admin",
         "media",
+        "claim",
         "robots.txt",
         "sitemap.xml",
         "sitemaps",
@@ -1036,3 +1041,324 @@ def _do_rollback(batch: ImportBatch, *, actor: dict, operator) -> str:
             },
         )
     return event.event_id
+
+
+# --- claim.submit (spec §4.3, §9, §9.0, §9.4) -------------------------------
+#
+# Verification mechanics (code generation, hashing, expiry, attempt limits),
+# approval and any write to Listing.status / Listing.owner are a later PR --
+# this only ever creates rows at Claim.Status.PENDING_VERIFICATION (or, on the
+# dispute branch, DISPUTED) and records intent via `method`.
+
+CONSENT_TEXT_KEY = "consent"
+
+# The three channels the §9 example always carries, one per submission --
+# a missing one rejects the whole command (spec §9.0); "not asked" is never
+# recorded as "declined".
+CONSENT_CHANNELS = ("marketing_email", "marketing_sms", "automated_calls")
+
+DEFAULT_CONSENT_BODY = (
+    "PLACEHOLDER -- the operator must replace this with reviewed legal "
+    "wording before enabling claims in production.\n\n"
+    "By submitting this claim, you confirm you are authorised to manage this "
+    "listing on behalf of the business named above. Each consent below is "
+    "independent and you may decline any of them without affecting your "
+    "claim."
+)
+
+
+class ConsentRequired(Exception):
+    """``claim.submit`` is missing one of the required consent channels
+    (spec §9.0). Every channel in ``CONSENT_CHANNELS`` must be present --
+    an omitted one is rejected outright, never treated as declined."""
+
+    def __init__(self, channel: str):
+        self.channel = channel
+        super().__init__(f"consent for {channel!r} is required")
+
+
+def get_default_consent_text(tenant) -> ConsentText:
+    """The current claim-consent wording for ``tenant`` (spec §9.0).
+
+    Seeded lazily here, on first read, with ``get_or_create`` -- not in
+    ``tenants.services.create_tenant``. Seeding at tenant creation would
+    leave every tenant created before this PR shipped unable to take a claim
+    until an operator noticed and intervened, and it would make ``tenants``
+    import a ``directory`` model, which is backwards: ``directory`` already
+    depends on ``tenants``, never the other way (ruling, 2026-09-11).
+
+    No admin UI exists yet to publish a new version, so this is always
+    "v1" until one does.
+    """
+    consent_text, _ = ConsentText.objects.get_or_create(
+        tenant=tenant,
+        key=CONSENT_TEXT_KEY,
+        version="v1",
+        defaults={"body": DEFAULT_CONSENT_BODY},
+    )
+    return consent_text
+
+
+def enabled_claim_methods(tenant) -> list[str]:
+    """The tenant's configured claim-verification methods (spec §9.5), or
+    just ``manual`` -- always available, per §9 -- if unset."""
+    cfg = (tenant.settings or {}).get("claim_verification") or {}
+    return list(cfg.get("enabled_methods") or ["manual"])
+
+
+def _match_or_create_user(
+    tenant, *, email: str, name: str, phone_e164: str
+) -> "tuple[DirectoryUser, bool]":
+    """Match-or-mint on ``(tenant, email)`` (spec §4.3). A matched row's
+    ``name``/``phone_e164`` are left untouched -- this submission's values
+    live on the ``claim.submitted`` event regardless, and a claim is not
+    licence to overwrite what an earlier claimant recorded."""
+    return DirectoryUser.objects.get_or_create(
+        tenant=tenant,
+        email=email,
+        defaults={"name": name, "phone_e164": phone_e164},
+    )
+
+
+def submit_claim(
+    tenant,
+    *,
+    listing: Listing,
+    method: str,
+    claimant: dict,
+    consent: dict,
+    ip: "str | None" = None,
+) -> Claim:
+    """The ``claim.submit`` command.
+
+    ``claimant`` is ``{"name", "email", "phone_e164", "role_claimed"}``.
+    ``consent`` is ``{channel: {"granted": bool}}`` for every entry in
+    ``CONSENT_CHANNELS``. There is no ``consent_text_version`` parameter --
+    the service resolves the current ``ConsentText`` itself
+    (``get_default_consent_text``) and records that version. A caller-
+    supplied version would let a visitor's own form field decide what
+    wording gets attached to their consent record, which is exactly what
+    §9.0 exists to prevent: "which version of the wording they saw" has to
+    be what the server actually showed, not what the client claims it saw.
+    (There is currently only ever one version, "v1", to resolve to -- no
+    admin UI exists yet to publish another. When one does, a re-render on a
+    server-side mismatch is the fix, not trusting a client-supplied value.)
+
+    Public and visitor-originated, unlike every other orchestrator in this
+    module -- there is no operator to log in as, so ``actor`` is
+    ``{"type": "visitor", "id": ...}`` throughout. No idempotency key: a
+    double form submission is a UI concern (disable-on-submit), not a
+    command-log replay, since there is no caller-supplied key to replay on.
+    """
+    require_autocommit()
+
+    try:
+        email = normalize.email(claimant.get("email")) or ""
+        if not email:
+            raise ValueError("claimant email is required")
+        phone = claimant.get("phone_e164") or ""
+        if phone:
+            phone = normalize.phone_e164(phone)
+        name = (claimant.get("name") or "").strip()
+        role_claimed = (claimant.get("role_claimed") or "owner").strip() or "owner"
+        normalized_claimant = {
+            "name": name,
+            "email": email,
+            "phone_e164": phone,
+            "role_claimed": role_claimed,
+        }
+        payload = normalize.jsonable(
+            {
+                "listing_id": listing.public_id,
+                "method": method,
+                "claimant": normalized_claimant,
+                "consent": consent,
+            }
+        )
+    except ValueError as exc:
+        # Malformed enough that there is no clean payload to log -- same
+        # shape as upsert_listing's equivalent guard (spec §11.2: even a
+        # command that never resolves a well-formed body leaves a trace).
+        rejected = log_received(
+            command="claim.submit",
+            tenant=tenant,
+            idempotency_key=None,
+            actor={"type": "visitor", "id": ""},
+            trace_id=None,
+            origin="",
+            payload=None,
+        )
+        log_conclude(rejected, outcome="rejected", problem={"payload": str(exc)})
+        raise SchemaError([str(exc)]) from exc
+
+    actor = {"type": "visitor", "id": email}
+    row = log_received(
+        command="claim.submit",
+        tenant=tenant,
+        idempotency_key=None,
+        actor=actor,
+        trace_id=None,
+        origin="",
+        payload=payload,
+    )
+    try:
+        claim, event_id = _apply_submit_claim(
+            tenant,
+            listing=listing,
+            method=method,
+            claimant=normalized_claimant,
+            consent=consent,
+            ip=ip,
+        )
+    except ConsentRequired as exc:
+        log_conclude(row, outcome="rejected", problem={"missing_consent": exc.channel})
+        raise
+    except SchemaError as exc:
+        log_conclude(row, outcome="rejected", problem={"errors": exc.errors})
+        raise
+    # Any other exception: the row keeps outcome=NULL (spec §11.2's "threw
+    # mid-apply" record). Propagate.
+
+    log_conclude(row, outcome="applied", result_event_id=event_id)
+    return claim
+
+
+@transaction.atomic
+def _apply_submit_claim(
+    tenant,
+    *,
+    listing: Listing,
+    method: str,
+    claimant: dict,
+    consent: dict,
+    ip: "str | None",
+) -> "tuple[Claim, str]":
+    if method not in Claim.Method.values:
+        raise SchemaError([f"unknown verification method {method!r}"])
+    if method not in enabled_claim_methods(tenant):
+        raise SchemaError(
+            [f"verification method {method!r} is not enabled for this tenant"]
+        )
+
+    missing = [c for c in CONSENT_CHANNELS if c not in consent]
+    if missing:
+        raise ConsentRequired(missing[0])
+
+    # The version recorded is whatever the server is showing right now, not
+    # anything the client claims to have seen (spec §9.0) -- see submit_claim's
+    # docstring for why there is no caller-supplied version to resolve instead.
+    consent_text = get_default_consent_text(tenant)
+
+    user, minted = _match_or_create_user(
+        tenant,
+        email=claimant["email"],
+        name=claimant["name"],
+        phone_e164=claimant["phone_e164"],
+    )
+    actor = {"type": "visitor", "id": user.public_id}
+
+    if minted:
+        # Emitted before claim.submitted, same transaction (spec §4.3): the
+        # ordering per subject is unambiguous even though both land in one
+        # commit.
+        emit(
+            events.USER_CREATED,
+            subject=user.public_id,
+            tenant=tenant,
+            actor=actor,
+            data={
+                "user": {
+                    "id": user.public_id,
+                    "email": user.email,
+                    "name": user.name,
+                    "phone_e164": user.phone_e164,
+                },
+                "created_by": "claim.submit",
+            },
+        )
+
+    claim = Claim.objects.create(
+        tenant=tenant,
+        listing=listing,
+        claimant=user,
+        method=method,
+        role_claimed=claimant["role_claimed"],
+        last_step="submitted",
+    )
+
+    now = timezone.now()
+    consent_payload = {}
+    for channel in CONSENT_CHANNELS:
+        granted = bool(consent[channel].get("granted"))
+        Consent.objects.create(
+            tenant=tenant,
+            claim=claim,
+            channel=channel,
+            granted=granted,
+            granted_at=now if granted else None,
+            ip=ip if granted else None,
+            text_version=str(consent_text),
+        )
+        consent_payload[channel] = {
+            "granted": granted,
+            "at": now.isoformat() if granted else None,
+            "ip": (ip or None) if granted else None,
+            "text_version": str(consent_text),
+        }
+
+    claim_event = emit(
+        events.CLAIM_SUBMITTED,
+        subject=claim.public_id,
+        tenant=tenant,
+        actor=actor,
+        data={
+            "claim": {
+                "id": claim.public_id,
+                "listing_id": listing.public_id,
+                "status": claim.status,
+                "method": claim.method,
+            },
+            "claimant": {
+                "id": user.public_id,
+                "name": claimant["name"],
+                "email": claimant["email"],
+                "phone_e164": claimant["phone_e164"],
+                "role_claimed": claimant["role_claimed"],
+            },
+            "consent": consent_payload,
+        },
+    )
+    result_event_id = claim_event.event_id
+
+    # Two pending claims on a listing that has no sitting owner are not a
+    # dispute -- both proceed independently. Approving one is what disposes
+    # of the others (auto-rejecting the losers); that reconciliation is a
+    # later PR's job, not this check's (ruling, 2026-09-11). Only a listing
+    # that is already Status.CLAIMED routes here -- verification alone never
+    # moves ownership away from a sitting owner (spec §9.4).
+    if listing.status == Listing.Status.CLAIMED:
+        claim.status = Claim.Status.DISPUTED
+        claim.save(update_fields=["status"])
+        emit(
+            events.CLAIM_DISPUTED,
+            subject=claim.public_id,
+            tenant=tenant,
+            actor=actor,
+            data={"claim": {"id": claim.public_id, "listing_id": listing.public_id}},
+        )
+        emit(
+            events.MODERATION_QUEUED,
+            subject=claim.public_id,
+            tenant=tenant,
+            actor=actor,
+            data={
+                "item_type": "claim_dispute",
+                "item_id": claim.public_id,
+                "rules_triggered": ["duplicate_claim"],
+                "priority": "normal",
+            },
+        )
+        # Nothing reads moderation.queued yet -- expected, no queue exists
+        # this side of claim disputes (mvp-plan.md, "Out, and planned").
+
+    return claim, result_event_id
