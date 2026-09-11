@@ -1,13 +1,23 @@
 # OSDS — Event Schema, Adapter Interface & Entitlements
 
 **Open Source Directory Site**
-**Status:** Draft v0.9 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
+**Status:** Draft v0.10 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
 **Audience:** core maintainers, adapter authors
 
 This document defines the contract between the OSDS core and everything outside it. The core is a multi-tenant directory engine. It knows nothing about email providers, CRMs, payment gateways, or messaging platforms. It emits facts and accepts commands. Adapters translate.
 
 If you are writing an adapter, sections 3, 7 and 8 are the ones you need.
 If you are implementing the paid tiers, section 5 is the whole job.
+
+### Changes from v0.9
+
+- **§4.3.** Owner authentication is defined: an emailed sign-in link, no
+  password on a user row.
+- **§9.** `domain_email` states its match rule against the listing's
+  `contact.website` host.
+- **§9.6 added.** Attempt limits and lockouts for verification codes and
+  for repeated rejection.
+- **§15.6.** The claim attempt ceiling is no longer open.
 
 ### Changes from v0.8
 
@@ -517,9 +527,22 @@ owner authentication decision.
 
 #### Authentication
 
-**Undefined.** A claimant proves control of an email or phone during
-verification (§9) but never sets a credential, and §6.5 requires owners to
-reach a dashboard. How an owner authenticates is not specified here.
+**An owner signs in with an emailed link. A user row carries no credential.**
+
+The owner enters their email; core mails a single-use link with a
+core-computed 12-hour lifetime. Following it opens a session that expires
+after 12 hours without activity. There is no password, no reset flow and
+no lockout policy, because there is nothing to reset or lock.
+
+This closes the matching hazard named above. Reusing a user row on an
+email match stops being safe the moment a stored credential outlives the
+verification that justified it — a later claimant would inherit the
+access a previous person earned. A link re-proves control of the mailbox
+on every entry, so the match rule stays correct without a second
+credential store.
+
+The link is not a verification code and does not take §9.5's bounds. It
+grants access to a dashboard; a §9 code transfers ownership.
 
 ### 4.4 Principals
 
@@ -1309,7 +1332,7 @@ Methods are enabled per tenant in the setup wizard. **At least one must be enabl
 | -------------- | ------------------ | -------------------------- | ------------------------------------------------- |
 | `manual`       | Varies             | Nothing                    | **Default.** Always available.                    |
 | `phone_otp`    | Strong             | `sms.send` or `voice.call` | The workhorse. Proves control of the listed line. |
-| `domain_email` | Weak               | `email.send` (bundled)     | Only meaningful with a real company domain.       |
+| `domain_email` | Weak               | `email.send` (bundled)     | Matched against the listing's website host. §9.6. |
 | `gbp_oauth`    | Strongest          | Google API access          | Optional, never default. §9.1.                    |
 | `postcard`     | Strong for address | `postal.send`              | §9.2.                                             |
 
@@ -1453,7 +1476,68 @@ A value outside the bounds is rejected at configuration time, not silently clamp
 
 **Bounds are core's, not the tenant's.** They exist because a 48-hour SMS code and a 10-minute one are different security properties, and an operator tuning a form field is not making a security decision knowingly.
 
-Attempt limits are a separate concern and are not specified here — see §15.6. `claim.verification_failed` carries `attempt`, which currently has no defined ceiling.
+Attempt limits are in §9.6.
+
+### 9.6 Domain matching, attempt limits and lockouts
+
+#### The code never enters an event payload
+
+`claim.verification_started` carries `method`, `expires_at` and a masked
+destination. It never carries the code. The bundled `webhook` adapter is
+default-enabled (§8.6) and would POST a live credential to an
+operator-supplied URL, and `OutboxEvent.data` retains payloads for 90 days
+(§11.2). Core stores a hash of the code and compares on entry; the
+plaintext exists only in the message sent.
+
+#### `domain_email` matching
+
+`domain_email` is offered only when the listing carries a
+`contact.website`. The claimant enters an email address, and its domain
+must equal the website's host with a leading `www.` removed and nothing
+else stripped. `shop.example.test` on the website requires
+`@shop.example.test` on the form. No website, no match, or a website that
+is a social or marketplace page → the method is unavailable and the claim
+goes to manual review with the operator notified.
+
+The rule is deliberately narrow. A listing whose website is a platform
+page has no domain to prove control of, and a claimant who cannot receive
+mail at the business's own domain has not demonstrated anything the
+method claims to demonstrate. Manual review is the fallback for every
+such case, which is why §9 requires it always be available.
+
+The masked destination already discloses the domain (§9.4), so branching
+on the match is not a new disclosure.
+
+#### Verification code attempts
+
+Five wrong entries kill the code and open a 15-minute cooldown on that
+`(listing, email)` pair. Three cooldowns lock the pair: `domain_email` is
+unavailable to that address on that listing, the claim falls to manual,
+and a `moderation.queued` item is opened for the operator. Only an
+operator clears the lock.
+
+`claim.verification_failed` carries `attempt`. The limits are core's, not
+tenant-configurable — an operator raising a brute-force ceiling on a form
+field is not making a security decision knowingly, the same reasoning
+§9.5 applies to lifetimes.
+
+#### Repeated rejection
+
+A rejected claimant may submit again. Most rejections mean the claimant
+gave too little, and §9.3's mandatory notes are what tell them what was
+missing.
+
+**Three rejections on the same `(listing, email)` pair block that address
+from claiming that listing**, with a `moderation.queued` item for the
+operator and an operator-only unblock. Scope is the listing, never the
+tenant: a person rejected three times on one business may legitimately
+own another, and a tenant-wide block on an email address is a support
+call the operator did not ask for.
+
+The two counters are independent. A rejection does not reset a
+verification cooldown or a verification lock, and clearing one does not
+clear the other — a rejection that reset a brute-force counter would be a
+route around it.
 
 ---
 
@@ -1587,4 +1671,4 @@ minio          (bundled S3-compatible storage; overridable via S3_* vars)
 3. **Data model and migrations** — entitlement and slot tables are specified behaviourally, not yet as schema.
 4. **Owner dashboard scope** — what an owner can edit without re-verification, and what re-opens moderation.
 5. **Import pipeline detail** — CSV column mapping, dedupe strategy against `suppression_key`, batch rollback mechanics.
-6. **Rate limiting and abuse** — public API limits, claim attempt limits, review submission limits, and operator login attempt limits. Includes a ceiling for the attempt counter on claim.verification_failed (§9.5). Operator login ships unthrottled; the Node-era `operator_login_attempts` design is superseded and is not the answer.
+6. **Rate limiting and abuse** — public API limits, review submission limits, and operator login attempt limits. Claim attempt limits are settled in §9.6. Operator login ships unthrottled; the Node-era `operator_login_attempts` design is superseded and is not the answer.
