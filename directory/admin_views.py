@@ -29,6 +29,7 @@ from directory.field_schema import FIELD_TYPES, SchemaError, validate_type_schem
 from directory.models import (
     Category,
     ImportBatch,
+    ImportBatchListing,
     Listing,
     ListingType,
     MediaAsset,
@@ -37,6 +38,7 @@ from directory.storage import DeferredFeatureError, get_tenant_storage
 from tenants.models import StaffMembership
 
 _ADMIN = tenant_admin_required()
+_MANAGER = tenant_admin_required(StaffMembership.Role.MANAGER)
 _EDITOR = tenant_admin_required(StaffMembership.Role.EDITOR)
 
 
@@ -698,6 +700,20 @@ def import_detail(request, public_id):
         {"index": i, "header": h, "selected": mapping.get(h, "")}
         for i, h in enumerate(batch.detected_headers or [])
     ]
+    terminal = batch.status in (
+        ImportBatch.Status.COMPLETED,
+        ImportBatch.Status.FAILED,
+    )
+    window_passed = terminal and ImportBatchListing.objects.filter(
+        batch=batch, pre_image_nulled_at__isnull=False
+    ).exists()
+    # import_rollback is gated at manager (@_MANAGER below) -- the button must
+    # not render for a rank the view itself would 403.
+    can_rollback = (
+        terminal
+        and not window_passed
+        and request.membership.role >= StaffMembership.Role.MANAGER
+    )
     return render(
         request,
         "directory/admin/import_detail.html",
@@ -706,8 +722,23 @@ def import_detail(request, public_id):
             "rows": rows,
             "targets": csv_import.allowed_targets(batch.listing_type),
             "can_map": batch.status == ImportBatch.Status.MAPPING,
+            "can_rollback": can_rollback,
+            "rollback_window_passed": window_passed,
         },
     )
+
+
+@_MANAGER
+def import_rollback(request, public_id):
+    batch = _get_batch(request, public_id)
+    if request.method == "POST":
+        try:
+            services.rollback_import_batch(batch, operator=request.user)
+        except services.RollbackRefused as exc:
+            messages.error(request, exc.message)
+        else:
+            messages.success(request, "Import rolled back.")
+    return redirect("directory_admin:import-detail", public_id=public_id)
 
 
 @_EDITOR

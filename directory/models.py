@@ -511,6 +511,61 @@ class MediaAsset(models.Model):
         return f"{self.public_id} ({self.role})"
 
 
+class ImportBatchListing(models.Model):
+    """One listing a batch created or updated, with the pre-image needed to
+    undo it (spec §3.3, decisions.md "Rollback restores updated rows").
+
+    Written inside ``upsert_listing``'s transaction whenever ``import_batch`` is
+    set: ``action="created"`` for a create (``pre_image`` null -- rollback
+    deletes the row), ``action="updated"`` for an update (``pre_image`` is the
+    full §4.1 projection as the row stood *before* this batch touched it --
+    rollback assigns it back). First touch wins, so a row this batch creates
+    and then updates stays ``created``.
+
+    ``Listing.import_batch`` only records the batch that *created* a row; this
+    table is the only record of which rows a batch *updated*. ``pre_image`` is
+    a second copy of personal data and is nulled at 90 days (spec §11.2) by
+    ``directory.importing.null_import_pre_images`` -- a batch whose pre-images
+    have been nulled can no longer be rolled back.
+    """
+
+    class Action(models.TextChoices):
+        CREATED = "created", "Created"
+        UPDATED = "updated", "Updated"
+
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="import_batch_listings",
+    )
+    batch = models.ForeignKey(
+        ImportBatch, on_delete=models.CASCADE, related_name="row_provenance"
+    )
+    listing = models.ForeignKey(
+        Listing, on_delete=models.CASCADE, related_name="import_provenance"
+    )
+    action = models.CharField(max_length=8, choices=Action.choices)
+    pre_image = models.JSONField(null=True, blank=True)
+    pre_image_nulled_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    objects = TenantScopedManager()
+    all_tenants = models.Manager()
+
+    class Meta:
+        db_table = "import_batch_listings"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["batch", "listing"],
+                name="uniq_importbatchlisting_batch_listing",
+            ),
+        ]
+        indexes = [models.Index(fields=["tenant", "batch"])]
+
+    def __str__(self) -> str:
+        return f"{self.batch_id}:{self.listing_id} ({self.action})"
+
+
 class Claim(models.Model):
     """Acquiring a verified human owner for a listing (spec §9)."""
 

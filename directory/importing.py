@@ -6,8 +6,10 @@
 row fails fatally -- finish the batch and emit ``import.completed``. The
 worker's ``worker_pass`` calls it once per pass, right after ``drain_once``.
 
-There is no ``while`` loop and no rollback here. Rollback and the per-row
-provenance table are the next PR.
+There is no ``while`` loop here. Rollback is a synchronous admin action in
+``directory.services.rollback_import_batch``; the per-row provenance it reads
+(``ImportBatchListing``) is written inside ``upsert_listing``. This module also
+holds ``null_import_pre_images``, the 90-day pre-image sweep.
 
 The whole pass runs inside ``tenant_context(batch.tenant)``, entered *after*
 the cross-tenant claim and left before the function returns -- the worker is
@@ -21,6 +23,7 @@ import csv
 import io
 import itertools
 from dataclasses import dataclass
+from datetime import timedelta
 
 from django.db import transaction
 
@@ -28,10 +31,14 @@ from audit import events
 from audit.outbox import emit
 from directory.csv_import import ROWS_PER_PASS, build_payload
 from directory.field_schema import SchemaError
-from directory.models import ImportBatch
+from directory.models import ImportBatch, ImportBatchListing
 from directory.services import RejectedField, Suppressed, upsert_listing
 from directory.storage import DeferredFeatureError, get_tenant_storage
 from osds.tenancy import tenant_context
+
+# A pre-image is a second copy of personal data (spec §11.2); it is cleared
+# once its batch is this old, and the batch can no longer be rolled back.
+PRE_IMAGE_TTL = timedelta(days=90)
 
 _OUTCOME_COUNTER = {
     "created": "created_count",
@@ -274,3 +281,26 @@ def _bump(batch, n, *, note=None, error=None, **counters) -> None:
     fields = [*counters, "processed_row_count", "errors", "notes"]
     with transaction.atomic():
         batch.save(update_fields=fields)
+
+
+# --- pre-image nulling -------------------------------------------------------
+
+
+def null_import_pre_images(*, now) -> int:
+    """Clear the pre-image on every ``ImportBatchListing`` whose batch settled
+    more than 90 days ago (spec §3.3, §11.2), returning the number of rows
+    nulled.
+
+    A pre-image is a second copy of personal data; past the window the batch
+    can no longer be rolled back and the admin says so. Idempotent -- a row
+    already stamped is skipped. Cross-tenant: takes no tenant in scope.
+
+    This is a plain function. It is deliberately *not* registered as a worker
+    tick job -- #180 (the retention-sweep cadence) is unresolved -- so nothing
+    calls it automatically yet.
+    """
+    cutoff = now - PRE_IMAGE_TTL
+    return ImportBatchListing.all_tenants.filter(
+        pre_image_nulled_at__isnull=True,
+        batch__completed_at__lt=cutoff,
+    ).update(pre_image=None, pre_image_nulled_at=now)

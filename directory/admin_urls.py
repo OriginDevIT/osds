@@ -90,4 +90,9 @@ urlpatterns = [
         name="import-mapping",
     ),
     path("imports/<str:public_id>/run/", views.import_run, name="import-run"),
+    path(
+        "imports/<str:public_id>/rollback/",
+        views.import_rollback,
+        name="import-rollback",
+    ),
 ]

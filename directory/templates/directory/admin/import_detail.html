@@ -65,5 +65,33 @@
   <tr><th>Errors</th><td>{{ batch.error_count }}</td></tr>
 </table>
 <p class="muted">Counts populate when processing runs.</p>
+
+<h2>Rollback</h2>
+{% if can_rollback %}
+<form method="post" action="{% url 'directory_admin:import-rollback' public_id=batch.public_id %}"
+      onsubmit="return confirm('Roll back this import? Listings it created are deleted and listings it updated are restored to their pre-import values.');">
+  {% csrf_token %}
+  <button type="submit">Roll back this import</button>
+</form>
+<p class="muted">
+  Deletes the {{ batch.created_count }} listing(s) this import created and
+  restores the {{ batch.updated_count }} it updated. Emits
+  <code>import.rolled_back</code>; no suppression key is written. Requires the
+  manager role.
+</p>
+{% elif rollback_window_passed %}
+<p class="muted">
+  This import is past its 90-day rollback window — its pre-images have been
+  cleared, so it can no longer be rolled back.
+</p>
+{% elif batch.status == "rolled_back" %}
+<p class="muted">
+  Rolled back {{ batch.rolled_back_at }}{% if batch.rolled_back_by %} by
+  {{ batch.rolled_back_by.email }}{% endif %}.
+</p>
+{% else %}
+<p class="muted">A rollback is available once the import has finished.</p>
+{% endif %}
+
 <p><a href="{% url 'directory_admin:import-list' %}">Back to imports</a></p>
 {% endblock %}
