@@ -16,9 +16,10 @@ ways that would otherwise leak into the outbox drain's:
   could send in time.
 * An "unconfigured" outcome -- no provider registered, or a provider that
   raises ``CapabilityUnconfigured`` -- leaves the row ``pending`` with no
-  attempt consumed and no backoff applied (§4.3). Treating it as a failure
-  would dead-letter every message queued before the operator configured
-  mail.
+  attempt consumed (§4.3). Treating it as a failure would dead-letter every
+  message queued before the operator configured mail. It is rechecked
+  ``UNCONFIGURED_RECHECK`` later -- a fixed interval, never ``backoff()``:
+  backoff grows with attempts, and this is deliberately not one.
 
 ``backoff`` *is* shared with the outbox drain: §4.3 does not say the mail
 schedule differs from spec §8.2's, so forking it would be a second copy of
@@ -32,6 +33,8 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from django.db import transaction
+from django.db.models import Value
+from django.db.models.functions import Coalesce
 
 from audit.models import OutboundMessage
 from audit.worker.drain import backoff
@@ -44,6 +47,12 @@ logger = logging.getLogger("osds.mail")
 # the 30s handler timeout (spec §8.2) plus room for the two short claim/record
 # transactions and clock slack.
 CLAIM_VISIBILITY_SECONDS = 90
+
+# How long an unconfigured row waits before the drain looks at it again. A
+# fixed interval, not backoff(): backoff grows with attempt count, and an
+# unconfigured row's attempt count never moves (§4.3 -- no attempt consumed),
+# so there is nothing for an exponential schedule to key off.
+UNCONFIGURED_RECHECK = timedelta(seconds=60)
 
 _CLAIM_BATCH = 100
 _CAPABILITY = "email.send"
@@ -91,14 +100,19 @@ def _record(
     error: str = "",
     sent: bool = False,
 ) -> bool:
-    """Write one attempt's outcome -- but only if the row is still where the
-    claim left it (guarded on ``next_attempt_at``, same reasoning as
-    ``audit.worker.drain._record``: a hung handler's row re-claimed by a
-    later pass makes this write match nothing, and it is discarded)."""
+    """Write one attempt's outcome in a single ``UPDATE`` -- but only if the
+    row is still where the claim left it (guarded on ``next_attempt_at``,
+    same reasoning as ``audit.worker.drain._record``: a hung handler's row
+    re-claimed by a later pass makes this write match nothing, and it is
+    discarded). ``first_attempted_at`` rides along in the same statement via
+    ``Coalesce`` -- stamped with ``now`` only while still null, left alone
+    otherwise -- so recording one outcome costs exactly one query, not a
+    fields update followed by a separate first-attempt check."""
     fields = {
         "status": status,
         "last_attempted_at": now,
         "last_error": error or "",
+        "first_attempted_at": Coalesce("first_attempted_at", Value(now)),
     }
     if attempt is not None:
         fields["attempt"] = attempt
@@ -113,15 +127,10 @@ def _record(
     if sent:
         fields["sent_at"] = now
 
-    with transaction.atomic():
-        applied = OutboundMessage.all_tenants.filter(
-            pk=message.pk,
-            next_attempt_at=message.next_attempt_at,
-        ).update(**fields)
-        if applied:
-            OutboundMessage.all_tenants.filter(
-                pk=message.pk, first_attempted_at__isnull=True
-            ).update(first_attempted_at=now)
+    applied = OutboundMessage.all_tenants.filter(
+        pk=message.pk,
+        next_attempt_at=message.next_attempt_at,
+    ).update(**fields)
     return bool(applied)
 
 
@@ -141,7 +150,7 @@ def attempt_message(message: OutboundMessage, *, now) -> str:
             message,
             now=now,
             status=OutboundMessage.Status.PENDING,
-            next_attempt_at=now,
+            next_attempt_at=now + UNCONFIGURED_RECHECK,
             error="no email.send provider registered",
         )
         return "unconfigured" if applied else "discarded"
@@ -153,7 +162,7 @@ def attempt_message(message: OutboundMessage, *, now) -> str:
             message,
             now=now,
             status=OutboundMessage.Status.PENDING,
-            next_attempt_at=now,
+            next_attempt_at=now + UNCONFIGURED_RECHECK,
             error=str(exc) or "email.send is not configured",
         )
         return "unconfigured" if applied else "discarded"
@@ -219,9 +228,13 @@ def mail_drain_once(*, now, batch: int = _CLAIM_BATCH) -> MailDrainStats:
 
     # One aggregate line, never one per row (§4.3: "the drain logs once per
     # pass") -- a backlog queued before the operator configures mail must
-    # not turn into a log line per pending message every second.
+    # not turn into a log line per pending message every second. WARNING,
+    # not INFO: this project ships no LOGGING config, so the default root
+    # level (WARNING) would silently swallow an INFO record -- an operator
+    # needs this line to actually reach the worker's stdout/stderr with no
+    # configuration of their own.
     if stats.unconfigured:
-        logger.info(
+        logger.warning(
             "osds-mail-drain: %d message(s) pending, email.send unconfigured",
             stats.unconfigured,
         )

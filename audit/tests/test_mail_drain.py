@@ -8,7 +8,6 @@ these tests use ``TransactionTestCase``. Time is injected via ``now=``.
 from __future__ import annotations
 
 from datetime import timedelta
-from unittest import mock
 
 from django.db import transaction
 from django.test import SimpleTestCase, TransactionTestCase
@@ -19,6 +18,8 @@ from audit.models import OutboundMessage
 from audit.worker import mail_drain
 from audit.worker.mail_drain import (
     CLAIM_VISIBILITY_SECONDS,
+    UNCONFIGURED_RECHECK,
+    _record,
     attempt_message,
     mail_drain_once,
 )
@@ -177,7 +178,17 @@ class UnconfiguredTests(_MailDrainBase):
         self.assertEqual(message.status, OutboundMessage.Status.PENDING)
         self.assertEqual(message.attempt, 0)
 
-    def test_unconfigured_message_is_retried_immediately_not_backed_off(self):
+    def test_no_provider_registered_next_attempt_at_is_fixed_recheck(self):
+        message = self.enqueue()
+        t0 = timezone.now()
+
+        mail_drain_once(now=t0)
+
+        message.refresh_from_db()
+        self.assertEqual(message.next_attempt_at, t0 + UNCONFIGURED_RECHECK)
+        self.assertEqual(message.attempt, 0)
+
+    def test_capability_unconfigured_next_attempt_at_is_fixed_recheck(self):
         self.register(UnconfiguredProvider())
         message = self.enqueue()
         t0 = timezone.now()
@@ -185,17 +196,36 @@ class UnconfiguredTests(_MailDrainBase):
         mail_drain_once(now=t0)
 
         message.refresh_from_db()
-        self.assertEqual(message.next_attempt_at, t0)  # not now + backoff
+        self.assertEqual(message.next_attempt_at, t0 + UNCONFIGURED_RECHECK)
+        self.assertEqual(message.attempt, 0)
 
-    def test_drain_logs_once_per_pass_not_once_per_row(self):
+    def test_recheck_is_a_fixed_interval_not_backoff(self):
+        # Two passes, each finding the row still unconfigured: the second
+        # recheck is exactly one more UNCONFIGURED_RECHECK out, not a longer,
+        # backoff()-shaped gap -- there is no attempt count driving it.
+        message = self.enqueue()
+        t0 = timezone.now()
+        mail_drain_once(now=t0)
+        message.refresh_from_db()
+        first_recheck = message.next_attempt_at
+        self.assertEqual(first_recheck, t0 + UNCONFIGURED_RECHECK)
+
+        mail_drain_once(now=first_recheck)
+        message.refresh_from_db()
+        self.assertEqual(message.next_attempt_at, first_recheck + UNCONFIGURED_RECHECK)
+        self.assertEqual(message.attempt, 0)
+
+    def test_drain_warns_once_per_pass_not_once_per_row(self):
         self.enqueue()
         self.enqueue()
         self.enqueue()
 
-        with mock.patch("audit.worker.mail_drain.logger") as logger:
+        with self.assertLogs("osds.mail", level="WARNING") as captured:
             mail_drain_once(now=timezone.now())
 
-        self.assertEqual(logger.info.call_count, 1)
+        self.assertEqual(len(captured.records), 1)
+        self.assertEqual(captured.records[0].levelname, "WARNING")
+        self.assertIn("3", captured.records[0].getMessage())
 
 
 class DeliveryOutcomeTests(_MailDrainBase):
@@ -270,6 +300,42 @@ class DeliveryOutcomeTests(_MailDrainBase):
         mail_drain_once(now=timezone.now() + HOUR)
         message.refresh_from_db()
         self.assertEqual(message.status, OutboundMessage.Status.SENT)
+
+
+class RecordQueryCountTests(_MailDrainBase):
+    """``_record`` writes ``first_attempted_at`` via ``Coalesce`` in the same
+    statement as everything else -- one attempt, one query, not a fields
+    update followed by a separate first-attempt check."""
+
+    def test_sent_row_costs_exactly_one_update(self):
+        message = self.enqueue()
+
+        with self.assertNumQueries(1):
+            applied = _record(
+                message,
+                now=timezone.now(),
+                status=OutboundMessage.Status.SENT,
+                attempt=1,
+                sent=True,
+            )
+
+        self.assertTrue(applied)
+        message.refresh_from_db()
+        self.assertEqual(message.status, OutboundMessage.Status.SENT)
+
+    def test_first_attempted_at_is_still_stamped_exactly_once(self):
+        message = self.enqueue()
+        t0 = timezone.now()
+        _record(message, now=t0, status=OutboundMessage.Status.PENDING, attempt=1)
+        message.refresh_from_db()
+        self.assertEqual(message.first_attempted_at, t0)
+
+        # A second attempt, later, must not move it.
+        t1 = t0 + HOUR
+        _record(message, now=t1, status=OutboundMessage.Status.PENDING, attempt=2)
+        message.refresh_from_db()
+        self.assertEqual(message.first_attempted_at, t0)  # unchanged
+        self.assertEqual(message.last_attempted_at, t1)
 
 
 class BodyAndAddressRetentionTests(_MailDrainBase):

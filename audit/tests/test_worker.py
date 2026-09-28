@@ -102,8 +102,36 @@ class WorkerPassTests(SimpleTestCase):
         self._pass(now=timezone.now(), last_tick=None, wait=wait)
         wait.assert_not_called()
 
-    def test_pass_that_claimed_a_mail_message_does_not_wait(self):
-        self.mail.return_value = MailDrainStats(claimed=1)
+    def test_pass_where_every_claimed_mail_row_was_unconfigured_still_waits(self):
+        # Claimed but never attempted -- not work. Unconfigured rows recheck
+        # on their own fixed interval (mail_drain.UNCONFIGURED_RECHECK); if
+        # this counted as work the worker would busy-loop with no wait() for
+        # as long as mail stayed unconfigured.
+        self.mail.return_value = MailDrainStats(claimed=3, unconfigured=3)
+        wait = mock.Mock()
+        self._pass(now=timezone.now(), last_tick=None, wait=wait)
+        wait.assert_called_once_with()
+
+    def test_pass_that_sent_a_mail_message_does_not_wait(self):
+        self.mail.return_value = MailDrainStats(claimed=1, sent=1)
+        wait = mock.Mock()
+        self._pass(now=timezone.now(), last_tick=None, wait=wait)
+        wait.assert_not_called()
+
+    def test_pass_that_retried_a_mail_message_does_not_wait(self):
+        self.mail.return_value = MailDrainStats(claimed=1, retried=1)
+        wait = mock.Mock()
+        self._pass(now=timezone.now(), last_tick=None, wait=wait)
+        wait.assert_not_called()
+
+    def test_pass_that_dead_lettered_a_mail_message_does_not_wait(self):
+        self.mail.return_value = MailDrainStats(claimed=1, dead_lettered=1)
+        wait = mock.Mock()
+        self._pass(now=timezone.now(), last_tick=None, wait=wait)
+        wait.assert_not_called()
+
+    def test_pass_that_expired_a_mail_message_does_not_wait(self):
+        self.mail.return_value = MailDrainStats(claimed=1, expired=1)
         wait = mock.Mock()
         self._pass(now=timezone.now(), last_tick=None, wait=wait)
         wait.assert_not_called()

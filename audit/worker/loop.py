@@ -13,9 +13,13 @@ tests drive it directly:
   ``tick_period`` (decisions.md §4.3): a claim-code email is not something a
   directory can wait a tick period for;
 * it calls ``wait`` only when the pass found nothing to do. A pass that fanned
-  out an event, attempted a delivery, attempted a mail message or processed
-  an import row goes straight round again -- a backlog drains without
-  sleeping between passes.
+  out an event, attempted a delivery, sent/retried/dead-lettered/expired a
+  mail message, or processed an import row goes straight round again -- a
+  backlog drains without sleeping between passes. A pass whose only mail
+  activity was claiming *unconfigured* rows does not count: those rows are
+  rechecked on their own fixed interval (``mail_drain.UNCONFIGURED_RECHECK``),
+  not spun on every pass -- counting them here would keep the worker
+  busy-looping, with no ``wait()``, for as long as mail stays unconfigured.
 
 ``run_loop`` is the ``while True`` around it. It holds ``last_tick``, reads the
 clock once per pass, and is imported by no test. It has no iteration count and
@@ -61,7 +65,14 @@ def worker_pass(*, now, last_tick, tick_period, wait) -> datetime:
     did_work = bool(
         drain.events_fanned_out
         or drain.deliveries_attempted
-        or mail.claimed
+        # Only rows that reached the provider, or expired, count -- an
+        # unconfigured row (claimed but never attempted) does not, or the
+        # worker would busy-loop with no wait() for as long as mail stays
+        # unconfigured.
+        or mail.sent
+        or mail.retried
+        or mail.dead_lettered
+        or mail.expired
         or imp.rows_processed
     )
     if not did_work:
