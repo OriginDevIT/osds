@@ -8,7 +8,7 @@ replaying prior conversations.
 information, not a fresh opinion. If you disagree, open an issue arguing the
 new information — do not relitigate in code or in a chat session.
 
-Last updated: 2026-09-11
+Last updated: 2026-09-27
 
 ---
 
@@ -258,6 +258,25 @@ New subsection. The PR 1/2/3 rulings (#186, #190, #201, #203).
 | **Rollback requires manager (rank 3); upload requires editor (rank 2)** | Upload is additive. Rollback hard-deletes in bulk with no per-listing event. §4.4's 3/2 cut.                                                                                                                                                                                                                                                                                                                                                     |
 | **A listing in no category gets an uncategorised default**              | A CSV with no category column is a normal import and must not fail every row. Open inside this: whether the default is seeded at `ListingType` creation or minted lazily.                                                                                                                                                                                                                                                                        |
 | **`null_import_pre_images` stays a pure function**                      | No management command, no tick registration. A cron-invoked command is a second scheduling mechanism competing with the tick loop, which is what #180 exists to settle. It has no caller today (#193).                                                                                                                                                                                                                                           |
+
+## §4.3 — Outbound mail
+
+New subsection. Claims PR 2 rulings.
+
+| Decision | Reasoning |
+| --- | --- |
+| **`OutboundMessage` is one table with delivery state on the row** | One consumer and no fan-out, so a per-consumer table like `OutboxDelivery` would always hold exactly one row. The drain mechanics are copied exactly: a `SKIP LOCKED` claim, a 90-second visibility deadline, and a result recorded only if the stamped deadline still matches. The concurrency hazards do not depend on consumer count. Statuses `pending \| sent \| dead \| expired`; §8.2 backoff. |
+| **`expires_at` stops a dead code being sent** | The producer sets it to the code's or link's own expiry. Past it, the drain marks the row `expired` and never sends. A code delivered after it died reads as live and burns §9.6 attempts. Null for messages with no deadline. `expired` tells the operator SMTP was down long enough to kill a code, which `dead` does not. |
+| **`body_text` is nulled on terminal state; `to_address` at 90 days** | The body holds the plaintext code, and §9.6 says the plaintext exists only in the message sent. It is nulled in the same write that sets `sent`, `dead` or `expired`. The address is kept for delivery debugging and nulled at 90 days per §11.2 by a tick job queued behind #180 (#213). `subject` is template text and stays. |
+| **`OutboundMessage.tenant` is non-null** | It fails the §11.2 `command_log` exception on two of its three conditions: it is a pending state change the drain reads back and updates. Operator invitation mail is installation-scoped and is #163's design problem. |
+| **Capabilities resolve through `capability_provider(name)` in `osds/adapters.py`** | Beside the event subscribers. One provider per capability; a second registration raises. The `smtp` sender lives in `adapters/smtp/` and is wired by the `osds` bootstrap (§8.6). A test asserts nothing under `directory/`, `tenants/`, `billing/` or `audit/` imports `adapters`. Rejected: a separate `osds/capabilities.py`, because two registry modules drift. |
+| **Unavailable mail leaves the row pending** | With no provider registered or empty SMTP settings, no attempt is consumed and no backoff applies; `expires_at` governs, and the drain logs once per pass. Treating it as a failure would dead-letter every message queued before the operator configured mail. This is the state #121's skip action produces. |
+| **#121 follows PR 2 as its own PR** | Wizard UI and a credentials surface, both human-gated. The drain needs nothing from it once unconfigured mail is a defined state. |
+| **The mail drain runs every worker pass, not as a tick job** | Beside the outbox drain, on the 1-second idle poll, with no NOTIFY. A user-facing code does not belong on a tick period, and a drain does not need #180. |
+| **`enqueue` raises outside an atomic block** | The mail ruling's guarantee is atomicity with the causing state change: a stored hash with no message, or a message with no hash, is a broken claim. The inverse of `upsert_listing`'s guard, enforced for the same reason. |
+| **Sending emits no event and writes no command log** | §3.3 has no mail namespace and PR 2 does not invent one. The causing command already emits and logs. Delivery state is on the row. An adapter needing delivery events is a spec addition argued in an issue. |
+| **The bundled sender is stdlib only** | `smtplib` and `email.message.EmailMessage`, plain text. Settings are read per send from the database, with credentials via `Secret`. 30-second timeout (§8.2). TLS as stored, never downgraded. Logs `public_id` and the error class only: §8.3 forbids logging contact values, and #179's redaction does not exist yet. A recipient 5xx is permanent and goes to `dead`; connection errors and 4xx retry. Rejected: `django.core.mail`, which contradicts the settled stdlib wording. |
+| **Local mail is tested against Mailpit, a dev-only container** | Python 3.12 removed `smtpd`, and `aiosmtpd` would be a new dependency. Mailpit is never in `requirements.txt`, the compose file or the runtime. |
 
 ---
 
