@@ -9,6 +9,17 @@ The registry is empty until the SMTP and webhook adapters land (mvp-plan
 block 5). Pattern matching of an event type against an adapter's ``subscribes``
 list lands with the drain, so for now ``subscribers_for`` returns whatever is
 registered -- which is nothing.
+
+Beside the event-subscriber registry sits a second one, for capabilities
+(decisions.md §4.3): a capability is a named ability -- ``email.send`` today
+-- resolved through ``capability_provider(name)`` to at most one provider. An
+adapter package registers its provider from its ``AppConfig.ready()`` (the
+``adapters.smtp`` app registers ``email.send``), never at import time, so the
+registration happens exactly once regardless of how many modules import the
+package. A second registration for the same name is a configuration error and
+raises, unlike ``register()`` above, which is idempotent by design -- there is
+supposed to be at most one provider per capability, never a list to
+de-duplicate.
 """
 
 from __future__ import annotations
@@ -98,3 +109,53 @@ def override_subscribers(
         yield _REGISTRY
     finally:
         _REGISTRY = saved
+
+
+class CapabilityUnconfigured(Exception):
+    """Raised by a capability provider when it is registered but lacks the
+    configuration -- secrets, per-tenant settings -- needed to act.
+
+    The caller must not treat this as a delivery failure: decisions.md §4.3
+    says unavailable mail (no provider, or empty SMTP settings) leaves the
+    row pending with no attempt consumed and no backoff applied. Raising
+    this, rather than returning a ``Result``, keeps that "not a failure"
+    distinction impossible to blur with an ordinary ``Result.failed()``.
+    """
+
+
+_CAPABILITIES: "dict[str, object]" = {}
+
+
+def register_capability(name: str, provider: object) -> None:
+    """Register ``provider`` for capability ``name``. Called by an adapter
+    package's ``AppConfig.ready()``. Raises if ``name`` already has a
+    provider -- one provider per capability, never a second silently
+    replacing the first."""
+    if name in _CAPABILITIES:
+        raise ValueError(f"capability {name!r} already has a registered provider")
+    _CAPABILITIES[name] = provider
+
+
+def capability_provider(name: str) -> "object | None":
+    """The registered provider for ``name``, or ``None`` if nothing is
+    registered. ``None`` is an expected, valid state -- a fresh install with
+    no adapter configured yet -- not an error."""
+    return _CAPABILITIES.get(name)
+
+
+@contextlib.contextmanager
+def override_capability(
+    providers: "dict[str, object]",
+) -> "Iterator[dict[str, object]]":
+    """Install exactly ``providers`` for the duration of the block, then
+    restore whatever was registered before. Mirrors ``override_subscribers``
+    -- the supported seam for a test: a ``with`` block, or
+    ``self.enterContext(override_capability({...}))`` in ``setUp``. Pass
+    ``{}`` to simulate no provider registered at all.
+    """
+    global _CAPABILITIES
+    saved, _CAPABILITIES = _CAPABILITIES, dict(providers)
+    try:
+        yield _CAPABILITIES
+    finally:
+        _CAPABILITIES = saved

@@ -80,6 +80,11 @@ INSTALLED_APPS = [
     'directory',
     'billing',
     'audit',
+    # Adapters are core's dependents, never the reverse (CLAUDE.md invariant
+    # 1): this is the one place a vendor package name is allowed to appear.
+    # The app's own AppConfig.ready() registers the email.send capability;
+    # nothing under tenants/, directory/, billing/ or audit/ imports it.
+    'adapters.smtp',
 ]
 
 # Operators are the installation's people; a directory's users are a separate,

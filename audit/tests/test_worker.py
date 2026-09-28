@@ -20,6 +20,7 @@ from django.utils import timezone
 from audit.worker.drain import DrainStats
 from audit.worker.listen import OutboxListener
 from audit.worker.loop import worker_pass
+from audit.worker.mail_drain import MailDrainStats
 from audit.worker.singleton import SingleInstanceLock
 from audit.worker.tick import (
     override_tick_jobs,
@@ -40,6 +41,9 @@ class WorkerPassTests(SimpleTestCase):
         self.drain = self.enterContext(
             mock.patch("audit.worker.loop.drain_once")
         )
+        self.mail = self.enterContext(
+            mock.patch("audit.worker.loop.mail_drain_once")
+        )
         self.imp = self.enterContext(
             mock.patch("audit.worker.loop.import_once")
         )
@@ -47,6 +51,7 @@ class WorkerPassTests(SimpleTestCase):
             mock.patch("audit.worker.loop.tick_once")
         )
         self.drain.return_value = DrainStats()  # idle unless a test says otherwise
+        self.mail.return_value = MailDrainStats()
         self.imp.return_value = ImportStats()
 
     def _pass(self, *, now, last_tick, wait):
@@ -97,10 +102,55 @@ class WorkerPassTests(SimpleTestCase):
         self._pass(now=timezone.now(), last_tick=None, wait=wait)
         wait.assert_not_called()
 
-    def test_one_clock_value_threads_through_drain_import_and_tick(self):
+    def test_pass_where_every_claimed_mail_row_was_unconfigured_still_waits(self):
+        # Claimed but never attempted -- not work. Unconfigured rows recheck
+        # on their own fixed interval (mail_drain.UNCONFIGURED_RECHECK); if
+        # this counted as work the worker would busy-loop with no wait() for
+        # as long as mail stayed unconfigured.
+        self.mail.return_value = MailDrainStats(claimed=3, unconfigured=3)
+        wait = mock.Mock()
+        self._pass(now=timezone.now(), last_tick=None, wait=wait)
+        wait.assert_called_once_with()
+
+    def test_pass_that_sent_a_mail_message_does_not_wait(self):
+        self.mail.return_value = MailDrainStats(claimed=1, sent=1)
+        wait = mock.Mock()
+        self._pass(now=timezone.now(), last_tick=None, wait=wait)
+        wait.assert_not_called()
+
+    def test_pass_that_retried_a_mail_message_does_not_wait(self):
+        self.mail.return_value = MailDrainStats(claimed=1, retried=1)
+        wait = mock.Mock()
+        self._pass(now=timezone.now(), last_tick=None, wait=wait)
+        wait.assert_not_called()
+
+    def test_pass_that_dead_lettered_a_mail_message_does_not_wait(self):
+        self.mail.return_value = MailDrainStats(claimed=1, dead_lettered=1)
+        wait = mock.Mock()
+        self._pass(now=timezone.now(), last_tick=None, wait=wait)
+        wait.assert_not_called()
+
+    def test_pass_that_expired_a_mail_message_does_not_wait(self):
+        self.mail.return_value = MailDrainStats(claimed=1, expired=1)
+        wait = mock.Mock()
+        self._pass(now=timezone.now(), last_tick=None, wait=wait)
+        wait.assert_not_called()
+
+    def test_mail_drain_runs_every_pass_not_gated_on_the_tick(self):
+        # last_tick=None with a `now` that has not elapsed a full tick period
+        # since... there is no last_tick yet, so the tick itself always runs
+        # on the first pass. Assert the mail drain runs on a *second* pass
+        # where the tick is skipped -- it must not share the tick's gate.
+        now = timezone.now()
+        self._pass(now=now, last_tick=now, wait=mock.Mock())
+        self.tick.assert_not_called()
+        self.mail.assert_called_once_with(now=now)
+
+    def test_one_clock_value_threads_through_drain_mail_import_and_tick(self):
         now = timezone.now()
         self._pass(now=now, last_tick=None, wait=mock.Mock())
         self.drain.assert_called_once_with(now=now)
+        self.mail.assert_called_once_with(now=now)
         self.imp.assert_called_once_with(now=now, limit=ROWS_PER_PASS)
         self.tick.assert_called_once_with(now=now)
 
