@@ -1,0 +1,36 @@
+{% extends "public/base.html" %}
+{% block title %}Claim {{ listing.name }} &middot; {{ request.tenant.name }}{% endblock %}
+{% block content %}
+<h1>Claim {{ listing.name }}</h1>
+
+{% if masked_phone or masked_email %}
+  <p class="muted">
+    If this claim is approved, we will also notify the contact details already on file for
+    this listing{% if masked_phone %} ({{ masked_phone }}){% endif %}{% if masked_email %} ({{ masked_email }}){% endif %} --
+    so no one can quietly take over a listing that isn't theirs.
+  </p>
+{% endif %}
+
+{% if form.non_field_errors %}
+  <ul class="errors">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>
+{% endif %}
+
+<form method="post">
+  {% csrf_token %}
+  {{ form.role_claimed }}
+
+  <p>{{ form.name.label_tag }}<br>{{ form.name }}{{ form.name.errors }}</p>
+  <p>{{ form.email.label_tag }}<br>{{ form.email }}{{ form.email.errors }}</p>
+  <p>{{ form.phone_e164.label_tag }}<br>{{ form.phone_e164 }}{{ form.phone_e164.errors }}</p>
+  <p>{{ form.method.label_tag }}<br>{{ form.method }}{{ form.method.errors }}</p>
+
+  <fieldset>
+    <legend>{{ consent_text.body|linebreaksbr }}</legend>
+    <p>{{ form.marketing_email }} {{ form.marketing_email.label_tag }}</p>
+    <p>{{ form.marketing_sms }} {{ form.marketing_sms.label_tag }}</p>
+    <p>{{ form.automated_calls }} {{ form.automated_calls.label_tag }}</p>
+  </fieldset>
+
+  <button type="submit">Submit claim</button>
+</form>
+{% endblock %}

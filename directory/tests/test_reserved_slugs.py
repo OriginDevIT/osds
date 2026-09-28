@@ -13,7 +13,7 @@ from osds.tenancy import tenant_context
 from tenants.models import Operator, Tenant
 
 RESERVED = [
-    "search", "admin", "media", "robots.txt", "sitemap.xml", "sitemaps",
+    "search", "admin", "media", "claim", "robots.txt", "sitemap.xml", "sitemaps",
     ".well-known",
 ]
 
