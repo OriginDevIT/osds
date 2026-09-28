@@ -90,6 +90,10 @@ class _MailDrainBase(TransactionTestCase):
         kind="claim.verification_code",
         tenant=None,
     ):
+        # expires_at is required by audit.mail.enqueue; tests that don't care
+        # about expiry get a deadline far enough out not to interfere.
+        if expires_at is None:
+            expires_at = timezone.now() + timedelta(hours=24)
         with transaction.atomic():
             return enqueue_message(
                 tenant=tenant or self.tenant,
@@ -142,14 +146,12 @@ class ExpiryTests(_MailDrainBase):
         self.assertEqual(message.status, OutboundMessage.Status.EXPIRED)
         self.assertIsNone(message.body_text)
 
-    def test_message_with_no_expiry_is_never_expired(self):
-        self.register(ScriptedProvider(["ok"]))
-        message = self.enqueue(expires_at=None)
-
-        mail_drain_once(now=timezone.now() + timedelta(days=365))
-
-        message.refresh_from_db()
-        self.assertEqual(message.status, OutboundMessage.Status.SENT)
+    def test_expiry_is_required_ruling_change(self):
+        # OutboundMessage.expires_at is now non-null (ruling change): every
+        # producer sets a deadline, and expiry -- not an attempt count --
+        # bounds every row's lifetime. See audit.mail.enqueue's validation.
+        message = self.enqueue(expires_at=timezone.now() + timedelta(hours=1))
+        self.assertIsNotNone(message.expires_at)
 
 
 class UnconfiguredTests(_MailDrainBase):
@@ -234,11 +236,12 @@ class DeliveryOutcomeTests(_MailDrainBase):
 
     def test_retryable_failure_never_dead_letters_on_attempt_count_alone(self):
         # No MAX_ATTEMPTS here (unlike the outbox drain) -- expires_at is the
-        # only bound on a mail message's lifetime (§4.3).
+        # only bound on a mail message's lifetime (§4.3). Give it a deadline
+        # well past the 50 hourly retries below, so expiry never intervenes.
         provider = ScriptedProvider(["retry"] * 50)
         self.register(provider)
-        message = self.enqueue()
         t = timezone.now()
+        message = self.enqueue(expires_at=t + timedelta(hours=200))
 
         for _ in range(50):
             OutboundMessage.all_tenants.filter(pk=message.pk).update(

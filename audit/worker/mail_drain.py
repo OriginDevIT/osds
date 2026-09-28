@@ -131,7 +131,7 @@ def attempt_message(message: OutboundMessage, *, now) -> str:
     ``"unconfigured"`` | ``"discarded"`` -- the last when the row moved
     under the handler and the now-stale result was dropped.
     """
-    if message.expires_at is not None and now >= message.expires_at:
+    if now >= message.expires_at:
         applied = _record(message, now=now, status=OutboundMessage.Status.EXPIRED)
         return "expired" if applied else "discarded"
 

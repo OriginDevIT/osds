@@ -225,10 +225,12 @@ class OutboundMessage(models.Model):
     # Count of *completed* attempts. A crash mid-attempt is not an attempt.
     attempt = models.PositiveSmallIntegerField(default=0)
     next_attempt_at = models.DateTimeField(default=timezone.now)
-    # The deadline of the code or link this message carries. Null means no
-    # deadline. Past it, the drain marks the row `expired` and never sends --
-    # a code delivered after it died reads as live and burns a §9.6 attempt.
-    expires_at = models.DateTimeField(null=True, blank=True)
+    # The deadline of the code or link this message carries. Required --
+    # every producer sets one, and it is the only bound on this row's
+    # lifetime (no attempt ceiling exists). Past it, the drain marks the row
+    # `expired` and never sends -- a code delivered after it died reads as
+    # live and burns a §9.6 attempt.
+    expires_at = models.DateTimeField()
     first_attempted_at = models.DateTimeField(null=True, blank=True)
     last_attempted_at = models.DateTimeField(null=True, blank=True)
     # The error class only (§8.3): never a value from `to_address` or

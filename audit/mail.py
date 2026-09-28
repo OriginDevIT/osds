@@ -48,15 +48,22 @@ def enqueue(
     to_address: str,
     subject: str,
     body_text: str,
-    expires_at=None,
+    expires_at,
 ) -> OutboundMessage:
     """Queue one outbound email. Must be called inside the caller's
     ``transaction.atomic()`` block -- see ``require_atomic``.
 
-    ``expires_at`` is the deadline of the code or link ``body_text`` carries,
-    computed by the caller (spec §9.6); ``None`` means no deadline.
+    ``expires_at`` is the deadline of the code or link ``body_text``
+    carries, computed by the caller (spec §9.6). Required -- every producer
+    has a deadline to give, and it is the only bound on this row's lifetime
+    (no attempt ceiling exists). Must be timezone-aware, like every other
+    datetime this project stores (CLAUDE.md conventions).
     """
     require_atomic()
+    if expires_at is None:
+        raise ValueError("expires_at is required")
+    if timezone.is_naive(expires_at):
+        raise ValueError("expires_at must be timezone-aware")
     return OutboundMessage.all_tenants.create(
         tenant=tenant,
         kind=kind,

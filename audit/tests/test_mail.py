@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+
 from django.db import transaction
 from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
@@ -9,6 +11,8 @@ from django.utils import timezone
 from audit.mail import MustBeInTransaction, enqueue
 from audit.models import OutboundMessage
 from tenants.models import Tenant
+
+DEADLINE = timezone.timedelta(minutes=30)
 
 
 class EnqueueWritesTests(TestCase):
@@ -20,6 +24,7 @@ class EnqueueWritesTests(TestCase):
         self.tenant = Tenant.objects.create(slug="acme", name="Acme")
 
     def test_enqueue_writes_a_pending_row(self):
+        deadline = timezone.now() + DEADLINE
         with transaction.atomic():
             message = enqueue(
                 tenant=self.tenant,
@@ -27,6 +32,7 @@ class EnqueueWritesTests(TestCase):
                 to_address="claimant@example.test",
                 subject="Your code",
                 body_text="123456",
+                expires_at=deadline,
             )
         message.refresh_from_db()
         self.assertEqual(message.status, OutboundMessage.Status.PENDING)
@@ -35,11 +41,11 @@ class EnqueueWritesTests(TestCase):
         self.assertEqual(message.kind, "claim.verification_code")
         self.assertEqual(message.to_address, "claimant@example.test")
         self.assertEqual(message.body_text, "123456")
-        self.assertIsNone(message.expires_at)
+        self.assertEqual(message.expires_at, deadline)
         self.assertLessEqual(message.next_attempt_at, timezone.now())
 
-    def test_enqueue_stamps_expires_at_from_the_caller_when_given(self):
-        deadline = timezone.now() + timezone.timedelta(minutes=30)
+    def test_enqueue_stamps_expires_at_from_the_caller(self):
+        deadline = timezone.now() + DEADLINE
         with transaction.atomic():
             message = enqueue(
                 tenant=self.tenant,
@@ -52,17 +58,44 @@ class EnqueueWritesTests(TestCase):
         message.refresh_from_db()
         self.assertEqual(message.expires_at, deadline)
 
-    def test_enqueue_leaves_expires_at_null_when_omitted(self):
+    def test_enqueue_raises_when_expires_at_is_none(self):
         with transaction.atomic():
-            message = enqueue(
-                tenant=self.tenant,
-                kind="claim.verification_code",
-                to_address="claimant@example.test",
-                subject="Your code",
-                body_text="123456",
-            )
-        message.refresh_from_db()
-        self.assertIsNone(message.expires_at)
+            with self.assertRaises(ValueError):
+                enqueue(
+                    tenant=self.tenant,
+                    kind="claim.verification_code",
+                    to_address="claimant@example.test",
+                    subject="Your code",
+                    body_text="123456",
+                    expires_at=None,
+                )
+        self.assertEqual(OutboundMessage.all_tenants.count(), 0)
+
+    def test_enqueue_raises_when_expires_at_is_omitted(self):
+        with transaction.atomic():
+            with self.assertRaises(TypeError):
+                enqueue(
+                    tenant=self.tenant,
+                    kind="claim.verification_code",
+                    to_address="claimant@example.test",
+                    subject="Your code",
+                    body_text="123456",
+                )
+        self.assertEqual(OutboundMessage.all_tenants.count(), 0)
+
+    def test_enqueue_raises_when_expires_at_is_naive(self):
+        naive_deadline = datetime.datetime.now() + datetime.timedelta(minutes=30)
+        with transaction.atomic():
+            with self.assertRaises(ValueError):
+                enqueue(
+                    tenant=self.tenant,
+                    kind="claim.verification_code",
+                    to_address="claimant@example.test",
+                    subject="Your code",
+                    body_text="123456",
+                    expires_at=naive_deadline,
+                )
+        self.assertEqual(OutboundMessage.all_tenants.count(), 0)
 
 
 class EnqueueAtomicityTests(TransactionTestCase):
@@ -83,8 +116,24 @@ class EnqueueAtomicityTests(TransactionTestCase):
                 to_address="claimant@example.test",
                 subject="Your code",
                 body_text="123456",
+                expires_at=timezone.now() + DEADLINE,
             )
         self.assertEqual(OutboundMessage.all_tenants.count(), 0)
+
+    def test_atomic_block_check_runs_before_the_expires_at_check(self):
+        # Outside a transaction at all, so the MustBeInTransaction guard is
+        # what fires -- not the expires_at validation -- even with expires_at
+        # missing entirely.
+        self.assertFalse(transaction.get_connection().in_atomic_block)
+        with self.assertRaises(MustBeInTransaction):
+            enqueue(
+                tenant=self.tenant,
+                kind="claim.verification_code",
+                to_address="claimant@example.test",
+                subject="Your code",
+                body_text="123456",
+                expires_at=None,
+            )
 
     def test_passes_inside_an_atomic_block(self):
         with transaction.atomic():
@@ -94,6 +143,7 @@ class EnqueueAtomicityTests(TransactionTestCase):
                 to_address="claimant@example.test",
                 subject="Your code",
                 body_text="123456",
+                expires_at=timezone.now() + DEADLINE,
             )
         self.assertEqual(OutboundMessage.all_tenants.count(), 1)
 
@@ -106,6 +156,7 @@ class EnqueueAtomicityTests(TransactionTestCase):
                     to_address="claimant@example.test",
                     subject="Your code",
                     body_text="123456",
+                    expires_at=timezone.now() + DEADLINE,
                 )
                 raise ValueError("caller's state change failed")
         self.assertEqual(OutboundMessage.all_tenants.count(), 0)

@@ -26,7 +26,7 @@ class Migration(migrations.Migration):
                 ('status', models.CharField(choices=[('pending', 'Pending'), ('sent', 'Sent'), ('dead', 'Dead-lettered'), ('expired', 'Expired')], default='pending', max_length=10)),
                 ('attempt', models.PositiveSmallIntegerField(default=0)),
                 ('next_attempt_at', models.DateTimeField(default=django.utils.timezone.now)),
-                ('expires_at', models.DateTimeField(blank=True, null=True)),
+                ('expires_at', models.DateTimeField()),
                 ('first_attempted_at', models.DateTimeField(blank=True, null=True)),
                 ('last_attempted_at', models.DateTimeField(blank=True, null=True)),
                 ('last_error', models.TextField(blank=True)),
