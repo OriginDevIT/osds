@@ -4,14 +4,18 @@
 tests drive it directly:
 
 * it reads the clock once (the caller passes the value) and threads that one
-  value through the drain, the CSV import row loop, the tick-due check and the
-  tick jobs;
-* it drains the outbox, pushes one bounded chunk of any in-progress CSV
-  import, then runs the tick jobs if ``tick_period`` has elapsed since
-  ``last_tick``, and returns the new ``last_tick``;
+  value through the drain, the mail drain, the CSV import row loop, the
+  tick-due check and the tick jobs;
+* it drains the outbox, drains the mail queue, pushes one bounded chunk of any
+  in-progress CSV import, then runs the tick jobs if ``tick_period`` has
+  elapsed since ``last_tick``, and returns the new ``last_tick``. The mail
+  drain runs beside the outbox drain, every pass -- not gated on
+  ``tick_period`` (decisions.md §4.3): a claim-code email is not something a
+  directory can wait a tick period for;
 * it calls ``wait`` only when the pass found nothing to do. A pass that fanned
-  out an event, attempted a delivery or processed an import row goes straight
-  round again -- a backlog drains without sleeping between passes.
+  out an event, attempted a delivery, attempted a mail message or processed
+  an import row goes straight round again -- a backlog drains without
+  sleeping between passes.
 
 ``run_loop`` is the ``while True`` around it. It holds ``last_tick``, reads the
 clock once per pass, and is imported by no test. It has no iteration count and
@@ -24,6 +28,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from audit.worker.drain import drain_once
+from audit.worker.mail_drain import mail_drain_once
 from audit.worker.tick import tick_once
 from directory.csv_import import ROWS_PER_PASS
 from directory.importing import import_once
@@ -45,6 +50,7 @@ def worker_pass(*, now, last_tick, tick_period, wait) -> datetime:
     a spy in tests. Returns the tick time to carry into the next pass.
     """
     drain = drain_once(now=now)
+    mail = mail_drain_once(now=now)
     imp = import_once(now=now, limit=ROWS_PER_PASS)
 
     new_last_tick = last_tick
@@ -55,6 +61,7 @@ def worker_pass(*, now, last_tick, tick_period, wait) -> datetime:
     did_work = bool(
         drain.events_fanned_out
         or drain.deliveries_attempted
+        or mail.claimed
         or imp.rows_processed
     )
     if not did_work:

@@ -14,6 +14,14 @@
   mirror ``OutboxEvent`` -- scoped default plus ``all_tenants``; the worker
   drains it through ``all_tenants`` and enters each delivery's tenant
   explicitly. Not the §11.2 ``command_log`` exception.
+- ``OutboundMessage`` -- a queued outbound email (decisions.md §4.3). One
+  table, no per-consumer fan-out: there is exactly one consumer (the bundled
+  ``smtp`` sender behind the ``email.send`` capability), so a per-consumer
+  table would always hold exactly one row per message. Its drain
+  (``audit.worker.mail_drain``) copies ``OutboxDelivery``'s claim/record
+  mechanics -- the concurrency hazards do not depend on consumer count -- but
+  has no attempt-count ceiling: ``expires_at`` retires a stuck message
+  instead, since the plaintext it carries has its own deadline (spec §9.6).
 - ``CommandLog`` -- every command attempted, including rejected and blocked.
   Written *outside* the command transaction (spec §11.2), so ``tenant`` is
   nullable: a malformed command may name no resolvable tenant. Plain manager,
@@ -169,6 +177,78 @@ class OutboxDelivery(models.Model):
 
     def __str__(self) -> str:
         return f"{self.adapter_id}:{self.status}(attempt {self.attempt})"
+
+
+class OutboundMessage(models.Model):
+    """A queued outbound email (decisions.md §4.3 "Outbound mail").
+
+    ``tenant`` is non-null -- unlike ``CommandLog``, this records a pending
+    state change the drain reads back and updates, not an attempt that may
+    predate a resolvable tenant, so it does not qualify for the §11.2
+    ``command_log`` exception.
+
+    ``body_text`` and ``to_address`` are nullable. ``body_text`` is set back
+    to ``None`` -- not ``""`` -- in the same write that sets a terminal
+    status (``sent``, ``dead``, ``expired``): the plaintext code or link
+    exists only in the message actually sent (spec §9.6). ``to_address`` is
+    kept for delivery debugging and is nulled separately, at 90 days, by a
+    tick job queued behind #180; that job is not implemented in this PR
+    (#213).
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        SENT = "sent", "Sent"
+        DEAD = "dead", "Dead-lettered"
+        EXPIRED = "expired", "Expired"
+
+    message_id = models.CharField(
+        max_length=26, unique=True, editable=False, default=new_ulid
+    )
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.PROTECT,
+        related_name="outbound_messages",
+    )
+    # What caused this message, e.g. "claim.verification_code" -- free text,
+    # not an event type and not checked against ALL_EVENT_TYPES: sending
+    # emits no event (§4.3).
+    kind = models.CharField(max_length=60)
+
+    to_address = models.EmailField(null=True, blank=True)
+    subject = models.CharField(max_length=200)  # template text, never nulled
+    body_text = models.TextField(null=True, blank=True)
+
+    status = models.CharField(
+        max_length=10, choices=Status.choices, default=Status.PENDING
+    )
+    # Count of *completed* attempts. A crash mid-attempt is not an attempt.
+    attempt = models.PositiveSmallIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(default=timezone.now)
+    # The deadline of the code or link this message carries. Null means no
+    # deadline. Past it, the drain marks the row `expired` and never sends --
+    # a code delivered after it died reads as live and burns a §9.6 attempt.
+    expires_at = models.DateTimeField(null=True, blank=True)
+    first_attempted_at = models.DateTimeField(null=True, blank=True)
+    last_attempted_at = models.DateTimeField(null=True, blank=True)
+    # The error class only (§8.3): never a value from `to_address` or
+    # `body_text`.
+    last_error = models.TextField(blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    objects = TenantScopedManager()
+    all_tenants = models.Manager()
+
+    class Meta:
+        db_table = "outbound_messages"
+        ordering = ["id"]
+        indexes = [
+            models.Index(fields=["status", "next_attempt_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.kind}:{self.status}"
 
 
 class CommandLog(models.Model):
