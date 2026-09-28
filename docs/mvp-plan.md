@@ -104,8 +104,7 @@ closing with the sitemap index and `robots.txt`.
 Worker first (#171). `run_worker`, the tick loop, and the outbox drain with
 retry and dead-letter. Pulled forward from block 5: CSV import is specified as
 worker-processed, and a several-hundred-row import cannot run in a request.
-The SMTP and webhook adapters stay in block 5 — the worker runs with an empty
-adapter registry and drains to nothing, which is all import needs from it.
+The webhook adapter stays in block 5. A minimal stdlib smtp sender was pulled forward into block 3 (#216) so email OTP can ship; the block-5 adapter replaces it without core changing.
 
 CSV import: upload stores the file and creates a batch, the worker processes
 it, the admin page polls status. Column mapping, suppression-key check, batch
@@ -133,7 +132,7 @@ published.
 
 ### 5 — Integration and release
 
-SMTP and webhook adapters. Scheduled tick jobs registered — payload nulling at
+The full SMTP adapter, replacing the block-3 sender, and the webhook adapter. Scheduled tick jobs registered — payload nulling at
 90 days, sitemap regeneration (#159), `SearchReindexJob` drain (#132). Command
 log and access log wired to the service layer. Adapter documentation. README,
 compose file, release tag.
