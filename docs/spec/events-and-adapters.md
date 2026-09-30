@@ -1,13 +1,18 @@
 # OSDS — Event Schema, Adapter Interface & Entitlements
 
 **Open Source Directory Site**
-**Status:** Draft v0.10 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
+**Status:** Draft v0.11 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
 **Audience:** core maintainers, adapter authors
 
 This document defines the contract between the OSDS core and everything outside it. The core is a multi-tenant directory engine. It knows nothing about email providers, CRMs, payment gateways, or messaging platforms. It emits facts and accepts commands. Adapters translate.
 
 If you are writing an adapter, sections 3, 7 and 8 are the ones you need.
 If you are implementing the paid tiers, section 5 is the whole job.
+
+### Changes from v0.10
+
+- **§8.6.** SMTP is skippable at setup and editable afterward; without
+  mail, `domain_email` claims fall back to manual review.
 
 ### Changes from v0.9
 
@@ -1312,7 +1317,7 @@ Rule 1 says core never imports adapter code. But a system with zero adapters can
 
 | Adapter       | Bundled | Default enabled | Why                                                                     |
 | ------------- | ------- | --------------- | ----------------------------------------------------------------------- |
-| `smtp`        | Yes     | **Yes**         | Configured in the first-run wizard. Without it, claims cannot complete. |
+| `smtp`        | Yes     | **Yes**         | Configured in the first-run wizard or tenant admin, and skippable. Without it, `domain_email` claims fall back to manual review. |
 | `webhook`     | Yes     | **Yes**         | POSTs any event to a URL. The universal escape hatch.                   |
 | `stripe`      | Yes     | No              | Reference payments implementation.                                      |
 | `paypal`      | Yes     | No              | Second provider, proves the payments capability is not Stripe-shaped.   |
