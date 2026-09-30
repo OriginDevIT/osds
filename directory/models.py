@@ -617,7 +617,20 @@ class Claim(models.Model):
     # (spec §9.5). The OTP mechanics are wired in block 3.
     verification_started_at = models.DateTimeField(null=True, blank=True)
     expires_at = models.DateTimeField(null=True, blank=True)
+    # Wrong-entry tally only (decisions.md §4.4) -- a correct code leaves it.
+    # The per-(listing, claimant) cooldown/lock counters that reset are on
+    # ClaimVerificationGuard; this is the reviewer-facing lifetime total.
     attempts = models.PositiveIntegerField(default=0)
+    # Keyed hash of the live code, cleared on success, on the 5th wrong
+    # entry, and on supersede (decisions.md §4.4). Never the plaintext.
+    code_hash = models.CharField(max_length=64, blank=True)
+    code_message = models.ForeignKey(
+        "audit.OutboundMessage",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="claim_codes",
+    )
 
     # Manual path (spec §9.3). notes are required for method=manual; the service
     # enforces that in block 3.
@@ -650,6 +663,59 @@ class Claim(models.Model):
 
     def __str__(self) -> str:
         return self.public_id
+
+
+class ClaimVerificationGuard(models.Model):
+    """Per-``(listing, claimant)`` counters for ``domain_email`` verification
+    (spec §9.6, decisions.md §4.4).
+
+    Keyed on the ``DirectoryUser`` FK, not a second copy of the address.
+    Taken ``select_for_update`` on every verify or start-verification entry.
+    ``rejections``/``claim_blocked_at`` are populated starting PR 4 (repeated
+    rejection, spec §9.6) -- the columns exist now so there is one migration,
+    but this PR never writes them, only refuses a submit that finds
+    ``claim_blocked_at`` already set.
+    """
+
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="claim_verification_guards",
+    )
+    listing = models.ForeignKey(
+        Listing, on_delete=models.CASCADE, related_name="verification_guards"
+    )
+    claimant = models.ForeignKey(
+        DirectoryUser, on_delete=models.CASCADE, related_name="verification_guards"
+    )
+
+    wrong_entries = models.PositiveSmallIntegerField(default=0)
+    cooldowns = models.PositiveSmallIntegerField(default=0)
+    cooldown_until = models.DateTimeField(null=True, blank=True)
+    verification_locked_at = models.DateTimeField(null=True, blank=True)
+
+    # PR 4 (spec §9.6 "Repeated rejection").
+    rejections = models.PositiveSmallIntegerField(default=0)
+    claim_blocked_at = models.DateTimeField(null=True, blank=True)
+
+    last_code_sent_at = models.DateTimeField(null=True, blank=True)
+    codes_sent_window_start = models.DateTimeField(null=True, blank=True)
+    codes_sent_in_window = models.PositiveSmallIntegerField(default=0)
+
+    objects = TenantScopedManager()
+    all_tenants = models.Manager()
+
+    class Meta:
+        db_table = "claim_verification_guards"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "listing", "claimant"],
+                name="uniq_guard_listing_claimant",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"guard:{self.listing_id}:{self.claimant_id}"
 
 
 class Lead(models.Model):

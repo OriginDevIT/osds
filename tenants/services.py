@@ -29,7 +29,52 @@ from audit.command_log import (
     require_autocommit,
 )
 from audit.outbox import emit
+from tenants.claim_verification import CLAIM_METHODS, CLAIM_VERIFICATION_BOUNDS
 from tenants.models import InstallSetup, Operator, StaffMembership, Tenant
+
+
+class InvalidTenantSettings(ValueError):
+    """``update_tenant_settings`` was given a value core rejects outright
+    (spec §9.5: "a value outside the bounds is rejected at configuration
+    time, not silently clamped")."""
+
+
+def _validate_claim_verification(value) -> None:
+    if not isinstance(value, dict):
+        raise InvalidTenantSettings("claim_verification must be an object")
+    methods = value.get("enabled_methods")
+    if methods is not None:
+        if not isinstance(methods, list) or not all(
+            isinstance(m, str) for m in methods
+        ):
+            raise InvalidTenantSettings(
+                "claim_verification.enabled_methods must be a list of strings"
+            )
+        unknown = [m for m in methods if m not in CLAIM_METHODS]
+        if unknown:
+            raise InvalidTenantSettings(
+                f"claim_verification.enabled_methods has unknown method(s): {unknown!r}"
+            )
+    ttl = value.get("ttl") or {}
+    if not isinstance(ttl, dict):
+        raise InvalidTenantSettings("claim_verification.ttl must be an object")
+    minutes = ttl.get("domain_email_minutes")
+    if minutes is not None:
+        bounds = CLAIM_VERIFICATION_BOUNDS["domain_email"]
+        if not isinstance(minutes, int) or isinstance(minutes, bool):
+            raise InvalidTenantSettings(
+                "claim_verification.ttl.domain_email_minutes must be an integer"
+            )
+        if not (bounds["min_minutes"] <= minutes <= bounds["max_minutes"]):
+            raise InvalidTenantSettings(
+                "claim_verification.ttl.domain_email_minutes must be between "
+                f"{bounds['min_minutes']} and {bounds['max_minutes']}"
+            )
+
+
+# One validator per settings key that core enforces bounds on (spec §9.5).
+# A key with no validator is merged unchecked, as before.
+_SETTINGS_VALIDATORS = {"claim_verification": _validate_claim_verification}
 
 
 def _role_key(role: int) -> str:
@@ -280,6 +325,10 @@ def set_tenant_domain(*, tenant: Tenant, domain: str, changed_by: Operator) -> T
 def update_tenant_settings(
     *, tenant: Tenant, changes: dict, changed_by: Operator
 ) -> Tenant:
+    for key, value in changes.items():
+        validator = _SETTINGS_VALIDATORS.get(key)
+        if validator:
+            validator(value)
     patch = []
     for key, value in changes.items():
         patch.append(

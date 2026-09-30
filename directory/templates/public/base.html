@@ -17,6 +17,9 @@
     .card h3 { margin: 0 0 .2rem; font-size: 1.05rem; }
     .badge { display: inline-block; background: #1a1a1a; color: #fff; border-radius: 4px; padding: 0 .4rem; font-size: .75rem; vertical-align: middle; }
     .muted { color: #777; font-size: .9rem; }
+    ul.messages { list-style: none; padding: 0; }
+    ul.messages li { border: 1px solid #ccc; border-radius: 4px; padding: .5rem .75rem; margin: .5rem 0; }
+    ul.messages li.error { border-color: #c33; background: #fdf0f0; }
     .pager { margin-top: 1.5rem; display: flex; gap: 1rem; }
     ul.cats { columns: 2; list-style: none; padding: 0; }
     footer { border-top: 1px solid #ddd; margin-top: 2.5rem; padding-top: .75rem; color: #888; font-size: .85rem; }
@@ -31,6 +34,12 @@
       <button type="submit">Search</button>
     </form>
   </header>
+
+  {% if messages %}
+    <ul class="messages">
+      {% for message in messages %}<li class="{{ message.tags }}">{{ message }}</li>{% endfor %}
+    </ul>
+  {% endif %}
 
   {% block content %}{% endblock %}
 

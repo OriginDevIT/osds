@@ -6,6 +6,7 @@ from django import forms
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 
+from tenants.claim_verification import CLAIM_VERIFICATION_BOUNDS
 from tenants.models import Tenant
 
 _HOSTNAME_RE = re.compile(
@@ -107,11 +108,12 @@ class ClaimsForm(forms.Form):
         required=False,
         widget=forms.CheckboxSelectMultiple,
     )
+    _domain_email_bounds = CLAIM_VERIFICATION_BOUNDS["domain_email"]
     domain_email_ttl_minutes = forms.IntegerField(
         label="Domain-email code lifetime (minutes)",
-        min_value=15,
-        max_value=2880,
-        initial=1440,
+        min_value=_domain_email_bounds["min_minutes"],
+        max_value=_domain_email_bounds["max_minutes"],
+        initial=_domain_email_bounds["default_minutes"],
     )
 
     def clean_methods(self):
