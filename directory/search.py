@@ -5,7 +5,8 @@
   ``english``, spec issue #31 / ruling 8).
 - ``recompute_search_vector`` -- rebuild one listing's ``search_vector``.
   Application-computed (ruling 11): ``upsert_listing`` calls it on every write
-  and ``rebuild_search_index`` calls it in bulk.
+  and ``drain_reindex_markers`` (the worker tick job and the
+  ``rebuild_search_index`` command) calls it in bulk.
 - ``search`` -- a page of published listings for the public site (used by the
   views in the next PR).
 
@@ -16,6 +17,7 @@ C description, D searchable custom fields + locality + region.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 from django.contrib.postgres.search import (
     SearchQuery,
@@ -29,7 +31,8 @@ from django.db.models import ExpressionWrapper, F, FloatField, Q, Value
 from django.db.models.expressions import RawSQL
 from django.db.models.functions import Coalesce
 
-from directory.models import Listing
+from directory.models import Listing, SearchReindexJob
+from osds.tenancy import tenant_context
 
 DEFAULT_SEARCH_CONFIG = "english"
 
@@ -125,6 +128,70 @@ def recompute_search_vector_v1(listing) -> None:
 def recompute_search_vector(listing) -> None:
     """Rebuild one listing's ``search_vector``. Call with the tenant in scope."""
     recompute_search_vector_v1(listing)
+
+
+# Listings recomputed per call of the marker drain. Bounded because the worker
+# tick shares a thread with the mail drain (audit.worker.tick): a whole-tenant
+# reindex in one call would hold a claim-code email behind it.
+REINDEX_CHUNK = 200
+
+
+@dataclass(frozen=True)
+class ReindexResult:
+    listings: int = 0
+    markers_done: int = 0
+    more: bool = False
+
+
+def _marker_listings(marker):
+    """Listings a marker covers. Call with the marker's tenant in scope."""
+    if marker.scope == SearchReindexJob.Scope.LISTING_TYPE:
+        return Listing.objects.filter(listing_type__public_id=marker.scope_ref)
+    if marker.scope == SearchReindexJob.Scope.CATEGORY:
+        return Listing.objects.filter(categories__public_id=marker.scope_ref)
+    return Listing.objects.all()  # tenant-wide
+
+
+def drain_reindex_markers(*, now, limit: int = REINDEX_CHUNK, tenant=None) -> ReindexResult:
+    """Recompute up to ``limit`` listings of the oldest pending marker.
+
+    One marker per call, resumed from ``marker.cursor``. The marker is stamped
+    ``done_at`` only when a chunk comes back short of ``limit`` -- and only that
+    marker: a marker written while this call was running is a different row and
+    stays pending. (The command this replaced stamped every pending marker after
+    a snapshot, which lost any marker written in between.)
+
+    Idempotent: recompute is a pure function of a listing's current rows, so a
+    crash between the recompute and the cursor write repeats a chunk harmlessly.
+    Cross-tenant: takes no tenant in scope and enters the marker's own.
+    """
+    pending = SearchReindexJob.all_tenants.filter(done_at__isnull=True)
+    if tenant is not None:
+        pending = pending.filter(tenant=tenant)
+    marker = pending.select_related("tenant").order_by("id").first()
+    if marker is None:
+        return ReindexResult()
+
+    with tenant_context(marker.tenant):
+        ids = list(
+            _marker_listings(marker)
+            .filter(id__gt=marker.cursor)
+            .order_by("id")
+            .values_list("id", flat=True)
+            .distinct()[:limit]
+        )
+        for listing in reindex_queryset().filter(id__in=ids).iterator(chunk_size=200):
+            recompute_search_vector(listing)
+
+    finished = len(ids) < limit
+    SearchReindexJob.all_tenants.filter(pk=marker.pk, done_at__isnull=True).update(
+        cursor=ids[-1] if ids else marker.cursor,
+        done_at=now if finished else None,
+    )
+    more = (not finished) or pending.exclude(pk=marker.pk).exists()
+    return ReindexResult(
+        listings=len(ids), markers_done=1 if finished else 0, more=more
+    )
 
 
 def search(tenant, listing_type, *, q="", near=None, page=1, per_page=20):
