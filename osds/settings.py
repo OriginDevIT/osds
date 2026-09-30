@@ -99,6 +99,12 @@ MIDDLEWARE = [
     # cookies: it strips Secure from those two on first-run wizard responses.
     'osds.middleware.SetupCookieSecurityMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    # Directly after SecurityMiddleware, as whitenoise documents. Static files
+    # are answered here with DEBUG off; runserver's own static handling only
+    # exists in DEBUG. It sits below TenantResolutionMiddleware, so a static
+    # request is served only for a host that resolves (or during first-run
+    # setup, when every host does) -- a page and its assets share a host.
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -189,6 +195,18 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# Filled by `collectstatic` at image build and served by whitenoise. The
+# compressed-but-unhashed backend is deliberate: the manifest variant raises on
+# any {% static %} reference collectstatic did not see, and Django's test runner
+# renders templates with DEBUG off and no collectstatic. The cost is short cache
+# lifetimes on static files instead of hashed, immutable URLs.
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+STORAGES = {
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedStaticFilesStorage'},
+}
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
