@@ -303,3 +303,56 @@ class PublishedGuardTests(SimpleTestCase):
             f"public_views queries these visibility-bearing models without a "
             f"published()/visibility constraint: {offenders}",
         )
+
+
+class ClaimLinkTests(_Base):
+    """#228: the detail page links to the claim form by ``Listing.status``.
+    Unclaimed: "Claim this listing". Claimed: "Own this business? Request an
+    ownership review." -- claim.submit turns a claim on a claimed listing
+    into a dispute (MVP scope), so the form is still the right target.
+    Suspended: no link. ``owner`` is not read."""
+
+    CLAIM = "Claim this listing"
+    REVIEW = "Own this business? Request an ownership review."
+
+    def setUp(self):
+        super().setUp()
+        self.lt = self._type()
+        self.cat = self._cat(self.lt, "plumbers")
+
+    def _detail(self, status):
+        listing = self._listing(
+            self.lt, "acme-co", name="Acme Co", cats=[self.cat], status=status
+        )
+        return listing, self.get("/plumbers/acme-co")
+
+    def _href(self, listing):
+        return f'<a href="/claim/{listing.public_id}/" rel="nofollow">'
+
+    def test_unclaimed_listing_links_to_the_claim_route(self):
+        listing, r = self._detail(Listing.Status.UNCLAIMED)
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, self._href(listing) + self.CLAIM + "</a>")
+        self.assertNotContains(r, self.REVIEW)
+
+    def test_claimed_listing_links_to_the_same_route_with_review_copy(self):
+        listing, r = self._detail(Listing.Status.CLAIMED)
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, self._href(listing) + self.REVIEW + "</a>")
+        self.assertNotContains(r, self.CLAIM)
+
+    def test_suspended_listing_has_no_link(self):
+        listing, r = self._detail(Listing.Status.SUSPENDED)
+        self.assertEqual(r.status_code, 200)
+        self.assertNotContains(r, self.CLAIM)
+        self.assertNotContains(r, self.REVIEW)
+        self.assertNotContains(r, f"/claim/{listing.public_id}/")
+
+    def test_the_linked_claim_page_loads_for_unclaimed_and_claimed(self):
+        for status in (Listing.Status.UNCLAIMED, Listing.Status.CLAIMED):
+            with self.subTest(status=status):
+                Listing.all_tenants.filter(slug="acme-co").delete()
+                listing, _ = self._detail(status)
+                self.assertEqual(
+                    self.get(f"/claim/{listing.public_id}/").status_code, 200
+                )

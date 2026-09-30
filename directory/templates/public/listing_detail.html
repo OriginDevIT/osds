@@ -55,6 +55,12 @@
   </dl>
 {% endif %}
 
+{% if listing.status == "unclaimed" %}
+  <p><a href="{% url 'public-claim' listing.public_id %}" rel="nofollow">Claim this listing</a></p>
+{% elif listing.status == "claimed" %}
+  <p><a href="{% url 'public-claim' listing.public_id %}" rel="nofollow">Own this business? Request an ownership review.</a></p>
+{% endif %}
+
 <p class="muted">
   In:
   {% for c in categories %}<a href="{% category_url listing_type c multi %}">{{ c.name }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
