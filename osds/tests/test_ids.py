@@ -25,6 +25,7 @@ _FACTORIES = [
     (ids.claim_id, "claim_"),
     (ids.lead_id, "lead_"),
     (ids.cns_id, "cns_"),
+    (ids.mod_id, "mod_"),
     (ids.tier_id, "tier_"),
     (ids.ent_id, "ent_"),
     (ids.imp_id, "imp_"),

@@ -6,6 +6,7 @@
   <p class="muted">Signed in as {{ request.user.email }}.</p>
   <ul>
     <li><a href="{% url 'directory_admin:type-list' %}">Listing types, categories and listings</a></li>
+    {% if membership.role >= 1 %}<li><a href="{% url 'directory_admin:claims-queue' %}">Claims review{% if claims_open %} ({{ claims_open }} waiting){% endif %}</a></li>{% endif %}
     {% if membership.role >= 4 %}<li><a href="{% url 'directory_admin:mail-settings' %}">Mail settings</a></li>{% endif %}
   </ul>
   <form method="post" action="{% url 'directory_admin:logout' %}">

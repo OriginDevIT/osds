@@ -16,6 +16,7 @@ from osds.db import TenantScopedManager
 from osds.ids import (
     cat_id,
     claim_id,
+    mod_id,
     cns_id,
     imp_id,
     lead_id,
@@ -575,6 +576,10 @@ class Claim(models.Model):
         REJECTED = "rejected", "Rejected"
         ABANDONED = "abandoned", "Abandoned"
         DISPUTED = "disputed", "Disputed"
+        # An approved claim whose ownership was transferred to a later,
+        # approved dispute (decisions.md §4.6). Keeps "one approved claim per
+        # listing" true without losing the history.
+        SUPERSEDED = "superseded", "Superseded"
 
     class Method(models.TextChoices):
         MANUAL = "manual", "Manual review"
@@ -649,7 +654,22 @@ class Claim(models.Model):
     evidence_ref = models.CharField(max_length=500, blank=True)
 
     decided_at = models.DateTimeField(null=True, blank=True)
+    # The operator who approved or rejected. Null for an approval by code
+    # verification and for a system rejection (a losing claim).
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="claims_decided",
+    )
     rejection_reason = models.TextField(blank=True)
+
+    # What the claimant asked for, and why the claim is in front of a human
+    # (decisions.md §4.6). ``requested_method`` otherwise survives only in the
+    # command-log payload, which is nulled at 90 days.
+    requested_method = models.CharField(max_length=16, blank=True)
+    review_reason = models.CharField(max_length=24, blank=True)
 
     last_step = models.CharField(max_length=50, blank=True)
     created_at = models.DateTimeField(default=timezone.now, editable=False)
@@ -660,6 +680,15 @@ class Claim(models.Model):
 
     class Meta:
         db_table = "claims"
+        constraints = [
+            # One approved claim per listing, enforced by the database. A
+            # transfer moves the old one to SUPERSEDED first (#48).
+            models.UniqueConstraint(
+                fields=["listing"],
+                condition=models.Q(status="approved"),
+                name="uniq_one_approved_claim_per_listing",
+            ),
+        ]
 
     def __str__(self) -> str:
         return self.public_id
@@ -716,6 +745,88 @@ class ClaimVerificationGuard(models.Model):
 
     def __str__(self) -> str:
         return f"guard:{self.listing_id}:{self.claimant_id}"
+
+
+class ModerationItem(models.Model):
+    """A queued decision for a human (spec §3.3 ``moderation.*``, §9.4, §9.6;
+    decisions.md §4.6). Three item types exist: a dispute on a claimed listing,
+    the verification lock on a ``(listing, claimant)`` pair, and the
+    three-rejection block on the same pair.
+    """
+
+    class ItemType(models.TextChoices):
+        CLAIM_DISPUTE = "claim_dispute", "Claim dispute"
+        VERIFICATION_LOCK = "verification_lock", "Verification lock"
+        CLAIM_BLOCK = "claim_block", "Claim block"
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        DECIDED = "decided", "Decided"
+
+    tenant = models.ForeignKey(
+        "tenants.Tenant", on_delete=models.CASCADE, related_name="moderation_items"
+    )
+    public_id = models.CharField(
+        max_length=40, unique=True, editable=False, default=mod_id
+    )
+    item_type = models.CharField(max_length=20, choices=ItemType.choices)
+    status = models.CharField(
+        max_length=8, choices=Status.choices, default=Status.OPEN
+    )
+    listing = models.ForeignKey(
+        Listing, on_delete=models.CASCADE, related_name="moderation_items"
+    )
+    claimant = models.ForeignKey(
+        DirectoryUser, on_delete=models.CASCADE, related_name="moderation_items"
+    )
+    # The claim that caused the item. Every dispute has one; a lock or a
+    # block records the claim that tripped it.
+    claim = models.ForeignKey(
+        Claim,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="moderation_items",
+    )
+    rules_triggered = models.JSONField(default=list, blank=True)
+    priority = models.CharField(max_length=10, default="normal")
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="moderation_items_decided",
+    )
+    decision = models.CharField(max_length=20, blank=True)
+    rationale = models.TextField(blank=True)
+
+    objects = TenantScopedManager()
+    all_tenants = models.Manager()
+
+    class Meta:
+        db_table = "moderation_items"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["claim"],
+                condition=models.Q(status="open", item_type="claim_dispute"),
+                name="uniq_open_dispute_item_per_claim",
+            ),
+            models.UniqueConstraint(
+                fields=["tenant", "listing", "claimant", "item_type"],
+                condition=models.Q(
+                    status="open",
+                    item_type__in=["verification_lock", "claim_block"],
+                ),
+                name="uniq_open_pair_item_per_type",
+            ),
+        ]
+        indexes = [models.Index(fields=["tenant", "status", "item_type"])]
+
+    def __str__(self) -> str:
+        return self.public_id
 
 
 class Lead(models.Model):

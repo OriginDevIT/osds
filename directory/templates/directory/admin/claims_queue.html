@@ -1,0 +1,56 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Claims review{% endblock %}
+{% block content %}
+<p><a href="{% url 'directory_admin:index' %}">&larr; Admin home</a></p>
+<h1>Claims review</h1>
+<p>
+  <a href="?tab=review">{% if tab == "review" %}<strong>{% endif %}Needs review ({{ counts.review }}){% if tab == "review" %}</strong>{% endif %}</a> &middot;
+  <a href="?tab=disputes">{% if tab == "disputes" %}<strong>{% endif %}Disputes ({{ counts.disputes }}){% if tab == "disputes" %}</strong>{% endif %}</a> &middot;
+  <a href="?tab=locks">{% if tab == "locks" %}<strong>{% endif %}Locks and blocks ({{ counts.locks }}){% if tab == "locks" %}</strong>{% endif %}</a>
+</p>
+<table>
+  {% if tab == "review" %}
+  <thead><tr><th>Listing</th><th>Why it is here</th><th>Requested</th><th>Submitted</th><th></th></tr></thead>
+  <tbody>
+  {% for claim in rows %}
+    <tr>
+      <td>{{ claim.listing.name }}</td>
+      <td>{{ claim.review_reason|default:"—" }}{% if claim.verified_at %} (email verified){% endif %}</td>
+      <td>{{ claim.requested_method|default:claim.method }}</td>
+      <td>{{ claim.created_at }}</td>
+      <td><a href="{% url 'directory_admin:claim-detail' public_id=claim.public_id %}">Review</a></td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="5" class="muted">Nothing waiting.</td></tr>
+  {% endfor %}
+  </tbody>
+  {% elif tab == "disputes" %}
+  <thead><tr><th>Listing</th><th>Opened</th><th></th></tr></thead>
+  <tbody>
+  {% for item in rows %}
+    <tr>
+      <td>{{ item.listing.name }}</td>
+      <td>{{ item.created_at }}</td>
+      <td><a href="{% url 'directory_admin:claim-detail' public_id=item.claim.public_id %}">Review dispute</a></td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="3" class="muted">No open disputes.</td></tr>
+  {% endfor %}
+  </tbody>
+  {% else %}
+  <thead><tr><th>Kind</th><th>Listing</th><th>Opened</th><th></th></tr></thead>
+  <tbody>
+  {% for item in rows %}
+    <tr>
+      <td>{{ item.get_item_type_display }}</td>
+      <td>{{ item.listing.name }}</td>
+      <td>{{ item.created_at }}</td>
+      <td><a href="{% url 'directory_admin:moderation-detail' public_id=item.public_id %}">Open</a></td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="4" class="muted">No open locks or blocks.</td></tr>
+  {% endfor %}
+  </tbody>
+  {% endif %}
+</table>
+{% endblock %}

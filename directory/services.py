@@ -33,7 +33,9 @@ from audit.command_log import (
 from audit.mail import enqueue
 from audit.models import CommandLog, OutboundMessage
 from audit.outbox import emit
-from directory import claims, normalize, routing, suppression
+from directory import claim_review, claims, normalize, routing, suppression
+from directory.claim_review import expire_pending_code as _expire_pending_code
+from directory.claim_review import lock_guard as _lock_guard
 from directory.field_schema import (
     SchemaError,
     normalize_type_schema,
@@ -52,6 +54,7 @@ from directory.models import (
     ImportBatchListing,
     Listing,
     ListingType,
+    ModerationItem,
     PathRedirect,
     SearchReindexJob,
     SuppressionKey,
@@ -1305,18 +1308,22 @@ def _apply_submit_claim(
     # claim.start_verification (resend/restart), when an import can have
     # changed the website since submit.
     effective_method = method
-    if (
-        method == Claim.Method.DOMAIN_EMAIL
-        and claims.domain_email_ineligibility(tenant, listing, claimant["email"])
-        is not None
-    ):
-        effective_method = Claim.Method.MANUAL
+    review_reason = "chosen" if method == Claim.Method.MANUAL else ""
+    if method == Claim.Method.DOMAIN_EMAIL:
+        ineligible = claims.domain_email_ineligibility(
+            tenant, listing, claimant["email"]
+        )
+        if ineligible is not None:
+            effective_method = Claim.Method.MANUAL
+            review_reason = ineligible
 
     claim = Claim.objects.create(
         tenant=tenant,
         listing=listing,
         claimant=user,
         method=effective_method,
+        requested_method=method,
+        review_reason=review_reason,
         role_claimed=claimant["role_claimed"],
         last_step="submitted",
     )
@@ -1384,29 +1391,7 @@ def _apply_submit_claim(
     # that is already Status.CLAIMED routes here -- verification alone never
     # moves ownership away from a sitting owner (spec §9.4).
     if listing.status == Listing.Status.CLAIMED:
-        claim.status = Claim.Status.DISPUTED
-        claim.save(update_fields=["status"])
-        emit(
-            events.CLAIM_DISPUTED,
-            subject=claim.public_id,
-            tenant=tenant,
-            actor=actor,
-            data={"claim": {"id": claim.public_id, "listing_id": listing.public_id}},
-        )
-        emit(
-            events.MODERATION_QUEUED,
-            subject=claim.public_id,
-            tenant=tenant,
-            actor=actor,
-            data={
-                "item_type": "claim_dispute",
-                "item_id": claim.public_id,
-                "rules_triggered": ["duplicate_claim"],
-                "priority": "normal",
-            },
-        )
-        # Nothing reads moderation.queued yet -- expected, no queue exists
-        # this side of claim disputes (mvp-plan.md, "Out, and planned").
+        claim_review.dispute(tenant, claim=claim, actor=actor)
 
     return claim, result_event_id
 
@@ -1419,6 +1404,14 @@ MAX_COOLDOWNS = 3  # 3rd cooldown locks the pair (spec §9.6)
 MIN_SECONDS_BETWEEN_SENDS = 60
 MAX_SENDS_PER_WINDOW = 5
 SEND_WINDOW = timedelta(hours=24)
+
+
+# A disputed claim may still prove its email (decisions.md §4.6): the evidence
+# reaches the reviewer, and a correct code never approves one.
+_VERIFIABLE_STATUSES = (
+    Claim.Status.PENDING_VERIFICATION,
+    Claim.Status.DISPUTED,
+)
 
 
 class VerificationRefused(Exception):
@@ -1459,34 +1452,17 @@ def _resolve_domain_email_ttl(tenant) -> timedelta:
     return timedelta(minutes=minutes)
 
 
-def _lock_guard(tenant, *, listing, claimant) -> ClaimVerificationGuard:
-    guard, _ = ClaimVerificationGuard.objects.get_or_create(
-        tenant=tenant, listing=listing, claimant=claimant
-    )
-    return ClaimVerificationGuard.objects.select_for_update().get(pk=guard.pk)
-
-
-def _expire_pending_code(claim: Claim, *, now) -> None:
-    """Kill the claim's code message if it is still pending, so a dead code is
-    never sent after an outage (decisions.md §4.4: a resend supersedes the
-    prior code). Shared by the resend supersede and every flip to manual."""
-    if claim.code_message_id is None:
-        return
-    prior = claim.code_message
-    if prior.status == OutboundMessage.Status.PENDING:
-        prior.expires_at = now
-        prior.save(update_fields=["expires_at"])
-
-
-def _flip_to_manual(claim: Claim, *, now) -> None:
+def _flip_to_manual(claim: Claim, *, now, reason: str) -> None:
     """Flip a ``domain_email`` claim that already holds a code to ``manual``
     (decisions.md §4.5: every flip, all reasons): clear ``code_hash`` and
     expire the pending code message in the same transaction, so a code
     queued before the flip is never delivered once mail comes back."""
     claim.method = Claim.Method.MANUAL
     claim.code_hash = ""
+    if not claim.review_reason:
+        claim.review_reason = reason
     _expire_pending_code(claim, now=now)
-    claim.save(update_fields=["method", "code_hash"])
+    claim.save(update_fields=["method", "code_hash", "review_reason"])
 
 
 @transaction.atomic
@@ -1535,7 +1511,7 @@ def _apply_start_verification(
     guard = _lock_guard(tenant, listing=claim.listing, claimant=claim.claimant)
     claim = Claim.objects.select_for_update().get(pk=claim.pk)
 
-    if claim.status != Claim.Status.PENDING_VERIFICATION:
+    if claim.status not in _VERIFIABLE_STATUSES:
         raise VerificationRefused("status")
     if claim.method != Claim.Method.DOMAIN_EMAIL:
         raise VerificationRefused("method")
@@ -1544,13 +1520,11 @@ def _apply_start_verification(
 
     actor = {"type": "visitor", "id": claim.claimant.public_id}
 
-    if (
-        claims.domain_email_ineligibility(
-            tenant, claim.listing, claim.claimant.email
-        )
-        is not None
-    ):
-        _flip_to_manual(claim, now=timezone.now())
+    ineligible = claims.domain_email_ineligibility(
+        tenant, claim.listing, claim.claimant.email
+    )
+    if ineligible is not None:
+        _flip_to_manual(claim, now=timezone.now(), reason=ineligible)
         event = emit(
             events.CLAIM_VERIFICATION_FAILED,
             subject=claim.public_id,
@@ -1731,7 +1705,7 @@ def _apply_verify_claim_code(
     # to have no active code; a locked or cooling-down pair is that, even
     # if the specific code shown would also have expired.
     now = timezone.now()
-    if claim.status != Claim.Status.PENDING_VERIFICATION:
+    if claim.status not in _VERIFIABLE_STATUSES:
         raise VerificationRefused("status")
     if claim.method != Claim.Method.DOMAIN_EMAIL:
         raise VerificationRefused("method")
@@ -1752,7 +1726,14 @@ def _apply_verify_claim_code(
         claim.verified_at = now
         claim.code_hash = ""
         claim.save(update_fields=["verified_at", "code_hash"])
-        return claim, True, None
+        if claim.status == Claim.Status.DISPUTED:
+            # Evidence for the reviewer only; a code never approves a dispute.
+            return claim, True, None
+        # Approval happens here, in this transaction (decisions.md §4.4,
+        # §4.6): an unowned listing is approved, an owned one disputed.
+        event_id = claim_review.resolve_verified_claim(tenant, claim=claim, now=now)
+        claim.refresh_from_db()
+        return claim, True, event_id
 
     claim.attempts += 1
     guard.wrong_entries += 1
@@ -1767,11 +1748,13 @@ def _apply_verify_claim_code(
         if guard.cooldowns >= MAX_COOLDOWNS:
             guard.verification_locked_at = now
             claim.method = Claim.Method.MANUAL
+            if not claim.review_reason:
+                claim.review_reason = "locked"
             _expire_pending_code(claim, now=now)
             reason = "locked"
     cooldowns_after = guard.cooldowns
 
-    claim.save(update_fields=["attempts", "code_hash", "method"])
+    claim.save(update_fields=["attempts", "code_hash", "method", "review_reason"])
     guard.save(
         update_fields=[
             "wrong_entries", "cooldown_until", "cooldowns", "verification_locked_at",
@@ -1796,6 +1779,18 @@ def _apply_verify_claim_code(
             "cooldowns": cooldowns_after,
         },
     )
+    if reason == "locked":
+        # The third cooldown opens the operator's item in this transaction
+        # (spec §9.6, #220).
+        claim_review.open_item(
+            tenant,
+            item_type=ModerationItem.ItemType.VERIFICATION_LOCK,
+            listing=claim.listing,
+            claimant=claim.claimant,
+            claim=claim,
+            rules=["verification_cooldowns_exhausted"],
+            actor=actor,
+        )
     return claim, False, event.event_id
 
 

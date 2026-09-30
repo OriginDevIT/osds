@@ -261,7 +261,8 @@ class SubmitClaimDisputeTests(_Base):
         )
         item = self.events("moderation.queued").get()
         self.assertEqual(item.data["item_type"], "claim_dispute")
-        self.assertEqual(item.data["item_id"], claim.public_id)
+        self.assertTrue(item.data["item_id"].startswith("mod_"))
+        self.assertEqual(item.data["claim_id"], claim.public_id)
         self.assertEqual(item.data["rules_triggered"], ["duplicate_claim"])
         # Verification alone never moves ownership away from a sitting owner
         # (spec §9.4) -- the listing itself is untouched by this PR.

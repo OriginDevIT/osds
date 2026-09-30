@@ -2,5 +2,11 @@
 {% block title %}Claim verified &middot; {{ request.tenant.name }}{% endblock %}
 {% block content %}
 <h1>Claim verified</h1>
-<p>Your claim (reference {{ claim.public_id }}) has been verified and is pending review.</p>
+{% if claim.status == "approved" %}
+  <p>Your claim (reference {{ claim.public_id }}) has been verified and approved. You are now the owner of this listing.</p>
+{% elif claim.status == "disputed" %}
+  <p>Your email address is verified (reference {{ claim.public_id }}). This listing already has an owner, so your claim is under review and nothing changes until a reviewer decides.</p>
+{% else %}
+  <p>Your email address is verified (reference {{ claim.public_id }}). Your claim is pending review.</p>
+{% endif %}
 {% endblock %}

@@ -514,7 +514,7 @@ class WrongEntryTests(_Base):
         guard = self.guard(claim)
         self.assertIsNotNone(guard.verification_locked_at)
 
-    def test_lock_emits_no_moderation_queued_in_pr3(self):
+    def test_lock_opens_one_verification_lock_item(self):
         claim = self.submit()
         guard = self.guard(claim)
         guard.cooldowns = 2
@@ -522,7 +522,8 @@ class WrongEntryTests(_Base):
         wrong_code = _any_wrong_code(claim)
         for _ in range(5):
             claim, _ = self.verify(claim, wrong_code)
-        self.assertFalse(self.events("moderation.queued").exists())
+        queued = self.events("moderation.queued").get()
+        self.assertEqual(queued.data["item_type"], "verification_lock")
 
     def test_wrong_entry_increments_claim_attempts_correct_code_leaves_it(self):
         claim = self.submit()
@@ -534,7 +535,9 @@ class WrongEntryTests(_Base):
 # --- correct code ---
 
 class CorrectCodeTests(_Base):
-    def test_correct_code_sets_verified_at_clears_code_hash_no_event(self):
+    def test_correct_code_sets_verified_at_clears_code_hash_and_approves(self):
+        # Claims PR 4a (decisions.md §4.6): a correct code no longer stops at
+        # verified_at -- approval happens in the same transaction.
         claim = self.submit()
         code = _capture_code(self, claim)
         before = self.events("claim.verification_failed").count()
@@ -542,9 +545,9 @@ class CorrectCodeTests(_Base):
         self.assertTrue(correct)
         self.assertIsNotNone(claim.verified_at)
         self.assertEqual(claim.code_hash, "")
-        self.assertEqual(claim.status, Claim.Status.PENDING_VERIFICATION)
+        self.assertEqual(claim.status, Claim.Status.APPROVED)
         self.assertEqual(self.events("claim.verification_failed").count(), before)
-        self.assertFalse(self.events("claim.approved").exists())
+        self.assertEqual(self.events("claim.approved").count(), 1)
 
     def test_correct_code_after_expiry_is_rejected_not_applied(self):
         claim = self.submit()
@@ -851,7 +854,7 @@ class ClaimVerifyPageTests(TransactionTestCase):
 
     def test_ineligible_domain_email_redirects_to_submitted_with_reason(self):
         r = self._submit(email="dana@gmail.example")
-        self.assertIn("requested=domain_email", r.url)
+        self.assertTrue(r.url.endswith("/submitted/"))
         r2 = self.client.get(r.url, HTTP_HOST=HOST)
         self.assertContains(r2, "must be at @hoffmanplumbing.example")
 
@@ -867,10 +870,10 @@ class ClaimVerifyPageTests(TransactionTestCase):
         guard.verification_locked_at = timezone.now()
         guard.save(update_fields=["verification_locked_at"])
         claim.method = "manual"
-        claim.save(update_fields=["method"])
+        claim.review_reason = "locked"  # what the lock cascade stores
+        claim.save(update_fields=["method", "review_reason"])
         r = self.client.get(
-            f"/claim/{claim.public_id}/submitted/?requested=domain_email",
-            HTTP_HOST=HOST,
+            f"/claim/{claim.public_id}/submitted/", HTTP_HOST=HOST
         )
         self.assertContains(
             r,
@@ -950,8 +953,12 @@ class ClaimVerifyPageTests(TransactionTestCase):
         self.assertNotContains(r, "Resend code")
 
     def test_already_verified_shows_state_and_no_forms(self):
+        # A suspended listing cannot change owner, so a correct code leaves
+        # the claim open with verified_at set -- the "verified" state.
         self._submit()
         claim = self._claim()
+        self.listing.status = Listing.Status.SUSPENDED
+        self.listing.save(update_fields=["status"])
         code = _capture_code(self, claim)
         self.client.post(
             f"/claim/{claim.public_id}/verify/", {"code": code}, HTTP_HOST=HOST
