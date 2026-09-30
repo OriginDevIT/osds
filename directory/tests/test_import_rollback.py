@@ -626,6 +626,39 @@ class NullPreImagesTests(_Base):
             self._rollback(batch)
         self.assertEqual(cm.exception.reason, "past_rollback_window")
 
+    def test_the_boundary_is_strictly_older_than_90_days(self):
+        exactly = self._completed_batch("edge", age_days=90)
+        now = timezone.now()
+        ImportBatch.all_tenants.filter(pk=exactly.pk).update(
+            completed_at=now - timedelta(days=90)
+        )
+        self.assertEqual(null_import_pre_images(now=now), 0)
+        self.assertEqual(null_import_pre_images(now=now + timedelta(seconds=1)), 1)
+
+    def test_limit_bounds_one_call_and_resumes(self):
+        for slug in ("a", "b", "c"):
+            self._completed_batch(slug, age_days=91)
+        now = timezone.now()
+        self.assertEqual(null_import_pre_images(now=now, limit=2), 2)
+        self.assertEqual(null_import_pre_images(now=now, limit=2), 1)
+        self.assertEqual(null_import_pre_images(now=now, limit=2), 0)
+
+    def test_the_job_reports_work_and_backlog(self):
+        from directory import jobs
+
+        for slug in ("a", "b", "c"):
+            self._completed_batch(slug, age_days=91)
+        with mock.patch.object(jobs, "PRE_IMAGE_CHUNK", 2):
+            first = jobs.import_pre_image_retention(now=timezone.now())
+            second = jobs.import_pre_image_retention(now=timezone.now())
+        self.assertEqual([(first.done, first.more), (second.done, second.more)],
+                         [(2, True), (1, False)])
+        self.assertFalse(
+            ImportBatchListing.all_tenants.filter(
+                pre_image_nulled_at__isnull=True
+            ).exists()
+        )
+
     def _failed_update_batch(self, *, age_days):
         """A batch that updates 'keep' in row 1, then fails on row 2, so
         _finish(status='failed') runs and stamps completed_at."""

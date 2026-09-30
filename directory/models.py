@@ -525,7 +525,8 @@ class ImportBatchListing(models.Model):
     ``Listing.import_batch`` only records the batch that *created* a row; this
     table is the only record of which rows a batch *updated*. ``pre_image`` is
     a second copy of personal data and is nulled at 90 days (spec §11.2) by
-    ``directory.importing.null_import_pre_images`` -- a batch whose pre-images
+    ``directory.importing.null_import_pre_images``, run daily by the worker's
+    ``import_pre_image_retention`` tick job (#193) -- a batch whose pre-images
     have been nulled can no longer be rolled back.
     """
 
@@ -891,8 +892,13 @@ class SuppressionKey(models.Model):
 class SearchReindexJob(models.Model):
     """A marker that some listings' search vectors are stale -- a listing
     type's field schema changed (searchable flags), or a category was renamed
-    (its name feeds weight B). Drained by ``rebuild_search_index``; the worker
-    tick will drain it too once that exists (ruling 7).
+    (its name feeds weight B). Drained by the worker's ``search_reindex`` tick
+    job (``directory.search.drain_reindex_markers``, ruling 7); the
+    ``rebuild_search_index`` command runs the same drain by hand.
+
+    ``cursor`` is the highest listing id already recomputed for this marker. A
+    large marker is drained in bounded chunks across many ticks, and the cursor
+    is what lets a crash or a restart resume instead of starting over.
     """
 
     class Scope(models.TextChoices):
@@ -907,6 +913,7 @@ class SearchReindexJob(models.Model):
     scope_ref = models.CharField(max_length=40, blank=True)  # public_id; "" for tenant
     reason = models.CharField(max_length=120, blank=True)
     requested_at = models.DateTimeField(default=timezone.now, editable=False)
+    cursor = models.PositiveBigIntegerField(default=0)
     done_at = models.DateTimeField(null=True, blank=True)
 
     objects = TenantScopedManager()

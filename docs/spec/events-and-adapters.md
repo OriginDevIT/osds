@@ -1,13 +1,19 @@
 # OSDS — Event Schema, Adapter Interface & Entitlements
 
 **Open Source Directory Site**
-**Status:** Draft v0.11 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
+**Status:** Draft v0.12 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
 **Audience:** core maintainers, adapter authors
 
 This document defines the contract between the OSDS core and everything outside it. The core is a multi-tenant directory engine. It knows nothing about email providers, CRMs, payment gateways, or messaging platforms. It emits facts and accepts commands. Adapters translate.
 
 If you are writing an adapter, sections 3, 7 and 8 are the ones you need.
 If you are implementing the paid tiers, section 5 is the whole job.
+
+### Changes from v0.11
+
+- **§11.2.** Payload nulling at 90 days is the one permitted rewrite of a
+  concluded command-log row.
+- **§9.3.** `verified_by` is an operator id (`op_`), not a user id.
 
 ### Changes from v0.10
 
@@ -1427,7 +1433,7 @@ When an admin verifies by hand, the record must capture how, not just that it ha
   },
   "manual_verification": {
     "method_used": "phone", // phone | email | postcard | website | social | in_person | document | other
-    "verified_by": "usr_admin_01JBQ...",
+    "verified_by": "op_01JBQ...",
     "verified_at": "2026-08-28T16:04:00Z",
     "notes": "Called listed number, spoke with Dana Hoffman, confirmed ownership.",
     "evidence_ref": null,
@@ -1601,7 +1607,7 @@ The attempt is recorded **before** the command transaction opens, and concluded 
 
 A log written inside the transaction it is logging disappears when that transaction rolls back — which is exactly the case the log exists for. A command that throws mid-apply leaves a row with a null outcome. That is the record, not a gap.
 
-A concluded row is never rewritten. An audit trail the application can edit is not one.
+A concluded row is never rewritten. An audit trail the application can edit is not one. The one exception is the 90-day payload nulling above: it clears `payload` and touches nothing else on the row.
 
 #### Nullable `tenant_id`
 
