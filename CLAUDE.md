@@ -200,6 +200,29 @@ root and defaults to `BASE_DIR/media`; per-tenant media lands under
 the first-run token. Nothing else creates it — a fresh database 404s the wizard
 until it has run.
 
+## Working in auto mode
+
+Maintainer prompts are written to run with auto mode on. These rules hold
+whether or not an individual action is approved.
+
+- Git is read-only except `git add`, `git add -N`, and creating the branch a
+  prompt names. Never run `checkout -- <path>`, `restore`, `reset`, `clean`,
+  `stash`, `rebase`, `commit`, `push`, `merge`, `branch -D` or any `worktree`
+  command. The maintainer commits.
+- Stop before committing. Report `git diff --stat` (after `git add -N .`), test
+  results, and every deviation from the agreed plan.
+- A "report a plan" prompt changes no files.
+- Write only inside the working tree and the OS temp directory. Scratch clones
+  go under temp and are deleted when done.
+- Never run `docker compose down -v`, `docker volume rm`, `DROP DATABASE`, or
+  anything else that deletes data outside a scratch stack created in this task.
+- Run tests only against the `DATABASE_URL` already in the environment. Do not
+  change environment variables.
+- Do not edit `docs/spec/`, `.github/`, `agent-operations.md` or
+  `requirements.txt`.
+- If a write or command is refused, or the permission check returns no verdict
+  twice, stop and report what is unfinished. Do not retry into the delay.
+- If you break something, say so first in the report.
 ## What requires a human
 
 Do not do these autonomously. Prepare the work, then stop and say what you
