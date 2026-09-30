@@ -119,7 +119,8 @@ class HappyPathTests(WizardBase):
         client.post("/setup/storage/", {"backend": "local"})
         client.post(
             "/setup/smtp/",
-            {"host": "localhost", "port": "1025", "from_email": "no@reply.test"},
+            {"host": "localhost", "port": "1025", "from_email": "no@reply.test",
+             "security": "none"},
         )
         client.post(
             "/setup/claims/",

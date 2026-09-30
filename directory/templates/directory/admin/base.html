@@ -1,4 +1,4 @@
-{% load static %}<!doctype html>
+{% load static directory_admin %}<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -22,6 +22,7 @@
   </style>
 </head>
 <body>
+  {% mail_banner %}
   {% if messages %}
     <ul class="messages">{% for m in messages %}<li>{{ m }}</li>{% endfor %}</ul>
   {% endif %}

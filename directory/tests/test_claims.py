@@ -22,6 +22,7 @@ from directory.models import (
     ListingType,
 )
 from osds.tenancy import tenant_context
+from osds.tests.mail_stub import email_send_stub
 from tenants.models import Tenant
 
 GRANTED_ALL = {
@@ -40,6 +41,7 @@ DANA = {
 
 class _Base(TransactionTestCase):
     def setUp(self):
+        self.enterContext(email_send_stub())
         self.tenant = Tenant.objects.create(slug="acme", name="Acme")
         self.lt = ListingType.all_tenants.create(
             tenant=self.tenant, key="business", label_singular="B",

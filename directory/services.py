@@ -1305,8 +1305,10 @@ def _apply_submit_claim(
     # claim.start_verification (resend/restart), when an import can have
     # changed the website since submit.
     effective_method = method
-    if method == Claim.Method.DOMAIN_EMAIL and not claims.domain_email_eligible(
-        listing, claimant["email"]
+    if (
+        method == Claim.Method.DOMAIN_EMAIL
+        and claims.domain_email_ineligibility(tenant, listing, claimant["email"])
+        is not None
     ):
         effective_method = Claim.Method.MANUAL
 
@@ -1464,6 +1466,29 @@ def _lock_guard(tenant, *, listing, claimant) -> ClaimVerificationGuard:
     return ClaimVerificationGuard.objects.select_for_update().get(pk=guard.pk)
 
 
+def _expire_pending_code(claim: Claim, *, now) -> None:
+    """Kill the claim's code message if it is still pending, so a dead code is
+    never sent after an outage (decisions.md §4.4: a resend supersedes the
+    prior code). Shared by the resend supersede and every flip to manual."""
+    if claim.code_message_id is None:
+        return
+    prior = claim.code_message
+    if prior.status == OutboundMessage.Status.PENDING:
+        prior.expires_at = now
+        prior.save(update_fields=["expires_at"])
+
+
+def _flip_to_manual(claim: Claim, *, now) -> None:
+    """Flip a ``domain_email`` claim that already holds a code to ``manual``
+    (decisions.md §4.5: every flip, all reasons): clear ``code_hash`` and
+    expire the pending code message in the same transaction, so a code
+    queued before the flip is never delivered once mail comes back."""
+    claim.method = Claim.Method.MANUAL
+    claim.code_hash = ""
+    _expire_pending_code(claim, now=now)
+    claim.save(update_fields=["method", "code_hash"])
+
+
 @transaction.atomic
 def _apply_start_verification(
     tenant, *, claim: Claim
@@ -1519,9 +1544,13 @@ def _apply_start_verification(
 
     actor = {"type": "visitor", "id": claim.claimant.public_id}
 
-    if not claims.domain_email_eligible(claim.listing, claim.claimant.email):
-        claim.method = Claim.Method.MANUAL
-        claim.save(update_fields=["method"])
+    if (
+        claims.domain_email_ineligibility(
+            tenant, claim.listing, claim.claimant.email
+        )
+        is not None
+    ):
+        _flip_to_manual(claim, now=timezone.now())
         event = emit(
             events.CLAIM_VERIFICATION_FAILED,
             subject=claim.public_id,
@@ -1564,11 +1593,7 @@ def _apply_start_verification(
     # pending, dies now rather than being sent after the fact (decisions.md
     # §4.4). Superseding grants no extra guesses -- the counters are on the
     # guard row, untouched here.
-    if claim.code_message_id is not None:
-        prior = claim.code_message
-        if prior.status == OutboundMessage.Status.PENDING:
-            prior.expires_at = now
-            prior.save(update_fields=["expires_at"])
+    _expire_pending_code(claim, now=now)
 
     code = claims.generate_code()
     claim.code_hash = claims.hash_code(claim.public_id, code)
@@ -1742,6 +1767,7 @@ def _apply_verify_claim_code(
         if guard.cooldowns >= MAX_COOLDOWNS:
             guard.verification_locked_at = now
             claim.method = Claim.Method.MANUAL
+            _expire_pending_code(claim, now=now)
             reason = "locked"
     cooldowns_after = guard.cooldowns
 

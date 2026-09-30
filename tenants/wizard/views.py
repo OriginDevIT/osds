@@ -21,6 +21,7 @@ from django.shortcuts import redirect, render
 from tenants import services
 from tenants.dns_check import CHALLENGE_PATH, check_domain_http
 from tenants.models import InstallSetup, Operator, Tenant
+from tenants.mail_forms import MailSettingsForm
 from tenants.secrets import set_secret
 from tenants.setup_state import next_step
 from tenants.wizard import forms
@@ -197,22 +198,25 @@ def smtp(request):
     if tenant is None or operator is None or "storage" not in (tenant.settings or {}):
         return redirect("setup-index")
 
-    form = forms.SmtpForm(request.POST or None)
-    if request.method == "POST" and form.is_valid():
-        cfg = {
-            "host": form.cleaned_data["host"],
-            "port": form.cleaned_data["port"],
-            "from_email": form.cleaned_data["from_email"],
-            "username": form.cleaned_data["username"],
-            "use_tls": form.cleaned_data["use_tls"],
-        }
-        if form.cleaned_data["password"]:
-            set_secret("smtp_password", form.cleaned_data["password"], tenant=tenant)
-        services.update_tenant_settings(
-            tenant=tenant, changes={"smtp": cfg}, changed_by=operator
-        )
+    if request.method == "POST" and request.POST.get("action") == "skip":
+        services.skip_mail_setup(tenant=tenant, changed_by=operator)
         return redirect("setup-index")
-    return render(request, "setup/form.html", {"form": form, "step": "smtp",
+
+    form = MailSettingsForm(request.POST or None, tenant=tenant)
+    if request.method == "POST" and form.is_valid():
+        try:
+            services.update_mail_settings(
+                tenant=tenant,
+                config=form.config(),
+                password=form.cleaned_data["password"],
+                clear_password=form.cleaned_data["clear_password"],
+                changed_by=operator,
+            )
+        except services.InvalidTenantSettings as exc:
+            form.add_error(None, str(exc))
+        else:
+            return redirect("setup-index")
+    return render(request, "setup/smtp.html", {"form": form, "step": "smtp",
                                                "title": "Outgoing email (SMTP)"})
 
 

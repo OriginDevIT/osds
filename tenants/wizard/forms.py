@@ -86,17 +86,6 @@ class StorageForm(forms.Form):
         return cleaned
 
 
-class SmtpForm(forms.Form):
-    host = forms.CharField(label="SMTP host")
-    port = forms.IntegerField(label="Port", min_value=1, max_value=65535, initial=587)
-    from_email = forms.EmailField(label="From address")
-    username = forms.CharField(label="Username", required=False)
-    password = forms.CharField(
-        label="Password", required=False, widget=forms.PasswordInput(render_value=False)
-    )
-    use_tls = forms.BooleanField(label="Use STARTTLS", required=False, initial=True)
-
-
 class ClaimsForm(forms.Form):
     METHODS = [
         ("manual", "Manual admin review (always on)"),

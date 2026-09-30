@@ -30,7 +30,13 @@ from audit.command_log import (
 )
 from audit.outbox import emit
 from tenants.claim_verification import CLAIM_METHODS, CLAIM_VERIFICATION_BOUNDS
+from tenants.mail_settings import (
+    HOST_CHANGE_MESSAGE,
+    SMTP_SECURITY_MODES,
+    host_change_needs_password,
+)
 from tenants.models import InstallSetup, Operator, StaffMembership, Tenant
+from tenants.secrets import delete_secret, set_secret
 
 
 class InvalidTenantSettings(ValueError):
@@ -72,9 +78,39 @@ def _validate_claim_verification(value) -> None:
             )
 
 
+def _validate_smtp(value) -> None:
+    """``{}`` is valid: the wizard's Skip stores an empty block, which the
+    sender reads as unconfigured (decisions.md §4.5)."""
+    if not isinstance(value, dict):
+        raise InvalidTenantSettings("smtp must be an object")
+    if not value:
+        return
+    security = value.get("security")
+    if security not in SMTP_SECURITY_MODES:
+        raise InvalidTenantSettings(
+            f"smtp.security must be one of {', '.join(SMTP_SECURITY_MODES)}"
+        )
+    for key in ("host", "from_email", "username"):
+        if key in value and not isinstance(value[key], str):
+            raise InvalidTenantSettings(f"smtp.{key} must be a string")
+    port = value.get("port")
+    if port is not None and (
+        not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535
+    ):
+        raise InvalidTenantSettings("smtp.port must be an integer from 1 to 65535")
+    if (value.get("username") or "").strip() and security == "none":
+        raise InvalidTenantSettings(
+            "smtp.username requires smtp.security starttls or tls: "
+            "credentials are never sent in the clear"
+        )
+
+
 # One validator per settings key that core enforces bounds on (spec §9.5).
 # A key with no validator is merged unchecked, as before.
-_SETTINGS_VALIDATORS = {"claim_verification": _validate_claim_verification}
+_SETTINGS_VALIDATORS = {
+    "claim_verification": _validate_claim_verification,
+    "smtp": _validate_smtp,
+}
 
 
 def _role_key(role: int) -> str:
@@ -347,6 +383,55 @@ def update_tenant_settings(
         actor={"type": "admin", "id": changed_by.public_id},
         data={"changes": patch, "changed_by": changed_by.public_id},
     )
+    return tenant
+
+
+@transaction.atomic
+def update_mail_settings(
+    *,
+    tenant: Tenant,
+    config: dict,
+    password: str = "",
+    clear_password: bool = False,
+    changed_by: Operator,
+) -> Tenant:
+    """Write the ``smtp`` block and its password secret together
+    (decisions.md §4.5), so a rejected block never leaves a new password
+    behind. A blank ``password`` keeps the stored secret; ``clear_password``
+    removes it; clearing the username removes it too, since nothing would
+    use it.
+
+    The stored secret is never sent to a new host: a host change with a
+    username set and no password supplied is refused. Checked here, not in
+    ``_validate_smtp``, because it needs the stored block and whether a
+    password arrived -- neither of which a value-only validator sees.
+    """
+    username = (config.get("username") or "").strip()
+    if (
+        not password
+        and not clear_password
+        and host_change_needs_password(
+            tenant, host=config.get("host") or "", username=username
+        )
+    ):
+        raise InvalidTenantSettings(HOST_CHANGE_MESSAGE)
+    update_tenant_settings(
+        tenant=tenant, changes={"smtp": config}, changed_by=changed_by
+    )
+    if password:
+        set_secret("smtp_password", password, tenant=tenant)
+    elif clear_password or not username:
+        delete_secret("smtp_password", tenant=tenant)
+    return tenant
+
+
+@transaction.atomic
+def skip_mail_setup(*, tenant: Tenant, changed_by: Operator) -> Tenant:
+    """The wizard's Skip: an empty ``smtp`` block. The wizard counts the step
+    done once the key exists, and the sender reads an empty host as
+    unconfigured (decisions.md §4.5)."""
+    update_tenant_settings(tenant=tenant, changes={"smtp": {}}, changed_by=changed_by)
+    delete_secret("smtp_password", tenant=tenant)
     return tenant
 
 

@@ -1,0 +1,16 @@
+{% extends "setup/base.html" %}
+{% block title %}{{ title }} &middot; OSDS setup{% endblock %}
+{% block heading %}{{ title }}{% endblock %}
+{% block content %}
+<p>Claim verification codes and notices are sent by email. You can skip this
+now and set it up later from the &ldquo;Mail settings&rdquo; link on the
+directory admin home page.
+Until mail is configured, email verification is unavailable and claims go to
+manual review.</p>
+<form method="post">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit">Continue</button>
+  <button type="submit" name="action" value="skip" formnovalidate>Skip for now</button>
+</form>
+{% endblock %}

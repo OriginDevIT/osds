@@ -7,6 +7,7 @@ extra container for the suite to depend on.
 from __future__ import annotations
 
 import smtplib
+import ssl
 from types import SimpleNamespace
 from unittest import mock
 
@@ -52,7 +53,7 @@ class SmtpSenderTests(TestCase):
             "port": 587,
             "from_email": "noreply@example.test",
             "username": "",
-            "use_tls": True,
+            "security": "starttls",
         }
         cfg.update(overrides)
         self.tenant.settings = {"smtp": cfg}
@@ -92,19 +93,110 @@ class SmtpSenderTests(TestCase):
         self.assertEqual(result.status, "ok")
         client.send_message.assert_called_once()
 
-    def test_use_tls_calls_starttls(self):
-        self._configure(use_tls=True)
+    def test_starttls_passes_a_verifying_context(self):
+        self._configure(security="starttls")
         client = _fake_client()
         with mock.patch("adapters.smtp.sender.smtplib.SMTP", return_value=client):
             self.sender.send(_message(self.tenant))
         client.starttls.assert_called_once()
+        ctx = client.starttls.call_args.kwargs["context"]
+        self.assertIsInstance(ctx, ssl.SSLContext)
+        self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(ctx.check_hostname)
 
-    def test_no_tls_skips_starttls(self):
-        self._configure(use_tls=False)
+    def test_tls_uses_smtp_ssl_with_a_verifying_context(self):
+        self._configure(security="tls", port=465)
+        client = _fake_client()
+        with mock.patch(
+            "adapters.smtp.sender.smtplib.SMTP_SSL", return_value=client
+        ) as ssl_cls, mock.patch("adapters.smtp.sender.smtplib.SMTP") as plain_cls:
+            result = self.sender.send(_message(self.tenant))
+        self.assertEqual(result.status, "ok")
+        plain_cls.assert_not_called()
+        client.starttls.assert_not_called()
+        args, kwargs = ssl_cls.call_args
+        self.assertEqual(args, ("smtp.example.test", 465))
+        self.assertEqual(kwargs["timeout"], 30)
+        self.assertEqual(kwargs["context"].verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(kwargs["context"].check_hostname)
+
+    def test_none_skips_starttls(self):
+        self._configure(security="none")
         client = _fake_client()
         with mock.patch("adapters.smtp.sender.smtplib.SMTP", return_value=client):
             self.sender.send(_message(self.tenant))
         client.starttls.assert_not_called()
+
+    def test_starttls_not_offered_fails_the_send_and_never_sends_in_clear(self):
+        self._configure(security="starttls")
+        client = _fake_client(
+            starttls_exc=smtplib.SMTPNotSupportedError("STARTTLS not supported")
+        )
+        with mock.patch("adapters.smtp.sender.smtplib.SMTP", return_value=client):
+            result = self.sender.send(_message(self.tenant))
+        self.assertEqual(result.status, "failed")
+        self.assertFalse(result.permanent)
+        client.send_message.assert_not_called()
+
+    def test_certificate_failure_retries(self):
+        self._configure(security="tls")
+        with mock.patch(
+            "adapters.smtp.sender.smtplib.SMTP_SSL",
+            side_effect=ssl.SSLCertVerificationError("bad cert"),
+        ):
+            result = self.sender.send(_message(self.tenant))
+        self.assertEqual(result.status, "failed")
+        self.assertFalse(result.permanent)
+
+    def test_username_with_security_none_is_unconfigured_and_never_connects(self):
+        self._configure(security="none", username="bot")
+        with mock.patch("adapters.smtp.sender.smtplib.SMTP") as smtp_cls:
+            with self.assertRaises(CapabilityUnconfigured):
+                self.sender.send(_message(self.tenant))
+        smtp_cls.assert_not_called()
+
+    def test_missing_or_unknown_security_is_unconfigured(self):
+        for security in (None, "", "ssl", "STARTTLS"):
+            with self.subTest(security=security):
+                self._configure(security=security)
+                with self.assertRaises(CapabilityUnconfigured):
+                    self.sender.send(_message(self.tenant))
+
+    def test_the_legacy_use_tls_key_is_not_read(self):
+        self._configure(use_tls=True)
+        del self.tenant.settings["smtp"]["security"]
+        with self.assertRaises(CapabilityUnconfigured):
+            self.sender.send(_message(self.tenant))
+
+    # -- available() ------------------------------------------------------
+    def test_available_truth_table(self):
+        cases = [
+            ({}, True),
+            ({"security": "tls"}, True),
+            ({"security": "none"}, True),
+            ({"security": "none", "username": "bot"}, False),
+            ({"security": "tls", "username": "bot"}, True),
+            ({"host": ""}, False),
+            ({"host": "  "}, False),
+            ({"from_email": ""}, False),
+            ({"security": "bogus"}, False),
+        ]
+        for overrides, expected in cases:
+            with self.subTest(overrides=overrides):
+                self._configure(**overrides)
+                self.assertIs(self.sender.available(self.tenant), expected)
+
+    def test_available_false_with_no_settings_or_an_empty_skip_block(self):
+        self.tenant.settings = {}
+        self.assertFalse(self.sender.available(self.tenant))
+        self.tenant.settings = {"smtp": {}}
+        self.assertFalse(self.sender.available(self.tenant))
+
+    def test_available_means_configured_not_reachable(self):
+        self._configure()
+        with mock.patch("adapters.smtp.sender.smtplib.SMTP") as smtp_cls:
+            self.assertTrue(self.sender.available(self.tenant))
+        smtp_cls.assert_not_called()
 
     def test_username_resolves_the_secret_password_and_logs_in(self):
         self._configure(username="bot")

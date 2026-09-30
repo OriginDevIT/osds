@@ -143,6 +143,19 @@ def capability_provider(name: str) -> "object | None":
     return _CAPABILITIES.get(name)
 
 
+def email_available(tenant) -> bool:
+    """Whether ``email.send`` is configured for ``tenant`` (decisions.md §4.5):
+    configured, not reachable. False with no provider registered, or with a
+    provider that does not expose ``available`` -- fail closed, so an
+    unmarked provider never tells a claimant a code is coming. Core asks
+    here and never reads the provider's own settings."""
+    provider = capability_provider("email.send")
+    available = getattr(provider, "available", None)
+    if available is None:
+        return False
+    return bool(available(tenant))
+
+
 @contextlib.contextmanager
 def override_capability(
     providers: "dict[str, object]",

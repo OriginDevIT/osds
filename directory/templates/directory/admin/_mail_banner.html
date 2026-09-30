@@ -1,0 +1,5 @@
+{% if show %}
+<p class="errors" role="alert">Email is not configured, so email verification is
+unavailable and claims go to manual review.
+{% if can_edit %}<a href="{% url 'directory_admin:mail-settings' %}">Set up mail</a>{% else %}Ask an administrator to set it up.{% endif %}</p>
+{% endif %}
