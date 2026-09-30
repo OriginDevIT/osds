@@ -309,6 +309,12 @@ def sitemap_index(request):
     # form yet, so the sitemap does not exist for it.
     if not routing.has_absolute_base(request.tenant):
         raise Http404
+    stored = sitemaps.load(request.tenant)
+    if stored is not None:
+        body = stored.get("index.xml")
+        if body is None:
+            raise Http404
+        return _sitemap_response(body)
     return _sitemap_response(sitemaps.build_index(request.tenant))
 
 
@@ -316,7 +322,13 @@ def sitemap_index(request):
 def sitemap_child(request, kind, shard):
     if not routing.has_absolute_base(request.tenant):
         raise Http404
-    body = sitemaps.build_child(request.tenant, kind, int(shard))
+    stored = sitemaps.load(request.tenant)
+    if stored is not None:
+        # A stored generation is complete: a file it lacks is a shard that does
+        # not exist, not one to generate live.
+        body = stored.get(f"{kind}-{int(shard)}.xml")
+    else:
+        body = sitemaps.build_child(request.tenant, kind, int(shard))
     if body is None:
         raise Http404
     return _sitemap_response(body)
@@ -324,8 +336,6 @@ def sitemap_child(request, kind, shard):
 
 def _sitemap_response(body: str):
     response = HttpResponse(body, content_type="application/xml; charset=utf-8")
-    # Regenerated live on every hit -- no server-side cache, no stored
-    # artifact. Worker precompute is #159.
     response["Cache-Control"] = "public, max-age=3600"
     return response
 

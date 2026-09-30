@@ -9,7 +9,7 @@ Shutdown contract, honoured by ``docker-compose.yml`` (``stop_grace_period: 10s`
 
 * The stop signal is SIGTERM. The handler below turns it into
   ``KeyboardInterrupt`` -- the same exception SIGINT already raises -- which
-  ``drain_once`` / ``tick_once`` let through untouched (#174). An in-flight
+  ``drain_once`` / ``TickRegistry.run_due`` let through untouched (#174). An in-flight
   adapter handler is abandoned, not recorded as a failed attempt: its delivery
   row was claimed with ``next_attempt_at`` pushed only 90s
   (``CLAIM_VISIBILITY_SECONDS``) ahead and is redelivered after that.
@@ -32,10 +32,10 @@ import sys
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
+from audit.worker.jobs import build_tick_registry
 from audit.worker.listen import OutboxListener
-from audit.worker.loop import POLL_INTERVAL_SECONDS, TICK_PERIOD, run_loop
+from audit.worker.loop import POLL_INTERVAL_SECONDS, run_loop
 from audit.worker.singleton import ADVISORY_LOCK_KEY, SingleInstanceLock
-from audit.worker.tick import register_tick_job
 
 
 def _raise_keyboard_interrupt(signum, frame):
@@ -64,13 +64,16 @@ class Command(BaseCommand):
         # stop_grace_period contract.
         signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
 
-        register_tick_job("heartbeat", self._heartbeat)
+        ticks = build_tick_registry(out=self.stdout)
 
         listener = OutboxListener(poll_interval=POLL_INTERVAL_SECONDS)
         listener.start()
         try:
             run_loop(
-                wait=listener.wait, now=timezone.now, tick_period=TICK_PERIOD
+                wait=listener.wait,
+                now=timezone.now,
+                ticks=ticks,
+                report=self.stderr.write,
             )
         except KeyboardInterrupt:
             self.stdout.write("osds-worker: shutdown signal received; stopping.")
@@ -78,6 +81,3 @@ class Command(BaseCommand):
             listener.close()
             lock.release()
             self.stdout.write("osds-worker: stopped.")
-
-    def _heartbeat(self, *, now) -> None:
-        self.stdout.write(f"osds-worker: heartbeat {now.isoformat()}")

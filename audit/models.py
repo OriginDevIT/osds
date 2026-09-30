@@ -81,7 +81,9 @@ class OutboxEvent(models.Model):
     # Originating adapter id -- loop guard. Empty means core-originated.
     origin = models.CharField(max_length=100, blank=True)
     trace_id = models.CharField(max_length=26, blank=True)
-    # Nulled at 90 days (spec §11.2).
+    # Blanked to ``{}`` at 90 days (spec §11.2) by the worker's
+    # ``event_payload_retention`` job, which stamps ``payload_nulled_at``. The
+    # column is NOT NULL: the envelope always carries a ``data`` object.
     data = models.JSONField(default=dict, blank=True)
 
     status = models.CharField(
@@ -191,9 +193,10 @@ class OutboundMessage(models.Model):
     to ``None`` -- not ``""`` -- in the same write that sets a terminal
     status (``sent``, ``dead``, ``expired``): the plaintext code or link
     exists only in the message actually sent (spec §9.6). ``to_address`` is
-    kept for delivery debugging and is nulled separately, at 90 days, by a
-    tick job queued behind #180; that job is not implemented in this PR
-    (#213).
+    kept for delivery debugging and is nulled separately, at 90 days, by the
+    worker's ``outbound_address_retention`` tick job
+    (``audit.worker.retention.null_outbound_addresses``, #213) -- only once the
+    row is terminal, never while it is still ``pending``.
     """
 
     class Status(models.TextChoices):
@@ -283,10 +286,17 @@ class CommandLog(models.Model):
     )
     result_event_id = models.CharField(max_length=26, blank=True)
     problem = models.JSONField(null=True, blank=True)
-    # Written after the transaction settles. A concluded row is never rewritten.
+    # Written after the transaction settles. A concluded row is never rewritten,
+    # with one exception: ``payload`` is nulled at 90 days by the worker's
+    # ``command_payload_retention`` job (decisions.md §4.7). Nothing else moves.
     concluded_at = models.DateTimeField(null=True, blank=True)
 
+    # Plain manager (allowlisted, tenants/tests/test_scoped_manager.py). The
+    # worker's retention job reaches the table through ``all_tenants``, as it
+    # does for every other model -- there is nothing tenant-scoped about this
+    # manager, the name is only what the worker-source invariant looks for.
     objects = models.Manager()
+    all_tenants = models.Manager()
 
     class Meta:
         db_table = "command_log"

@@ -9,7 +9,8 @@ worker's ``worker_pass`` calls it once per pass, right after ``drain_once``.
 There is no ``while`` loop here. Rollback is a synchronous admin action in
 ``directory.services.rollback_import_batch``; the per-row provenance it reads
 (``ImportBatchListing``) is written inside ``upsert_listing``. This module also
-holds ``null_import_pre_images``, the 90-day pre-image sweep.
+holds ``null_import_pre_images``, the 90-day pre-image sweep the worker runs
+as the ``import_pre_image_retention`` tick job (``directory.jobs``).
 
 The whole pass runs inside ``tenant_context(batch.tenant)``, entered *after*
 the cross-tenant claim and left before the function returns -- the worker is
@@ -286,7 +287,7 @@ def _bump(batch, n, *, note=None, error=None, **counters) -> None:
 # --- pre-image nulling -------------------------------------------------------
 
 
-def null_import_pre_images(*, now) -> int:
+def null_import_pre_images(*, now, limit: "int | None" = None) -> int:
     """Clear the pre-image on every ``ImportBatchListing`` whose batch settled
     more than 90 days ago (spec §3.3, §11.2), returning the number of rows
     nulled.
@@ -295,12 +296,17 @@ def null_import_pre_images(*, now) -> int:
     can no longer be rolled back and the admin says so. Idempotent -- a row
     already stamped is skipped. Cross-tenant: takes no tenant in scope.
 
-    This is a plain function. It is deliberately *not* registered as a worker
-    tick job -- #180 (the retention-sweep cadence) is unresolved -- so nothing
-    calls it automatically yet.
+    ``limit`` bounds one call to that many rows, oldest first; the worker's
+    ``import_pre_image_retention`` tick job passes it so a large backlog is
+    cleared across several passes instead of one long UPDATE ahead of the mail
+    drain. ``None`` nulls everything due.
     """
     cutoff = now - PRE_IMAGE_TTL
-    return ImportBatchListing.all_tenants.filter(
+    due = ImportBatchListing.all_tenants.filter(
         pre_image_nulled_at__isnull=True,
         batch__completed_at__lt=cutoff,
-    ).update(pre_image=None, pre_image_nulled_at=now)
+    )
+    if limit is not None:
+        ids = list(due.order_by("id").values_list("id", flat=True)[:limit])
+        due = ImportBatchListing.all_tenants.filter(id__in=ids)
+    return due.update(pre_image=None, pre_image_nulled_at=now)
