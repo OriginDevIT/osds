@@ -47,6 +47,16 @@ urlpatterns = [
         claim_views.claim_submitted,
         name="public-claim-submitted",
     ),
+    path(
+        "claim/<str:public_id>/verify/",
+        claim_views.claim_verify,
+        name="public-claim-verify",
+    ),
+    path(
+        "claim/<str:public_id>/verify/resend/",
+        claim_views.claim_verify_resend,
+        name="public-claim-resend",
+    ),
     # robots.txt and the sitemap. "sitemap.xml" / "sitemaps" are reserved
     # slugs; all three sit ahead of the catch-all.
     path("robots.txt", public_views.robots_txt, name="robots-txt"),

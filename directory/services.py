@@ -12,7 +12,10 @@ Call these with the tenant in ambient scope (a request, or
 
 from __future__ import annotations
 
+import hmac
+import logging
 from dataclasses import dataclass
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
@@ -27,18 +30,21 @@ from audit.command_log import (
     log_replay,
     require_autocommit,
 )
-from audit.models import CommandLog
+from audit.mail import enqueue
+from audit.models import CommandLog, OutboundMessage
 from audit.outbox import emit
-from directory import normalize, suppression
+from directory import claims, normalize, routing, suppression
 from directory.field_schema import (
     SchemaError,
     normalize_type_schema,
     validate_custom_fields,
     validate_type_schema,
 )
+from directory.masking import mask_email
 from directory.models import (
     Category,
     Claim,
+    ClaimVerificationGuard,
     Consent,
     ConsentText,
     DirectoryUser,
@@ -52,6 +58,9 @@ from directory.models import (
 )
 from directory.patch import diff, project
 from directory.search import recompute_search_vector
+from tenants.claim_verification import CLAIM_VERIFICATION_BOUNDS
+
+logger = logging.getLogger("osds.claims")
 
 # Slugs that would collide with fixed public routes (ruling 20). Rejected in
 # create_category and upsert_listing.
@@ -1257,6 +1266,16 @@ def _apply_submit_claim(
     )
     actor = {"type": "visitor", "id": user.public_id}
 
+    # Repeated rejection (spec §9.6) is PR 4's -- nothing writes
+    # claim_blocked_at yet -- but submit already refuses a pair it finds
+    # blocked (decisions.md §4.4), so the field exists in this migration
+    # and is honoured here even though it stays unwritten until PR 4.
+    guard = ClaimVerificationGuard.objects.filter(
+        tenant=tenant, listing=listing, claimant=user
+    ).first()
+    if guard is not None and guard.claim_blocked_at is not None:
+        raise SchemaError(["this address is blocked from claiming this listing"])
+
     if minted:
         # Emitted before claim.submitted, same transaction (spec §4.3): the
         # ordering per subject is unambiguous even though both land in one
@@ -1277,11 +1296,25 @@ def _apply_submit_claim(
             },
         )
 
+    # Eligibility is resolved before the row exists (decisions.md §4.4: "an
+    # ineligible domain_email claim flips to manual in the service"). A
+    # locked (listing, email) pair is ineligible too (claims.
+    # domain_email_eligible folds that in) -- so this is the only place PR 3
+    # ever produces an ineligible-flip; _apply_start_verification's own
+    # ineligible branch is unreachable from here and only fires on a later
+    # claim.start_verification (resend/restart), when an import can have
+    # changed the website since submit.
+    effective_method = method
+    if method == Claim.Method.DOMAIN_EMAIL and not claims.domain_email_eligible(
+        listing, claimant["email"]
+    ):
+        effective_method = Claim.Method.MANUAL
+
     claim = Claim.objects.create(
         tenant=tenant,
         listing=listing,
         claimant=user,
-        method=method,
+        method=effective_method,
         role_claimed=claimant["role_claimed"],
         last_step="submitted",
     )
@@ -1330,6 +1363,18 @@ def _apply_submit_claim(
     )
     result_event_id = claim_event.event_id
 
+    if effective_method == Claim.Method.DOMAIN_EMAIL:
+        # Verification starts inside claim.submit (decisions.md §4.4), by
+        # calling the same internal function claim.start_verification's
+        # wrapper calls -- never duplicated here. A cooldown/lock/cap "not
+        # sent" result is silently possible (correction: submit still
+        # concludes applied; the claimant sees "no code sent yet" on the
+        # verify page) but unreachable in practice for a claim that was
+        # just created with an empty guard row.
+        claim, _start_result, _start_event_id = _apply_start_verification(
+            tenant, claim=claim
+        )
+
     # Two pending claims on a listing that has no sitting owner are not a
     # dispute -- both proceed independently. Approving one is what disposes
     # of the others (auto-rejecting the losers); that reconciliation is a
@@ -1362,3 +1407,393 @@ def _apply_submit_claim(
         # this side of claim disputes (mvp-plan.md, "Out, and planned").
 
     return claim, result_event_id
+
+
+# --- domain_email verification (claims PR 3, spec §9.5/§9.6, decisions.md §4.4) ---
+
+COOLDOWN_MINUTES = 15  # 5th wrong entry (spec §9.6)
+MAX_WRONG_ENTRIES = 5
+MAX_COOLDOWNS = 3  # 3rd cooldown locks the pair (spec §9.6)
+MIN_SECONDS_BETWEEN_SENDS = 60
+MAX_SENDS_PER_WINDOW = 5
+SEND_WINDOW = timedelta(hours=24)
+
+
+class VerificationRefused(Exception):
+    """A guard refusal for claim.start_verification or claim.verify: no
+    state change, no event (decisions.md §4.4: "guard refusals emit
+    nothing"). Covers the claim-state guards (status/method/verified_at,
+    an already-consumed or never-issued code) and the runtime guards
+    (cooldown active, pair locked, code expired). ``reason`` is not an
+    event field -- it never reaches claim.verification_failed, only the
+    command-log ``problem`` and the caller."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
+def _resolve_domain_email_ttl(tenant) -> timedelta:
+    """Core computes the lifetime, never the caller (spec §9.5). A stored
+    value outside the bounds -- only reachable via direct SQL, since
+    tenants.services.update_tenant_settings validates at configuration --
+    falls back to the method default with a WARNING; that is a default,
+    not a clamp."""
+    bounds = CLAIM_VERIFICATION_BOUNDS["domain_email"]
+    cfg = (tenant.settings or {}).get("claim_verification") or {}
+    minutes = (cfg.get("ttl") or {}).get("domain_email_minutes")
+    if minutes is None:
+        return timedelta(minutes=bounds["default_minutes"])
+    valid = isinstance(minutes, int) and not isinstance(minutes, bool) and (
+        bounds["min_minutes"] <= minutes <= bounds["max_minutes"]
+    )
+    if not valid:
+        logger.warning(
+            "tenant %s has an invalid domain_email ttl stored (%r minutes); "
+            "falling back to the %s-minute default",
+            tenant.public_id, minutes, bounds["default_minutes"],
+        )
+        return timedelta(minutes=bounds["default_minutes"])
+    return timedelta(minutes=minutes)
+
+
+def _lock_guard(tenant, *, listing, claimant) -> ClaimVerificationGuard:
+    guard, _ = ClaimVerificationGuard.objects.get_or_create(
+        tenant=tenant, listing=listing, claimant=claimant
+    )
+    return ClaimVerificationGuard.objects.select_for_update().get(pk=guard.pk)
+
+
+@transaction.atomic
+def _apply_start_verification(
+    tenant, *, claim: Claim
+) -> "tuple[Claim, str, str | None]":
+    """The shared start mechanics (decisions.md §4.4: "Both call one
+    internal start function"). Called directly -- never through
+    ``start_claim_verification``'s command wrapper, which would fail
+    ``require_autocommit`` -- by ``_apply_submit_claim`` when the requested
+    method is already known eligible, and by ``start_claim_verification``
+    for resend/restart.
+
+    ``claim.submit`` resolves eligibility itself before the row even exists
+    (spec §9.6's "no website... goes to manual"; decisions.md §4.4), so
+    this function's own ineligible branch is unreachable from submit --
+    only a later resend/restart reaches it, when an import can have
+    changed the website since submit (decisions.md §4.4).
+
+    Returns ``(claim, result, result_event_id)``, ``result_event_id`` the id
+    of the event this call itself caused, or ``None`` when it caused none:
+      "sent"        -- a new code was generated and queued; result_event_id
+                       is its claim.verification_started event.
+      "ineligible"  -- flipped to manual, result_event_id is its
+                       claim.verification_failed(reason="ineligible") event
+                       -- resend/restart only. Also how a locked pair
+                       surfaces here: domain_email_eligible folds
+                       guard.verification_locked_at into eligibility, so
+                       this function never returns a separate "locked"
+                       (that reason is still emitted, correctly, from
+                       claim.verify's wrong-entry cascade -- the lock's
+                       *origin*, not a re-check of it).
+      "cooldown" | "cap" -- eligible, but nothing sent: a cooldown is active
+        or the send caps are exhausted. No state change, no event -- and
+        never raised, so a nested call from claim.submit still lets that
+        command conclude "applied". Only ``start_claim_verification``'s
+        wrapper turns these into a rejected command-log outcome.
+
+    Raises ``VerificationRefused`` -- state guards only, never reached from
+    submit's own call since the claim it just created is always
+    pending_verification / domain_email / unverified. The guard row is
+    locked, and the claim re-read locked, before any check runs -- same as
+    ``_apply_verify_claim_code`` (decisions.md §4.4: no check reads claim
+    state before the lock).
+    """
+    guard = _lock_guard(tenant, listing=claim.listing, claimant=claim.claimant)
+    claim = Claim.objects.select_for_update().get(pk=claim.pk)
+
+    if claim.status != Claim.Status.PENDING_VERIFICATION:
+        raise VerificationRefused("status")
+    if claim.method != Claim.Method.DOMAIN_EMAIL:
+        raise VerificationRefused("method")
+    if claim.verified_at is not None:
+        raise VerificationRefused("verified")
+
+    actor = {"type": "visitor", "id": claim.claimant.public_id}
+
+    if not claims.domain_email_eligible(claim.listing, claim.claimant.email):
+        claim.method = Claim.Method.MANUAL
+        claim.save(update_fields=["method"])
+        event = emit(
+            events.CLAIM_VERIFICATION_FAILED,
+            subject=claim.public_id,
+            tenant=tenant,
+            actor=actor,
+            data={
+                "claim": {
+                    "id": claim.public_id,
+                    "listing_id": claim.listing.public_id,
+                    "status": claim.status,
+                    "method": claim.method,
+                },
+                "method": "domain_email",
+                "reason": "ineligible",
+                "attempt": None,
+                "cooldowns": None,
+            },
+        )
+        return claim, "ineligible", event.event_id
+
+    # A locked pair is already caught above -- domain_email_eligible folds
+    # guard.verification_locked_at into eligibility itself (decisions.md
+    # §4.4's "a locked pair is ineligible"), so a lock is never seen here.
+    now = timezone.now()
+    if guard.cooldown_until is not None and guard.cooldown_until > now:
+        return claim, "cooldown", None
+    if guard.last_code_sent_at is not None and (
+        now - guard.last_code_sent_at
+    ) < timedelta(seconds=MIN_SECONDS_BETWEEN_SENDS):
+        return claim, "cap", None
+    window_start = guard.codes_sent_window_start
+    sent_in_window = guard.codes_sent_in_window
+    if window_start is None or (now - window_start) >= SEND_WINDOW:
+        window_start = now
+        sent_in_window = 0
+    if sent_in_window >= MAX_SENDS_PER_WINDOW:
+        return claim, "cap", None
+
+    # A resend supersedes the prior code: the old message, if still
+    # pending, dies now rather than being sent after the fact (decisions.md
+    # §4.4). Superseding grants no extra guesses -- the counters are on the
+    # guard row, untouched here.
+    if claim.code_message_id is not None:
+        prior = claim.code_message
+        if prior.status == OutboundMessage.Status.PENDING:
+            prior.expires_at = now
+            prior.save(update_fields=["expires_at"])
+
+    code = claims.generate_code()
+    claim.code_hash = claims.hash_code(claim.public_id, code)
+    claim.verification_started_at = now
+    ttl = _resolve_domain_email_ttl(tenant)
+    claim.expires_at = now + ttl
+
+    link_line = ""
+    if routing.has_absolute_base(tenant):
+        verify_url = routing.absolute_url(tenant, f"/claim/{claim.public_id}/verify/")
+        link_line = f"\n\nEnter it at: {verify_url}"
+    # No claimant-supplied text (decisions.md §4.4) -- anyone can name
+    # another person's address, and this would otherwise let them write
+    # into mail sent from the operator's own domain. Body text is exact
+    # per decisions.md §4.4's "The message" -- no quotes around names, no
+    # isoformat (Y-m-d H:i UTC instead).
+    expires_display = claim.expires_at.strftime("%Y-%m-%d %H:%M")
+    body_text = (
+        f"A request was made on {tenant.name} to claim the listing "
+        f"{claim.listing.name} using this email address.\n\n"
+        f"Your verification code is: {code}\n\n"
+        f"It expires at {expires_display} UTC. Only the most recent code "
+        f"works."
+        f"{link_line}"
+        f"\n\nIf you did not make this request, you can ignore this email. "
+        f"Nothing changes unless the code is entered."
+    )
+    message = enqueue(
+        tenant=tenant,
+        kind="claim.verification_code",
+        to_address=claim.claimant.email,
+        subject=f"Your verification code for {claim.listing.name}",
+        body_text=body_text,
+        expires_at=claim.expires_at,
+    )
+    claim.code_message = message
+    claim.save(
+        update_fields=[
+            "code_hash", "verification_started_at", "expires_at", "code_message",
+        ]
+    )
+
+    guard.last_code_sent_at = now
+    guard.codes_sent_window_start = window_start
+    guard.codes_sent_in_window = sent_in_window + 1
+    guard.save(
+        update_fields=[
+            "last_code_sent_at", "codes_sent_window_start", "codes_sent_in_window",
+        ]
+    )
+
+    event = emit(
+        events.CLAIM_VERIFICATION_STARTED,
+        subject=claim.public_id,
+        tenant=tenant,
+        actor=actor,
+        data={
+            "claim": {
+                "id": claim.public_id,
+                "listing_id": claim.listing.public_id,
+                "status": claim.status,
+                "method": claim.method,
+            },
+            "method": "domain_email",
+            "expires_at": claim.expires_at.isoformat(),
+            "destination": mask_email(claim.claimant.email),
+        },
+    )
+    return claim, "sent", event.event_id
+
+
+def start_claim_verification(tenant, *, claim: Claim) -> Claim:
+    """The ``claim.start_verification`` command -- resend/restart. Actor is
+    built from ``claim.claimant`` (decisions.md §4.4's "the actor... never
+    an email"), never a parameter.
+
+    A cooldown or an exhausted send cap is a guard refusal here --
+    concluded ``rejected`` and raised -- even though
+    ``_apply_start_verification`` itself never raises for them, so that
+    ``claim.submit``'s own nested call (which ignores the returned result)
+    still concludes ``applied`` regardless (correction, decisions.md §4.4
+    reading). A locked pair takes the "ineligible" path instead -- a real
+    state change (flip to manual) -- so it concludes ``applied``, same as
+    any other resend that finds the claim ineligible.
+    """
+    require_autocommit()
+    actor = {"type": "visitor", "id": claim.claimant.public_id}
+    row = log_received(
+        command="claim.start_verification",
+        tenant=tenant,
+        idempotency_key=None,
+        actor=actor,
+        trace_id=None,
+        origin="",
+        payload={"claim_id": claim.public_id},
+    )
+    try:
+        claim, result, result_event_id = _apply_start_verification(tenant, claim=claim)
+    except VerificationRefused as exc:
+        log_conclude(row, outcome="rejected", problem={"reason": exc.reason})
+        raise
+    if result in ("cooldown", "cap"):
+        log_conclude(row, outcome="rejected", problem={"reason": result})
+        raise VerificationRefused(result)
+    log_conclude(row, outcome="applied", result_event_id=result_event_id)
+    return claim
+
+
+@transaction.atomic
+def _apply_verify_claim_code(
+    tenant, *, claim: Claim, code: str
+) -> "tuple[Claim, bool, str | None]":
+    """Returns ``(claim, correct, result_event_id)``.
+
+    Locks the guard row, then re-reads and locks the claim row, before any
+    check runs (no check reads claim state before the lock). Raises
+    ``VerificationRefused`` -- no state change, no event -- for: no active
+    code, ``status`` not pending_verification, ``method`` not
+    domain_email, already verified, an active cooldown, the lock, or an
+    expired code (decisions.md §4.4: "an expired code's entry changes
+    nothing").
+
+    Never raises for a wrong code -- it changes state (counters, and
+    possibly a cooldown or the lock) and concludes ``applied`` with
+    ``result_event_id`` set to its own ``claim.verification_failed``
+    (decisions.md §4.4). A correct code concludes ``applied`` with no
+    event at all.
+    """
+    guard = _lock_guard(tenant, listing=claim.listing, claimant=claim.claimant)
+    claim = Claim.objects.select_for_update().get(pk=claim.pk)
+
+    # Order matters (decisions.md §4.4, ruling 8): the reason reported is
+    # the claim's real state, checked broadest-first -- a claim in the
+    # wrong status or method is that, regardless of whether it also happens
+    # to have no active code; a locked or cooling-down pair is that, even
+    # if the specific code shown would also have expired.
+    now = timezone.now()
+    if claim.status != Claim.Status.PENDING_VERIFICATION:
+        raise VerificationRefused("status")
+    if claim.method != Claim.Method.DOMAIN_EMAIL:
+        raise VerificationRefused("method")
+    if claim.verified_at is not None:
+        raise VerificationRefused("verified")
+    if guard.verification_locked_at is not None:
+        raise VerificationRefused("locked")
+    if guard.cooldown_until is not None and guard.cooldown_until > now:
+        raise VerificationRefused("cooldown")
+    if not claim.code_hash:
+        raise VerificationRefused("no_active_code")
+    if claim.expires_at is not None and claim.expires_at <= now:
+        raise VerificationRefused("expired")
+
+    actor = {"type": "visitor", "id": claim.claimant.public_id}
+
+    if hmac.compare_digest(claim.code_hash, claims.hash_code(claim.public_id, code)):
+        claim.verified_at = now
+        claim.code_hash = ""
+        claim.save(update_fields=["verified_at", "code_hash"])
+        return claim, True, None
+
+    claim.attempts += 1
+    guard.wrong_entries += 1
+    attempt_after = guard.wrong_entries  # captured before any reset below
+    reason = "wrong_code"
+    if guard.wrong_entries >= MAX_WRONG_ENTRIES:
+        claim.code_hash = ""
+        guard.cooldown_until = now + timedelta(minutes=COOLDOWN_MINUTES)
+        guard.cooldowns += 1
+        guard.wrong_entries = 0
+        reason = "cooldown"
+        if guard.cooldowns >= MAX_COOLDOWNS:
+            guard.verification_locked_at = now
+            claim.method = Claim.Method.MANUAL
+            reason = "locked"
+    cooldowns_after = guard.cooldowns
+
+    claim.save(update_fields=["attempts", "code_hash", "method"])
+    guard.save(
+        update_fields=[
+            "wrong_entries", "cooldown_until", "cooldowns", "verification_locked_at",
+        ]
+    )
+
+    event = emit(
+        events.CLAIM_VERIFICATION_FAILED,
+        subject=claim.public_id,
+        tenant=tenant,
+        actor=actor,
+        data={
+            "claim": {
+                "id": claim.public_id,
+                "listing_id": claim.listing.public_id,
+                "status": claim.status,
+                "method": claim.method,
+            },
+            "method": "domain_email",
+            "reason": reason,
+            "attempt": attempt_after,
+            "cooldowns": cooldowns_after,
+        },
+    )
+    return claim, False, event.event_id
+
+
+def verify_claim_code(tenant, *, claim: Claim, code: str) -> "tuple[Claim, bool]":
+    """The ``claim.verify`` command (spec §9.6, decisions.md §4.4). Payload
+    is ``{"claim_id"}`` only -- never the entered code or its hash. Actor is
+    built from ``claim.claimant``, never a parameter."""
+    require_autocommit()
+    actor = {"type": "visitor", "id": claim.claimant.public_id}
+    row = log_received(
+        command="claim.verify",
+        tenant=tenant,
+        idempotency_key=None,
+        actor=actor,
+        trace_id=None,
+        origin="",
+        payload={"claim_id": claim.public_id},
+    )
+    try:
+        claim, correct, result_event_id = _apply_verify_claim_code(
+            tenant, claim=claim, code=code
+        )
+    except VerificationRefused as exc:
+        log_conclude(row, outcome="rejected", problem={"reason": exc.reason})
+        raise
+    log_conclude(row, outcome="applied", result_event_id=result_event_id)
+    return claim, correct

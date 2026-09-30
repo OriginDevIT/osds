@@ -22,7 +22,8 @@
   <p>{{ form.name.label_tag }}<br>{{ form.name }}{{ form.name.errors }}</p>
   <p>{{ form.email.label_tag }}<br>{{ form.email }}{{ form.email.errors }}</p>
   <p>{{ form.phone_e164.label_tag }}<br>{{ form.phone_e164 }}{{ form.phone_e164.errors }}</p>
-  <p>{{ form.method.label_tag }}<br>{{ form.method }}{{ form.method.errors }}</p>
+  <p>{{ form.method.label_tag }}<br>{{ form.method }}{{ form.method.errors }}
+  {% if form.method.help_text %}<br><span class="muted">{{ form.method.help_text }}</span>{% endif %}</p>
 
   <fieldset>
     <legend>{{ consent_text.body|linebreaksbr }}</legend>

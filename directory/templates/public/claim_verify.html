@@ -1,0 +1,43 @@
+{% extends "public/base.html" %}
+{% block title %}Verify your claim &middot; {{ request.tenant.name }}{% endblock %}
+{% block content %}
+<h1>Verify your claim</h1>
+
+<p class="muted">Verification address: {{ status.destination }}.</p>
+
+{% if status.message %}
+  <p>{{ status.message }}</p>
+{% endif %}
+{% if status.cooldowns_left is not None %}
+  <p>Cooldowns remaining before this claim goes to manual review: {{ status.cooldowns_left }}.</p>
+{% endif %}
+
+{% if status.show_code_form %}
+  {% if status.expires_at %}
+    <p class="muted">This code expires at {{ status.expires_at|date:"Y-m-d H:i" }} UTC.</p>
+  {% endif %}
+  {% if status.tries_left is not None %}
+    <p class="muted">Tries left on this code: {{ status.tries_left }}.</p>
+  {% endif %}
+
+  {% if form.non_field_errors %}
+    <ul class="errors">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+    <p>{{ form.code.label_tag }}<br>{{ form.code }}{{ form.code.errors }}</p>
+    <button type="submit">Verify</button>
+  </form>
+{% endif %}
+
+{% if status.show_resend_form %}
+  <form method="post" action="{% url 'public-claim-resend' public_id=claim.public_id %}">
+    {% csrf_token %}
+    {% if status.next_send_at %}
+      <p class="muted">Next send possible at {{ status.next_send_at|date:"Y-m-d H:i" }} UTC.</p>
+    {% endif %}
+    <button type="submit">Resend code</button>
+  </form>
+{% endif %}
+{% endblock %}

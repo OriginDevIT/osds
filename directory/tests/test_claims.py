@@ -215,6 +215,12 @@ class SubmitClaimMethodTests(_Base):
             self.submit(method="carrier_pigeon")
 
     def test_enabled_methods_from_tenant_settings_are_accepted(self):
+        # A website matching the claimant's email domain, so the method
+        # gate under test isn't confused with the eligibility gate PR 3
+        # adds (directory.claims.domain_email_eligible) -- see test_claim_
+        # verification.py for eligibility's own tests.
+        self.listing.website = "https://hoffmanplumbing.example"
+        self.listing.save(update_fields=["website"])
         self.tenant.settings["claim_verification"] = {
             "enabled_methods": ["manual", "domain_email"]
         }
