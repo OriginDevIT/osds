@@ -1,0 +1,80 @@
+# Four containers (decisions.md section 3): osds-app, osds-worker, postgres,
+# and object storage. At launch the last is the osds-media named volume --
+# storage is local disk only (#150), so a MinIO container would have nothing
+# to serve. Postgres and media are both replaceable through configuration.
+#
+# `docker compose up` needs no .env. Secrets are generated on first boot into
+# the osds-secrets volume; a .env file is optional overrides only.
+
+x-osds: &osds
+  build: .
+  image: osds:local
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    # Where the wizard and the operator console are served. Host only, no port:
+    # the middleware strips the port from the request before comparing (#142).
+    OSDS_CONSOLE_HOST: ${OSDS_CONSOLE_HOST:-localhost}
+    # False because a fresh install is plain HTTP. Set true behind TLS.
+    OSDS_SECURE_COOKIES: ${OSDS_SECURE_COOKIES:-false}
+  volumes:
+    - osds-secrets:/run/osds-secrets:ro
+    - osds-media:/var/lib/osds/media
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16
+    # Generates the secrets on first boot, then hands over to the stock entrypoint.
+    entrypoint: ["/bin/bash", "/osds/postgres-entrypoint.sh"]
+    command: ["postgres"]
+    environment:
+      POSTGRES_USER: osds
+      POSTGRES_DB: osds
+      POSTGRES_PASSWORD_FILE: /run/osds-secrets/db_owner_password
+    volumes:
+      - osds-pgdata:/var/lib/postgresql/data
+      - osds-secrets:/run/osds-secrets
+      - ./docker/postgres-entrypoint.sh:/osds/postgres-entrypoint.sh:ro
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # TCP, not the socket: during first-boot init the server answers on the
+      # socket only, before the init scripts have run.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "osds", "-d", "osds"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  osds-app:
+    <<: *osds
+    command: ["app"]
+    ports:
+      - "${OSDS_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "/app/docker/healthcheck.py"]
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 120s
+
+  osds-worker:
+    <<: *osds
+    command: ["worker"]
+    # run_worker shuts down in well under a second on SIGTERM and abandons any
+    # in-flight handler for redelivery after the 90s visibility deadline, so
+    # the grace period is not sized against that deadline (see run_worker.py).
+    stop_grace_period: 10s
+    depends_on:
+      osds-app:
+        condition: service_healthy
+
+volumes:
+  osds-pgdata:
+  osds-media:
+  # Holds the generated secrets. Losing it makes stored credentials unrecoverable.
+  osds-secrets:

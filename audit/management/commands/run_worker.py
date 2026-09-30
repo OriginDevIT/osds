@@ -5,7 +5,7 @@ One instance per installation, guarded by a Postgres advisory lock. LISTEN on
 (spec §11.1). The adapter registry is empty until block 5, so today the drain
 fans events out to nothing -- which is all CSV import needs from the worker.
 
-Shutdown contract, for the ``docker-compose.yml`` this repo does not yet have:
+Shutdown contract, honoured by ``docker-compose.yml`` (``stop_grace_period: 10s``):
 
 * The stop signal is SIGTERM. The handler below turns it into
   ``KeyboardInterrupt`` -- the same exception SIGINT already raises -- which

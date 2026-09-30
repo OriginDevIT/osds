@@ -16,6 +16,31 @@ OSDS ships no connectors to any external listing dataset. No scrapers, no import
 from mapping providers, no plugin hook for one. The operator is responsible for the
 listings they publish. See `docs/spec/events-and-adapters.md` §4.1.1.
 
+## Quick start
+    docker compose up --build
+
+Then open <http://localhost:8000>. The first-run wizard asks for a setup token,
+which the app prints to its log:
+
+    docker compose logs osds-app
+
+No `.env` file is needed. On first boot the stack generates its own secrets into
+a named volume (`osds-secrets`). A `.env` (see `.env.example`) is optional
+overrides only, such as `OSDS_CONSOLE_HOST`, which must be the hostname you
+browse to, without a port.
+
+Four containers: `osds-app`, `osds-worker`, `postgres`, and storage. Storage is
+local disk at launch, the `osds-media` volume shared by app and worker.
+
+> **Back up the `osds-secrets` volume.** It holds `OSDS_SECRET_KEY`, which
+> encrypts the credentials you enter in the wizard (SMTP password, storage
+> keys). If the volume is lost, those credentials cannot be recovered and must
+> be re-entered; `docker compose down -v` deletes it along with your data.
+> A new `osds-secrets` volume will not work against an existing database volume.
+
+The app is plain HTTP by default (`OSDS_SECURE_COOKIES=false`). Put TLS in front
+of it and set `OSDS_SECURE_COOKIES=true` before you go public.
+
 ## Documentation
 - [Specification](docs/spec/events-and-adapters.md)
 - [Contributing](CONTRIBUTING.md)
