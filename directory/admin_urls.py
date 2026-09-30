@@ -2,6 +2,7 @@ from django.urls import path
 
 from directory import admin_views as views
 from directory import auth_views
+from tenants import mail_views
 
 app_name = "directory_admin"
 
@@ -9,6 +10,7 @@ urlpatterns = [
     path("", auth_views.index, name="index"),
     path("login/", auth_views.login_view, name="login"),
     path("logout/", auth_views.logout_view, name="logout"),
+    path("settings/mail/", mail_views.mail_settings, name="mail-settings"),
     path("listing-types/", views.listing_type_list, name="type-list"),
     path("listing-types/new/", views.listing_type_create, name="type-create"),
     path("listing-types/<slug:key>/", views.listing_type_edit, name="type-edit"),

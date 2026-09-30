@@ -1,0 +1,13 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Mail settings{% endblock %}
+{% block content %}
+<p><a href="{% url 'directory_admin:index' %}">&larr; Admin home</a></p>
+<h1>Mail settings</h1>
+<p class="muted">Outgoing email for claim verification codes and notices.
+The password is stored encrypted and is never shown again.</p>
+<form method="post">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit">Save</button>
+</form>
+{% endblock %}

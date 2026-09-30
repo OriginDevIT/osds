@@ -84,3 +84,22 @@ def set_secret(key: str, value: str, *, tenant: "Tenant | None" = None) -> "Secr
         defaults={"ciphertext": encrypt(value)},
     )
     return obj
+
+
+def has_secret(key: str, *, tenant: "Tenant") -> bool:
+    """Whether ``tenant`` has its own ``key`` stored. Never decrypts."""
+    from tenants.models import Secret
+
+    return Secret.objects.filter(
+        scope=Secret.Scope.TENANT, tenant=tenant, key=key
+    ).exists()
+
+
+def delete_secret(key: str, *, tenant: "Tenant") -> bool:
+    """Remove ``tenant``'s own ``key``. Returns whether a row was deleted."""
+    from tenants.models import Secret
+
+    deleted, _ = Secret.objects.filter(
+        scope=Secret.Scope.TENANT, tenant=tenant, key=key
+    ).delete()
+    return bool(deleted)

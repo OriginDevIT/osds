@@ -26,6 +26,7 @@ from directory.models import (
     ListingType,
 )
 from osds.tenancy import tenant_context
+from osds.tests.mail_stub import email_send_stub
 from tenants.models import InstallSetup, Operator, Tenant
 from tenants.services import InvalidTenantSettings, update_tenant_settings
 
@@ -51,6 +52,7 @@ def _domain_email_enabled() -> dict:
 
 class _Base(TransactionTestCase):
     def setUp(self):
+        self.mail = self.enterContext(email_send_stub())
         self.tenant = Tenant.objects.create(
             slug="acme", name="Acme", settings=_domain_email_enabled(),
         )
@@ -740,6 +742,7 @@ class ClaimVerificationGuardModelTests(_Base):
 @override_settings(ALLOWED_HOSTS=["*"], OSDS_CONSOLE_HOST="console.test")
 class ClaimVerifyRouteTests(TestCase):
     def setUp(self):
+        self.enterContext(email_send_stub())
         InstallSetup.objects.create(token_hash="x" * 64, completed_at=timezone.now())
         self.tenant = Tenant.objects.create(
             slug="acme", name="Acme", primary_domain=HOST,
@@ -799,6 +802,7 @@ class ClaimVerifyPageTests(TransactionTestCase):
     (require_autocommit refuses a plain TestCase's wrapping transaction)."""
 
     def setUp(self):
+        self.mail = self.enterContext(email_send_stub())
         InstallSetup.objects.create(token_hash="x" * 64, completed_at=timezone.now())
         self.tenant = Tenant.objects.create(
             slug="acme", name="Acme", primary_domain=HOST,

@@ -12,6 +12,8 @@ from urllib.parse import urlsplit
 
 from django.utils.crypto import salted_hmac
 
+from osds.adapters import email_available
+
 # Social, marketplace and free-hosted-site registrable domains (spec §9.6).
 # Matched on equality or subdomain, never tenant-configurable. Not
 # exhaustive -- a sample the tests pin, extended as gaps are found.
@@ -110,12 +112,43 @@ def domain_email_eligible(listing, email: str) -> bool:
     if not domain or normalize_host(domain) != host:
         return False
 
+    return not _pair_locked(listing, email)
+
+
+def _pair_locked(listing, email: str) -> bool:
     from directory.models import ClaimVerificationGuard
 
     guard = ClaimVerificationGuard.objects.filter(
         listing=listing, claimant__email=email
     ).first()
-    return not (guard and guard.verification_locked_at)
+    return bool(guard and guard.verification_locked_at)
+
+
+def domain_email_ineligibility(tenant, listing, email: str) -> "str | None":
+    """Why ``email`` may not use ``domain_email`` on ``listing``, or ``None``
+    if it may (decisions.md §4.4, §4.5). In presentation order:
+
+    * ``no_website`` -- no website, or a platform host;
+    * ``locked`` -- the (listing, email) pair is locked;
+    * ``mail_unavailable`` -- ``email.send`` is not configured for the
+      tenant, so no address could ever receive a code. Ranked above the
+      address because fixing the address cannot help once mail is down;
+    * ``address_mismatch`` -- the address is not at the website's host.
+
+    Submit and ``claim.start_verification`` both flip to ``manual`` on any
+    non-``None`` result; only the submitted page tells the reasons apart.
+    """
+    host = domain_email_host(listing)
+    if host is None:
+        return "no_website"
+    if _pair_locked(listing, email):
+        return "locked"
+    if not email_available(tenant):
+        return "mail_unavailable"
+    _, _, domain = (email or "").rpartition("@")
+    if not domain or normalize_host(domain) != host:
+        return "address_mismatch"
+    return None
 
 
 def generate_code() -> str:

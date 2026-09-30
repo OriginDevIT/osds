@@ -18,7 +18,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from directory import services
-from directory.claims import domain_email_host
+from directory.claims import domain_email_host, domain_email_ineligibility
 from directory.forms import ClaimForm, ClaimVerifyForm
 from directory.masking import mask_email, mask_phone_e164
 from directory.models import Claim, ClaimVerificationGuard, Listing
@@ -34,26 +34,36 @@ def _fetch_guard(claim) -> "ClaimVerificationGuard | None":
     ).first()
 
 
-def _ineligible_reason(claim) -> str:
+def _ineligible_reason(tenant, claim) -> str:
     """Why domain_email isn't available for ``claim`` -- a full sentence,
-    not a fragment (decisions.md §4.4). Three cases: no eligible website, a
-    specific address that doesn't match one, or -- checked first, since it
-    applies regardless of whether the address matches -- a locked
-    (listing, claimant) pair (spec §9.6: "domain_email is unavailable to
-    that address on that listing" once locked)."""
-    host = domain_email_host(claim.listing)
-    if host is None:
+    not a fragment (decisions.md §4.4, §4.5). Recomputed on each view from
+    ``claims.domain_email_ineligibility``, so its precedence is the one
+    submit used: no eligible website, a locked pair, email verification
+    unavailable, then an address not at the website's host. If the state has
+    since cleared -- mail configured between submit and this page -- the
+    last sentence says only what is true: the claim is in manual review."""
+    reason = domain_email_ineligibility(
+        tenant, claim.listing, claim.claimant.email
+    )
+    if reason == "no_website":
         return (
             "This listing has no eligible website on file, so domain "
             "email verification wasn't available."
         )
-    guard = _fetch_guard(claim)
-    if guard is not None and guard.verification_locked_at is not None:
+    if reason == "locked":
         return (
             "Too many incorrect codes were entered for this address, so "
             "this claim will be reviewed manually."
         )
-    return f"The claiming email address must be at @{host}."
+    if reason == "mail_unavailable":
+        return (
+            "Email verification is unavailable for this directory right "
+            "now, so this claim will be reviewed manually."
+        )
+    if reason == "address_mismatch":
+        host = domain_email_host(claim.listing)
+        return f"The claiming email address must be at @{host}."
+    return "Domain email verification wasn't used, so this claim will be reviewed manually."
 
 
 @require_http_methods(["GET", "POST"])
@@ -127,7 +137,7 @@ def claim_submitted(request, public_id):
     context = {"claim": claim}
     requested_domain_email = request.GET.get("requested") == "domain_email"
     if requested_domain_email and claim.method == Claim.Method.MANUAL:
-        context["ineligible_reason"] = _ineligible_reason(claim)
+        context["ineligible_reason"] = _ineligible_reason(request.tenant, claim)
     return render(request, "public/claim_submitted.html", context)
 
 

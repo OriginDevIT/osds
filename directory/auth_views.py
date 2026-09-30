@@ -72,6 +72,7 @@ def index(request):
         tenant=tenant,
         status=StaffMembership.Status.PENDING,
     ).exists()
+    request.membership = membership  # the banner tag reads it (decisions.md §4.5)
     return render(
         request,
         "directory/admin/index.html",
