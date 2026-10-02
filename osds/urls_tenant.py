@@ -11,7 +11,7 @@ from django.http import HttpResponse
 from django.urls import include, path, re_path
 from django.views.generic.base import RedirectView
 
-from directory import claim_views, public_views
+from directory import claim_views, owner_edit_views, owner_views, public_views
 
 handler404 = "directory.public_views.not_found"
 
@@ -39,6 +39,34 @@ urlpatterns = [
     # Local media store. Matched ahead of the public catch-all; "media" is a
     # reserved slug so no listing or category can shadow it.
     path("media/<str:public_id>", public_views.media_asset, name="media-asset"),
+    # Owner sign-in and dashboard (decisions.md §4.9). "owner" is a reserved
+    # slug (directory.services.RESERVED_SLUGS), so nothing public shadows it.
+    path("owner/", owner_views.dashboard, name="owner-dashboard"),
+    path("owner/signin/", owner_views.signin_request, name="owner-signin"),
+    path("owner/signin/sent/", owner_views.signin_sent, name="owner-signin-sent"),
+    path(
+        "owner/signin/<str:token>/",
+        owner_views.signin_confirm,
+        name="owner-signin-confirm",
+    ),
+    path("owner/signout/", owner_views.signout, name="owner-signout"),
+    path(
+        "owner/listings/<str:public_id>/",
+        owner_edit_views.listing_manage,
+        name="owner-listing",
+    ),
+    path(
+        "owner/listings/<str:public_id>/media/add/",
+        owner_edit_views.media_add,
+        name="owner-media-add",
+    ),
+    path(
+        "owner/listings/<str:public_id>/media/<str:asset_public_id>/remove/",
+        owner_edit_views.media_remove,
+        name="owner-media-remove",
+    ),
+    # A placeholder until lead capture ships: 404, and nothing links to it.
+    path("owner/leads/", owner_edit_views.leads, name="owner-leads"),
     # Claim submission (spec §9). "claim" is a reserved slug (directory.services
     # .RESERVED_SLUGS) so no listing or category can shadow this.
     path("claim/<str:public_id>/", claim_views.claim_form, name="public-claim"),
