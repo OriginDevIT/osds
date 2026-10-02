@@ -15,7 +15,7 @@ from django.utils import timezone
 
 from audit.models import CommandLog, OutboundMessage
 from audit.worker.mail_drain import mail_drain_once
-from directory import claims
+from directory import claims, services
 from directory.forms import ClaimForm
 from directory.models import (
     ClaimVerificationGuard,
@@ -25,6 +25,7 @@ from directory.models import (
 )
 from directory.tests.test_claim_verification import (
     DANA,
+    GRANTED_ALL,
     HOST,
     _any_wrong_code,
     _Base as VerificationBase,
@@ -265,20 +266,46 @@ class SubmittedPageCopyTests(TransactionTestCase):
 
     def test_no_website_copy_outranks_mail_unavailable(self):
         # The form never offers domain_email for a website-less listing, so
-        # the website goes away after submit; the page recomputes.
+        # this goes through the service, as an import-emptied website would.
         self.mail._available = False
-        url = self._submit().url
         self.listing.website = ""
         self.listing.save(update_fields=["website"])
-        r = self.client.get(url, HTTP_HOST=HOST)
+        with tenant_context(self.tenant):
+            claim = services.submit_claim(
+                self.tenant, listing=self.listing, method="domain_email",
+                claimant=dict(DANA), consent=GRANTED_ALL, ip="203.0.113.44",
+            )
+        self.assertEqual(claim.review_reason, "no_website")
+        r = self.client.get(f"/claim/{claim.public_id}/submitted/", HTTP_HOST=HOST)
         self.assertContains(r, "no eligible website")
         self.assertNotContains(r, MAIL_DOWN)
 
-    def test_mail_configured_after_submit_gets_the_neutral_fallback(self):
+    def test_the_page_reads_the_stored_reason_not_the_current_state(self):
+        # Mail configured after submit: the claim still went to review because
+        # mail was down, and the page says so.
         self.mail._available = False
         url = self._submit().url
         self.mail._available = True
         page = self.client.get(url, HTTP_HOST=HOST)
-        self.assertContains(page, "will be reviewed manually")
-        self.assertNotContains(page, MAIL_DOWN)
+        self.assertContains(page, MAIL_DOWN)
         self.assertNotContains(page, "must be at @")
+
+    def test_a_website_removed_after_submit_does_not_change_the_copy(self):
+        self.mail._available = False
+        url = self._submit().url
+        self.listing.website = ""
+        self.listing.save(update_fields=["website"])
+        page = self.client.get(url, HTTP_HOST=HOST)
+        self.assertContains(page, MAIL_DOWN)
+        self.assertNotContains(page, "no eligible website")
+
+    def test_a_claim_that_asked_for_manual_shows_no_reason(self):
+        data = {
+            "name": DANA["name"], "email": DANA["email"], "phone_e164": "",
+            "role_claimed": "owner", "method": "manual",
+            "marketing_email": "on", "marketing_sms": "", "automated_calls": "",
+        }
+        r = self.client.post(f"/claim/{self.listing.public_id}/", data, HTTP_HOST=HOST)
+        page = self.client.get(r.url, HTTP_HOST=HOST)
+        self.assertNotContains(page, MAIL_DOWN)
+        self.assertNotContains(page, "wasn't")

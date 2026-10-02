@@ -1,0 +1,84 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Claim {{ claim.public_id }}{% endblock %}
+{% block content %}
+<p><a href="{% url 'directory_admin:claims-queue' %}">&larr; Claims review</a></p>
+<h1>Claim on {{ listing.name }}</h1>
+<table>
+  <tr><th>Reference</th><td>{{ claim.public_id }}</td></tr>
+  <tr><th>Status</th><td>{{ claim.get_status_display }}</td></tr>
+  <tr><th>Method</th><td>{{ claim.get_method_display }}{% if claim.requested_method and claim.requested_method != claim.method %} (requested {{ claim.requested_method }}){% endif %}</td></tr>
+  <tr><th>Why it is in review</th><td>{{ claim.review_reason|default:"—" }}</td></tr>
+  <tr><th>Email verified</th><td>{% if claim.verified_at %}{{ claim.verified_at }}{% else %}No{% endif %}</td></tr>
+  <tr><th>Wrong code entries</th><td>{{ claim.attempts }}</td></tr>
+  <tr><th>Listing status</th><td>{{ listing.get_status_display }}</td></tr>
+  <tr><th>Sitting owner</th><td>{% if owner %}{% if can_decide %}{{ owner.email }}{% else %}an owner is on record{% endif %}{% else %}None{% endif %}</td></tr>
+  <tr><th>Claimant</th><td>{{ claimant.name|default:"—" }} ({{ claim.role_claimed }})</td></tr>
+  <tr><th>Claimant email</th><td>{{ claimant_email }}</td></tr>
+  <tr><th>Claimant phone</th><td>{{ claimant_phone|default:"—" }}</td></tr>
+  {% if claim.rejection_reason %}<tr><th>Rejection reason</th><td>{{ claim.rejection_reason }}</td></tr>{% endif %}
+  {% if claim.verification_notes %}<tr><th>Verification notes</th><td>{{ claim.verification_notes }}</td></tr>{% endif %}
+</table>
+{% if not can_decide %}<p class="muted">Contact details are masked and consent records hidden at your role.</p>{% endif %}
+
+{% if guard %}
+<h2>Verification and rejection counters</h2>
+<table>
+  <tr><th>Cooldowns</th><td>{{ guard.cooldowns }}</td></tr>
+  <tr><th>Locked</th><td>{% if guard.verification_locked_at %}{{ guard.verification_locked_at }}{% else %}No{% endif %}</td></tr>
+  <tr><th>Rejections</th><td>{{ guard.rejections }}</td></tr>
+  <tr><th>Blocked from claiming</th><td>{% if guard.claim_blocked_at %}{{ guard.claim_blocked_at }}{% else %}No{% endif %}</td></tr>
+</table>
+{% endif %}
+
+{% if consents %}
+<h2>Consent</h2>
+<table>
+  <thead><tr><th>Channel</th><th>Granted</th><th>When</th><th>IP</th><th>Wording</th></tr></thead>
+  <tbody>
+  {% for c in consents %}
+    <tr><td>{{ c.channel }}</td><td>{{ c.granted|yesno:"yes,no" }}</td><td>{{ c.granted_at|default_if_none:"—" }}</td><td>{{ c.ip|default_if_none:"—" }}</td><td>{{ c.text_version }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if is_open and can_decide %}
+<h2>Approve</h2>
+<form method="post" action="{% url 'directory_admin:claim-approve' public_id=claim.public_id %}">
+  {% csrf_token %}
+  <label>How was this verified?
+    <select name="method_used" required>
+      <option value="">Choose…</option>
+      {% for value, label in manual_methods %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Notes (required)
+    <textarea name="notes" rows="4" required></textarea>
+  </label>
+  <label>Evidence reference (optional)
+    <input type="text" name="evidence_ref" maxlength="500">
+  </label>
+  {% if transfer_needed %}
+  <label><input type="checkbox" name="confirm_transfer" value="1" required>
+    This listing already has an owner. Approving transfers ownership to this claimant.</label>
+  {% endif %}
+  <button type="submit">Approve claim</button>
+</form>
+
+<h2>Reject</h2>
+<form method="post" action="{% url 'directory_admin:claim-reject' public_id=claim.public_id %}">
+  {% csrf_token %}
+  <label>Reason (required; emailed to the claimant)
+    <textarea name="reason" rows="3" required></textarea>
+  </label>
+  <button type="submit">Reject claim</button>
+</form>
+{% elif is_open %}
+<p class="muted">Approving and rejecting claims needs the editor role.</p>
+{% endif %}
+
+<h2>History</h2>
+<ul>
+  {% for e in timeline %}<li>{{ e.occurred_at }} &mdash; {{ e.type }}</li>{% empty %}<li class="muted">No events.</li>{% endfor %}
+</ul>
+{% endblock %}

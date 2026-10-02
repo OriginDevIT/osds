@@ -1,0 +1,47 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}{{ item.get_item_type_display }}{% endblock %}
+{% block content %}
+<p><a href="{% url 'directory_admin:claims-queue' %}?tab=locks">&larr; Claims review</a></p>
+<h1>{{ item.get_item_type_display }}</h1>
+<table>
+  <tr><th>Listing</th><td>{{ item.listing.name }}</td></tr>
+  <tr><th>Address</th><td>{{ claimant_email }}</td></tr>
+  <tr><th>Opened</th><td>{{ item.created_at }}</td></tr>
+  <tr><th>Status</th><td>{{ item.get_status_display }}{% if item.decision %} &mdash; {{ item.decision }}{% endif %}</td></tr>
+  {% if item.rationale %}<tr><th>Rationale</th><td>{{ item.rationale }}</td></tr>{% endif %}
+  {% if item.claim %}<tr><th>Claim</th><td><a href="{% url 'directory_admin:claim-detail' public_id=item.claim.public_id %}">{{ item.claim.public_id }}</a></td></tr>{% endif %}
+</table>
+
+{% if guard %}
+<h2>Counters</h2>
+<table>
+  <tr><th>Cooldowns</th><td>{{ guard.cooldowns }}</td></tr>
+  <tr><th>Locked</th><td>{% if guard.verification_locked_at %}{{ guard.verification_locked_at }}{% else %}No{% endif %}</td></tr>
+  <tr><th>Rejections</th><td>{{ guard.rejections }}</td></tr>
+  <tr><th>Blocked</th><td>{% if guard.claim_blocked_at %}{{ guard.claim_blocked_at }}{% else %}No{% endif %}</td></tr>
+</table>
+<p class="muted">The two counters are independent: clearing one never clears the other.</p>
+{% endif %}
+
+{% if is_open %}
+  {% if item.item_type == "verification_lock" %}
+  <h2>Unlock</h2>
+  <p class="muted">Lets this address use email verification on this listing again and resets its wrong-code counters. Rejections and any block are untouched.</p>
+  <form method="post" action="{% url 'directory_admin:moderation-unlock' public_id=item.public_id %}">
+  {% elif item.item_type == "claim_block" %}
+  <h2>Unblock</h2>
+  <p class="muted">Lets this address submit claims for this listing again. The rejection count stays, so one more rejection blocks it again.</p>
+  <form method="post" action="{% url 'directory_admin:moderation-unblock' public_id=item.public_id %}">
+  {% endif %}
+  {% if item.item_type != "claim_dispute" %}
+    {% csrf_token %}
+    <label>Rationale (required)
+      <textarea name="rationale" rows="3" required></textarea>
+    </label>
+    <button type="submit">Confirm</button>
+  </form>
+  {% else %}
+  <p>A dispute is decided on its claim: <a href="{% url 'directory_admin:claim-detail' public_id=item.claim.public_id %}">open the claim</a>.</p>
+  {% endif %}
+{% endif %}
+{% endblock %}

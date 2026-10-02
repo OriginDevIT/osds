@@ -216,8 +216,9 @@ whether or not an individual action is approved.
   go under temp and are deleted when done.
 - Never run `docker compose down -v`, `docker volume rm`, `DROP DATABASE`, or
   anything else that deletes data outside a scratch stack created in this task.
-- Run tests only against the `DATABASE_URL` already in the environment. Do not
-  change environment variables.
+- Run manage.py against the database the prompt names, set as a per-command
+  prefix; with none named, use the `DATABASE_URL` already in the environment.
+  Never export or persist environment changes.
 - Do not edit `docs/spec/`, `.github/`, `agent-operations.md` or
   `requirements.txt`.
 - If a write or command is refused, or the permission check returns no verdict

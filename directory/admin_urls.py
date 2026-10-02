@@ -2,6 +2,7 @@ from django.urls import path
 
 from directory import admin_views as views
 from directory import auth_views
+from directory import claim_admin_views as claim_views
 from tenants import mail_views
 
 app_name = "directory_admin"
@@ -10,6 +11,34 @@ urlpatterns = [
     path("", auth_views.index, name="index"),
     path("login/", auth_views.login_view, name="login"),
     path("logout/", auth_views.logout_view, name="logout"),
+    # claims review (PR 4a)
+    path("claims/", claim_views.claims_queue, name="claims-queue"),
+    path("claims/<str:public_id>/", claim_views.claim_detail, name="claim-detail"),
+    path(
+        "claims/<str:public_id>/approve/",
+        claim_views.claim_approve,
+        name="claim-approve",
+    ),
+    path(
+        "claims/<str:public_id>/reject/",
+        claim_views.claim_reject,
+        name="claim-reject",
+    ),
+    path(
+        "moderation/<str:public_id>/",
+        claim_views.moderation_detail,
+        name="moderation-detail",
+    ),
+    path(
+        "moderation/<str:public_id>/unlock/",
+        claim_views.moderation_unlock,
+        name="moderation-unlock",
+    ),
+    path(
+        "moderation/<str:public_id>/unblock/",
+        claim_views.moderation_unblock,
+        name="moderation-unblock",
+    ),
     path("settings/mail/", mail_views.mail_settings, name="mail-settings"),
     path("listing-types/", views.listing_type_list, name="type-list"),
     path("listing-types/new/", views.listing_type_create, name="type-create"),

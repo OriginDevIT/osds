@@ -2,9 +2,9 @@
 §9.6). Served under ``/claim/<public_id>/`` on a tenant's own domain, ahead
 of the public-site catch-all (``osds/urls_tenant.py``).
 
-Approval and anything writing ``Listing.status`` or ``Listing.owner`` are a
-later PR -- these views only ever collect the submission, run domain_email
-verification, and hand off to ``directory.services``.
+Approval and anything writing ``Listing.status`` or ``Listing.owner`` live in
+``directory.claim_review`` -- these views only ever collect the submission,
+run domain_email verification, and hand off to ``directory.services``.
 """
 
 from __future__ import annotations
@@ -13,12 +13,11 @@ from datetime import timedelta
 
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect, render
-from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from directory import services
-from directory.claims import domain_email_host, domain_email_ineligibility
+from directory.claims import domain_email_host
 from directory.forms import ClaimForm, ClaimVerifyForm
 from directory.masking import mask_email, mask_phone_e164
 from directory.models import Claim, ClaimVerificationGuard, Listing
@@ -34,17 +33,17 @@ def _fetch_guard(claim) -> "ClaimVerificationGuard | None":
     ).first()
 
 
-def _ineligible_reason(tenant, claim) -> str:
-    """Why domain_email isn't available for ``claim`` -- a full sentence,
-    not a fragment (decisions.md §4.4, §4.5). Recomputed on each view from
-    ``claims.domain_email_ineligibility``, so its precedence is the one
-    submit used: no eligible website, a locked pair, email verification
-    unavailable, then an address not at the website's host. If the state has
-    since cleared -- mail configured between submit and this page -- the
-    last sentence says only what is true: the claim is in manual review."""
-    reason = domain_email_ineligibility(
-        tenant, claim.listing, claim.claimant.email
-    )
+def _ineligible_reason(claim) -> str:
+    """Why domain_email wasn't used for ``claim`` -- a full sentence, not a
+    fragment (decisions.md §4.4, §4.6). Read from the ``review_reason`` stored
+    when the claim entered review, not recomputed: the page tells the claimant
+    what happened to *this* claim, however the listing or the mail
+    configuration has changed since. The stored reason is the one
+    ``claims.domain_email_ineligibility`` produced at submit, so its
+    precedence is the submit-time one: no eligible website, a locked pair,
+    email verification unavailable, then an address not at the website's
+    host."""
+    reason = claim.review_reason
     if reason == "no_website":
         return (
             "This listing has no eligible website on file, so domain "
@@ -62,7 +61,8 @@ def _ineligible_reason(tenant, claim) -> str:
         )
     if reason == "address_mismatch":
         host = domain_email_host(claim.listing)
-        return f"The claiming email address must be at @{host}."
+        if host:
+            return f"The claiming email address must be at @{host}."
     return "Domain email verification wasn't used, so this claim will be reviewed manually."
 
 
@@ -105,10 +105,7 @@ def claim_form(request, public_id):
                 # came back manual -- goes to submitted.
                 if claim.method == Claim.Method.DOMAIN_EMAIL:
                     return redirect("public-claim-verify", public_id=claim.public_id)
-                url = reverse("public-claim-submitted", args=[claim.public_id])
-                if requested_method == Claim.Method.DOMAIN_EMAIL:
-                    url = f"{url}?requested=domain_email"
-                return redirect(url)
+                return redirect("public-claim-submitted", public_id=claim.public_id)
     else:
         form = ClaimForm(
             listing=listing,
@@ -135,9 +132,11 @@ def claim_form(request, public_id):
 def claim_submitted(request, public_id):
     claim = get_object_or_404(Claim.objects, public_id=public_id)
     context = {"claim": claim}
-    requested_domain_email = request.GET.get("requested") == "domain_email"
-    if requested_domain_email and claim.method == Claim.Method.MANUAL:
-        context["ineligible_reason"] = _ineligible_reason(request.tenant, claim)
+    if (
+        claim.requested_method == Claim.Method.DOMAIN_EMAIL
+        and claim.method == Claim.Method.MANUAL
+    ):
+        context["ineligible_reason"] = _ineligible_reason(claim)
     return render(request, "public/claim_submitted.html", context)
 
 
@@ -146,7 +145,7 @@ def _verify_reason(claim, guard, now) -> "str | None":
     §4.4 ruling 8), read-only, so a GET reflects the claim's current state
     without needing a failed POST first. ``None`` means verification is
     open: the code form applies."""
-    if claim.status != Claim.Status.PENDING_VERIFICATION:
+    if claim.status not in (Claim.Status.PENDING_VERIFICATION, Claim.Status.DISPUTED):
         return "status"
     if claim.method != Claim.Method.DOMAIN_EMAIL:
         return "method"

@@ -61,6 +61,10 @@ def claim_id() -> str:
     return _prefixed("claim_")
 
 
+def mod_id() -> str:
+    return _prefixed("mod_")
+
+
 def lead_id() -> str:
     return _prefixed("lead_")
 

@@ -15,6 +15,7 @@ from django.urls import reverse
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
+from directory import claim_review
 from tenants.login import OperatorAuthenticationForm, safe_redirect_target
 from tenants.models import StaffMembership
 
@@ -73,8 +74,9 @@ def index(request):
         status=StaffMembership.Status.PENDING,
     ).exists()
     request.membership = membership  # the banner tag reads it (decisions.md §4.5)
-    return render(
-        request,
-        "directory/admin/index.html",
-        {"tenant": tenant, "membership": membership, "pending": pending},
-    )
+    context = {"tenant": tenant, "membership": membership, "pending": pending}
+    if membership is not None and membership.role >= claim_review.QUEUE_ROLE:
+        from directory import claim_admin_views
+
+        context["claims_open"] = claim_admin_views.open_count()
+    return render(request, "directory/admin/index.html", context)
