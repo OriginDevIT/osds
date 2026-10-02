@@ -32,6 +32,7 @@ from datetime import timedelta
 from django.db.models import Exists, OuterRef
 
 from audit.models import (
+    AccessLog,
     CommandLog,
     OutboundMessage,
     OutboxDelivery,
@@ -122,4 +123,20 @@ def prune_rate_limit_counters(*, now) -> TickResult:
         RateLimitCounter.all_tenants.filter(window_start__lt=now - RATE_LIMIT_KEEP)
     )
     done, _ = RateLimitCounter.all_tenants.filter(id__in=ids).delete()
+    return TickResult(done=done, more=len(ids) == RETENTION_CHUNK)
+
+
+# Spec §11.2: the access log is kept two years, in its own store.
+ACCESS_LOG_KEEP = timedelta(days=730)
+
+
+def prune_access_log(*, now) -> TickResult:
+    """Delete access-log rows older than two years. The first writer is the
+    admin lead views (decisions.md §4.10), so the retention rule lands with it.
+    Strictly older than the window; bounded and idempotent like the sweeps
+    above."""
+    ids = _first_ids(
+        AccessLog.all_tenants.filter(occurred_at__lt=now - ACCESS_LOG_KEEP)
+    )
+    done, _ = AccessLog.all_tenants.filter(id__in=ids).delete()
     return TickResult(done=done, more=len(ids) == RETENTION_CHUNK)

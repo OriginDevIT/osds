@@ -502,6 +502,34 @@ class RollbackGuardTests(_Base):
         self.assertEqual(self._listings()["keep"].locality, "New")
         self.assertEqual(self._events("import.rolled_back", after=high), [])
 
+    def test_refused_when_a_created_listing_carries_a_lead(self):
+        # A lead's consent is evidence (spec §9.0), and Lead.listing and
+        # Consent.lead cascade: removing the listing would delete both.
+        from directory.models import Lead
+
+        body = b"name,slug,city\nKeep,keep,New\nFresh,fresh,Berlin\n"
+        self._existing("keep", name="Keep", locality="Old")
+        self._batch(body, mapping=UPD_MAP)
+        self._drain_imports()
+        batch = ImportBatch.all_tenants.get()
+
+        fresh = Listing.all_tenants.get(slug="fresh")
+        Lead.all_tenants.create(
+            tenant=self.tenant, listing=fresh, kind="contact_form", name="P",
+            email="p@example.test", message="Please call me back about a quote.",
+        )
+        high = self._event_high()
+
+        with self.assertRaises(services.RollbackRefused) as cm:
+            self._rollback(batch)
+
+        self.assertEqual(cm.exception.reason, "created_listing_has_leads")
+        self.assertIn("Fresh", cm.exception.message)
+        self.assertIn("consent", cm.exception.message)
+        self.assertIn("fresh", self._listings())
+        self.assertEqual(self._listings()["keep"].locality, "New")
+        self.assertEqual(self._events("import.rolled_back", after=high), [])
+
     def test_second_rollback_is_refused(self):
         batch = self._one_update_batch()
         high = self._event_high()

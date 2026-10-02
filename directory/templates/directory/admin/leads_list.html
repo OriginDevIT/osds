@@ -1,0 +1,33 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Leads{% endblock %}
+{% block content %}
+<p><a href="{% url 'directory_admin:index' %}">&larr; Admin home</a></p>
+<h1>Leads</h1>
+<p>
+  <a href="?tab=inbox">{% if tab == "inbox" %}<strong>{% endif %}Inbox ({{ counts.inbox }}){% if tab == "inbox" %}</strong>{% endif %}</a> &middot;
+  <a href="?tab=spam">{% if tab == "spam" %}<strong>{% endif %}Spam ({{ counts.spam }}){% if tab == "spam" %}</strong>{% endif %}</a>
+</p>
+<table>
+  <thead><tr><th>Received</th><th>Listing</th><th>From</th><th>Owner</th><th></th></tr></thead>
+  <tbody>
+  {% for lead in page %}
+    <tr>
+      <td>{{ lead.created_at }}</td>
+      <td>{{ lead.listing.name }}</td>
+      <td>{{ lead.masked_email }}</td>
+      <td>{% if lead.listing.owner_id %}claimed{% else %}unclaimed{% endif %}</td>
+      <td><a href="{% url 'directory_admin:lead-detail' public_id=lead.public_id %}">Open</a></td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="5" class="muted">Nothing here.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% if page.has_other_pages %}
+  <p class="muted">
+    {% if page.has_previous %}<a href="?tab={{ tab }}&page={{ page.previous_page_number }}">&larr; Newer</a>{% endif %}
+    Page {{ page.number }} of {{ page.paginator.num_pages }}
+    {% if page.has_next %}<a href="?tab={{ tab }}&page={{ page.next_page_number }}">Older &rarr;</a>{% endif %}
+  </p>
+{% endif %}
+{% endblock %}

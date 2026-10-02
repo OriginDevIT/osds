@@ -123,12 +123,25 @@ def _validate_adapters(value) -> None:
                 )
 
 
+def _validate_leads(value) -> None:
+    """``{"enabled": bool}``. Lead forms are off until an admin turns them on
+    (decisions.md §4.10)."""
+    if not isinstance(value, dict):
+        raise InvalidTenantSettings("leads must be an object")
+    unknown = set(value) - {"enabled"}
+    if unknown:
+        raise InvalidTenantSettings(f"leads has unknown key(s): {sorted(unknown)!r}")
+    if "enabled" in value and not isinstance(value["enabled"], bool):
+        raise InvalidTenantSettings("leads.enabled must be true or false")
+
+
 # One validator per settings key that core enforces bounds on (spec §9.5).
 # A key with no validator is merged unchecked, as before.
 _SETTINGS_VALIDATORS = {
     "claim_verification": _validate_claim_verification,
     "smtp": _validate_smtp,
     "adapters": _validate_adapters,
+    "leads": _validate_leads,
 }
 
 

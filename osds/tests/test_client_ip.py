@@ -10,7 +10,7 @@ from __future__ import annotations
 from django.test import RequestFactory, SimpleTestCase, override_settings
 
 from osds import client_ip as mod
-from osds.client_ip import client_ip, ip_bucket, parse_networks
+from osds.client_ip import client_ip, ip_bucket, parse_networks, storable_ip
 
 PROXY = "10.0.0.5"
 TRUSTED = ("10.0.0.0/8", "fd00::/8")
@@ -181,3 +181,16 @@ class MisconfiguredProxyWarningTests(_Base):
     def test_silent_when_proxies_are_configured(self):
         with self.assertNoLogs(self.LOGGER, "WARNING"):
             client_ip(req(PROXY, xff="198.51.100.1"))
+
+
+class StorableIpTests(SimpleTestCase):
+    def test_a_real_address_is_kept(self):
+        self.assertEqual(storable_ip("198.51.100.7"), "198.51.100.7")
+        self.assertEqual(storable_ip("2001:db8::1"), "2001:db8::1")
+
+    def test_a_mapped_address_is_its_ipv4(self):
+        self.assertEqual(storable_ip("::ffff:198.51.100.7"), "198.51.100.7")
+
+    def test_junk_and_empty_are_none_so_a_record_never_fails_to_save(self):
+        for value in ("", None, "unix:", "not-an-ip", "999.1.1.1"):
+            self.assertIsNone(storable_ip(value), value)

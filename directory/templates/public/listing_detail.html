@@ -55,6 +55,10 @@
   </dl>
 {% endif %}
 
+{% if leads_enabled %}
+  <p><a href="{% url 'public-lead' listing.public_id %}" rel="nofollow">Send an inquiry</a></p>
+{% endif %}
+
 {% if listing.status == "unclaimed" %}
   <p><a href="{% url 'public-claim' listing.public_id %}" rel="nofollow">Claim this listing</a></p>
 {% elif listing.status == "claimed" %}

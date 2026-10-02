@@ -136,3 +136,11 @@ def ip_bucket(ip: str) -> str:
     if addr.version == 6:
         return str(ipaddress.ip_network(f"{addr}/64", strict=False).network_address)
     return str(addr)
+
+
+def storable_ip(value) -> "str | None":
+    """``value`` as an address safe for a ``GenericIPAddressField``, or
+    ``None``. ``client_ip`` can return an unparseable ``REMOTE_ADDR`` as-is; a
+    record must never fail to save, or store junk, because of it."""
+    addr = _parse(value or "")
+    return str(addr) if addr is not None else None

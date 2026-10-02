@@ -13,7 +13,13 @@ from django.views.generic.base import RedirectView
 
 from billing import inbound as billing_inbound
 from billing import owner_views as billing_owner_views
-from directory import claim_views, owner_edit_views, owner_views, public_views
+from directory import (
+    claim_views,
+    lead_views,
+    owner_edit_views,
+    owner_views,
+    public_views,
+)
 
 handler404 = "directory.public_views.not_found"
 
@@ -95,7 +101,7 @@ urlpatterns = [
         billing_inbound.adapter_inbound,
         name="adapter-inbound",
     ),
-    # A placeholder until lead capture ships: 404, and nothing links to it.
+    # The owner's inquiries (decisions.md §4.10), and nothing links to it.
     path("owner/leads/", owner_edit_views.leads, name="owner-leads"),
     # Claim submission (spec §9). "claim" is a reserved slug (directory.services
     # .RESERVED_SLUGS) so no listing or category can shadow this.
@@ -115,6 +121,9 @@ urlpatterns = [
         claim_views.claim_verify_resend,
         name="public-claim-resend",
     ),
+    # Lead capture (spec §3.3). "lead" is a reserved slug.
+    path("lead/<str:public_id>/", lead_views.lead_form, name="public-lead"),
+    path("lead/<str:public_id>/sent/", lead_views.lead_sent, name="public-lead-sent"),
     # robots.txt and the sitemap. "sitemap.xml" / "sitemaps" are reserved
     # slugs; all three sit ahead of the catch-all.
     path("robots.txt", public_views.robots_txt, name="robots-txt"),

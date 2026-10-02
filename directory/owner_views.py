@@ -21,6 +21,7 @@ from directory import owner_auth
 from directory.claim_views import _limit_message, _limited
 from directory.models import Listing
 from directory.owner_auth import owner_required
+from directory.owner_edit_views import owned_leads
 from osds.client_ip import client_ip as _client_ip
 
 
@@ -99,7 +100,11 @@ def _owned(request):
 @never_cache
 @owner_required
 def dashboard(request):
-    return render(request, "owner/dashboard.html", {"listings": _owned(request)})
+    return render(
+        request,
+        "owner/dashboard.html",
+        {"listings": _owned(request), "lead_count": owned_leads(request.owner).count()},
+    )
 
 
 @owner_required
