@@ -20,6 +20,10 @@ class Tier(models.Model):
     rank; rank 0 is the fallback. A tenant may define no rank-0 tier, which
     changes downgrade behaviour (spec §6.4)."""
 
+    class Interval(models.TextChoices):
+        MONTH = "month", "Monthly"
+        YEAR = "year", "Yearly"
+
     tenant = models.ForeignKey(
         "tenants.Tenant", on_delete=models.CASCADE, related_name="tiers"
     )
@@ -35,6 +39,11 @@ class Tier(models.Model):
     # seam is built once. Integer minor units plus an ISO 4217 code.
     price_minor = models.PositiveIntegerField(null=True, blank=True)
     currency = models.CharField(max_length=3, blank=True)
+    # How often a purchasable tier bills (decisions.md §4.11). Fixed terms are
+    # tied to slot pools and arrive with them.
+    interval = models.CharField(max_length=5, choices=Interval.choices, blank=True)
+    # A card-up-front trial (spec §6.7); null means none.
+    trial_days = models.PositiveSmallIntegerField(null=True, blank=True)
     perks = models.JSONField(default=dict, blank=True)
     badge_label = models.CharField(max_length=50, blank=True)
     created_at = models.DateTimeField(default=timezone.now, editable=False)
@@ -51,6 +60,21 @@ class Tier(models.Model):
             ),
             models.UniqueConstraint(
                 fields=["tenant", "rank"], name="uniq_tier_tenant_rank"
+            ),
+            # The fallback tier is the free one (spec §4.2).
+            models.CheckConstraint(
+                condition=~models.Q(rank=0, purchasable=True),
+                name="tier_rank0_not_purchasable",
+            ),
+            # A tier that can be bought says what it costs and how often.
+            models.CheckConstraint(
+                condition=models.Q(purchasable=False)
+                | (
+                    models.Q(price_minor__gt=0)
+                    & ~models.Q(currency="")
+                    & ~models.Q(interval="")
+                ),
+                name="tier_purchasable_has_price",
             ),
         ]
 
@@ -109,6 +133,18 @@ class Entitlement(models.Model):
     dunning_started_at = models.DateTimeField(null=True, blank=True)
     grace_ends_at = models.DateTimeField(null=True, blank=True)
     cancel_at_period_end = models.BooleanField(default=False)
+    # Dunning bookkeeping (spec §6.10 ``entitlement.dunning_started`` carries
+    # ``attempt``, ``failure_code`` and ``dunning_ends_at``).
+    dunning_ends_at = models.DateTimeField(null=True, blank=True)
+    failed_attempts = models.PositiveSmallIntegerField(default=0)
+    last_failure_code = models.CharField(max_length=100, blank=True)
+    canceled_at = models.DateTimeField(null=True, blank=True)
+    canceled_by = models.CharField(max_length=20, blank=True)  # owner|operator|system
+    # The T-10 renewal notice for a term entitlement is sent once a period.
+    renewal_notified_at = models.DateTimeField(null=True, blank=True)
+    # Set when expiry hid the listing because the tenant has no rank-0 tier
+    # (spec §6.4); a repurchase unhides it only if this is set.
+    hidden_by_expiry = models.BooleanField(default=False)
 
     comp_granted_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -134,7 +170,11 @@ class Entitlement(models.Model):
         db_table = "entitlements"
         indexes = [
             models.Index(fields=["tenant", "status"]),
-            models.Index(fields=["listing"]),
+        ]
+        constraints = [
+            # One entitlement per listing; history is the event log
+            # (decisions.md §4.11).
+            models.UniqueConstraint(fields=["listing"], name="uniq_entitlement_listing"),
         ]
 
     def __str__(self) -> str:

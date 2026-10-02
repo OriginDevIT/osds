@@ -27,6 +27,7 @@ def _challenge(request):
 urlpatterns = [
     path(".well-known/osds-challenge", _challenge, name="domain-challenge"),
     path("admin/", include("directory.admin_urls")),
+    path("admin/", include("billing.admin_urls")),
     # The wizard's completion screen tells the operator to sign in at
     # "<domain>/admin"; without this the greedy public catch-all below swallows
     # the slashless form and returns a 404 instead of the login redirect.

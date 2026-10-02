@@ -1,0 +1,38 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Entitlements{% endblock %}
+{% block content %}
+<p><a href="{% url 'directory_admin:index' %}">&larr; Admin home</a></p>
+<h1>Entitlements and comps</h1>
+<form method="get">
+  <label>Status
+    <select name="status" onchange="this.form.submit()">
+      <option value="">All</option>
+      {% for value, label in statuses %}<option value="{{ value }}"{% if value == status %} selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select>
+  </label>
+</form>
+<table>
+  <thead><tr><th>Listing</th><th>Tier</th><th>Status</th><th>Period ends</th><th></th></tr></thead>
+  <tbody>
+  {% for e in rows %}
+    <tr>
+      <td>{{ e.listing.name }}</td>
+      <td>{{ e.tier.name }}</td>
+      <td>{{ e.get_status_display }}</td>
+      <td>{{ e.current_period_end|default_if_none:"—" }}</td>
+      <td><a href="{% url 'billing_admin:entitlement-detail' public_id=e.public_id %}">Open</a></td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="5" class="muted">No entitlements.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>Grant a comp</h2>
+<p class="muted">A tier with no payment, with or without an expiry. The public page shows an ordinary badge; nothing indicates a comp.</p>
+<form method="post" action="{% url 'billing_admin:entitlement-grant' %}">
+  {% csrf_token %}
+  {{ grant_form.as_p }}
+  <button type="submit">Grant comp</button>
+</form>
+{% endblock %}
