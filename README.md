@@ -41,6 +41,16 @@ local disk at launch, the `osds-media` volume shared by app and worker.
 The app is plain HTTP by default (`OSDS_SECURE_COOKIES=false`). Put TLS in front
 of it and set `OSDS_SECURE_COOKIES=true` before you go public.
 
+### Behind a reverse proxy
+By default OSDS treats the connecting address as the client and ignores
+`X-Forwarded-For`, because a client can send any value. If you put a reverse
+proxy (Caddy, Traefik, nginx, a load balancer) in front of the app, set
+`OSDS_TRUSTED_PROXIES` to the proxy's address or network, for example
+`OSDS_TRUSTED_PROXIES=172.18.0.0/16`. Without it every visitor looks like the
+proxy, and the per-IP claim rate limits become one limit shared by everyone; the
+app logs a warning when it sees that shape. Docker Desktop does the same thing
+to a direct install: it shows every request as coming from the Docker gateway.
+
 ## Documentation
 - [Specification](docs/spec/events-and-adapters.md)
 - [Contributing](CONTRIBUTING.md)

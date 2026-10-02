@@ -33,7 +33,15 @@ from audit.command_log import (
 from audit.mail import enqueue
 from audit.models import CommandLog, OutboundMessage
 from audit.outbox import emit
-from directory import claim_review, claims, normalize, routing, suppression
+from audit.ratelimit import RateLimited
+from directory import (
+    claim_limits,
+    claim_review,
+    claims,
+    normalize,
+    routing,
+    suppression,
+)
 from directory.claim_review import expire_pending_code as _expire_pending_code
 from directory.claim_review import lock_guard as _lock_guard
 from directory.field_schema import (
@@ -1203,7 +1211,29 @@ def submit_claim(
         log_conclude(rejected, outcome="rejected", problem={"payload": str(exc)})
         raise SchemaError([str(exc)]) from exc
 
+    # Rate limit (spec §9.4, #210): after normalisation, because the account
+    # key is the normalised email, and before the received row, so a flood
+    # writes one ``blocked`` log row per window rather than one per request.
     actor = {"type": "visitor", "id": email}
+    verdict = claim_limits.check_submit(
+        tenant, ip=ip, email=email, now=timezone.now()
+    )
+    if not verdict.allowed:
+        if verdict.first_block:
+            blocked = log_received(
+                command="claim.submit",
+                tenant=tenant,
+                idempotency_key=None,
+                actor=actor,
+                trace_id=None,
+                origin="",
+                payload=payload,
+            )
+            log_conclude(
+                blocked, outcome="blocked", problem={"rate_limited": verdict.rule}
+            )
+        raise RateLimited(verdict)
+
     row = log_received(
         command="claim.submit",
         tenant=tenant,
@@ -1639,7 +1669,9 @@ def _apply_start_verification(
     return claim, "sent", event.event_id
 
 
-def start_claim_verification(tenant, *, claim: Claim) -> Claim:
+def start_claim_verification(
+    tenant, *, claim: Claim, ip: "str | None"
+) -> Claim:
     """The ``claim.start_verification`` command -- resend/restart. Actor is
     built from ``claim.claimant`` (decisions.md §4.4's "the actor... never
     an email"), never a parameter.
@@ -1655,6 +1687,24 @@ def start_claim_verification(tenant, *, claim: Claim) -> Claim:
     """
     require_autocommit()
     actor = {"type": "visitor", "id": claim.claimant.public_id}
+    verdict = claim_limits.check_resend(
+        tenant, ip=ip, email=claim.claimant.email, now=timezone.now()
+    )
+    if not verdict.allowed:
+        if verdict.first_block:
+            blocked = log_received(
+                command="claim.start_verification",
+                tenant=tenant,
+                idempotency_key=None,
+                actor=actor,
+                trace_id=None,
+                origin="",
+                payload={"claim_id": claim.public_id},
+            )
+            log_conclude(
+                blocked, outcome="blocked", problem={"rate_limited": verdict.rule}
+            )
+        raise RateLimited(verdict)
     row = log_received(
         command="claim.start_verification",
         tenant=tenant,
@@ -1794,12 +1844,30 @@ def _apply_verify_claim_code(
     return claim, False, event.event_id
 
 
-def verify_claim_code(tenant, *, claim: Claim, code: str) -> "tuple[Claim, bool]":
+def verify_claim_code(
+    tenant, *, claim: Claim, code: str, ip: "str | None"
+) -> "tuple[Claim, bool]":
     """The ``claim.verify`` command (spec §9.6, decisions.md §4.4). Payload
     is ``{"claim_id"}`` only -- never the entered code or its hash. Actor is
     built from ``claim.claimant``, never a parameter."""
     require_autocommit()
     actor = {"type": "visitor", "id": claim.claimant.public_id}
+    verdict = claim_limits.check_verify(tenant, ip=ip, now=timezone.now())
+    if not verdict.allowed:
+        if verdict.first_block:
+            blocked = log_received(
+                command="claim.verify",
+                tenant=tenant,
+                idempotency_key=None,
+                actor=actor,
+                trace_id=None,
+                origin="",
+                payload={"claim_id": claim.public_id},
+            )
+            log_conclude(
+                blocked, outcome="blocked", problem={"rate_limited": verdict.rule}
+            )
+        raise RateLimited(verdict)
     row = log_received(
         command="claim.verify",
         tenant=tenant,
