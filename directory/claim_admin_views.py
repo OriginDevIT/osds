@@ -12,7 +12,6 @@ authority.
 from __future__ import annotations
 
 from django.contrib import messages
-from django.db.models import Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
@@ -30,41 +29,10 @@ _QUEUE = tenant_admin_required(claim_review.QUEUE_ROLE)
 TABS = ("review", "disputes", "locks")
 
 
-def _review_claims():
-    """Claims waiting on a human: chosen or flipped to manual, or a verified
-    code that could not move ownership (a suspended listing)."""
-    return (
-        Claim.objects.filter(status=Claim.Status.PENDING_VERIFICATION)
-        .filter(Q(method=Claim.Method.MANUAL) | Q(verified_at__isnull=False))
-        .select_related("listing", "claimant")
-        .order_by("created_at")
-    )
-
-
-def _open_items(*item_types):
-    return (
-        ModerationItem.objects.filter(
-            status=ModerationItem.Status.OPEN, item_type__in=item_types
-        )
-        .select_related("listing", "claimant", "claim")
-        .order_by("created_at")
-    )
-
-
-def _disputes():
-    return _open_items(ModerationItem.ItemType.CLAIM_DISPUTE)
-
-
-def _locks():
-    return _open_items(
-        ModerationItem.ItemType.VERIFICATION_LOCK,
-        ModerationItem.ItemType.CLAIM_BLOCK,
-    )
-
-
-def open_count() -> int:
-    """Everything waiting on a human, for the admin home page."""
-    return _review_claims().count() + _disputes().count() + _locks().count()
+_review_claims = claim_review.review_claims
+_disputes = claim_review.dispute_items
+_locks = claim_review.lock_items
+open_count = claim_review.open_count
 
 
 @_QUEUE
