@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from osds.client_ip import parse_networks
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -54,6 +56,12 @@ OSDS_SECRET_KEY = os.environ['OSDS_SECRET_KEY']
 OSDS_SECURE_COOKIES = os.environ.get(
     'OSDS_SECURE_COOKIES', 'true'
 ).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+# Addresses or CIDRs of the reverse proxies allowed to tell us who the client
+# is through X-Forwarded-For (osds.client_ip, decisions.md §4.8). Empty -- the
+# default, and what a directly exposed install is -- means X-Forwarded-For is
+# never believed. Validated here so a typo stops the process at boot.
+OSDS_TRUSTED_PROXIES = parse_networks(os.environ.get('OSDS_TRUSTED_PROXIES', ''))
 
 # Listings per page on the public category-browse and search pages.
 OSDS_PUBLIC_PAGE_SIZE = 20

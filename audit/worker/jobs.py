@@ -25,6 +25,7 @@ from directory import jobs as directory_jobs
 
 REINDEX_EVERY = timedelta(seconds=30)
 RETENTION_EVERY = timedelta(hours=24)
+RATE_LIMIT_PRUNE_EVERY = timedelta(hours=1)
 
 
 def _heartbeat(out: IO[str], *, now) -> None:
@@ -60,5 +61,10 @@ def build_tick_registry(*, out: IO[str]) -> TickRegistry:
         "command_payload_retention",
         retention.null_command_payloads,
         every=RETENTION_EVERY,
+    )
+    registry.register(
+        "rate_limit_prune",
+        retention.prune_rate_limit_counters,
+        every=RATE_LIMIT_PRUNE_EVERY,
     )
     return registry

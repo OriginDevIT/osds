@@ -106,7 +106,7 @@ class _Base(TransactionTestCase):
 
     def verify(self, claim, code):
         with tenant_context(self.tenant):
-            return services.verify_claim_code(self.tenant, claim=claim, code=code)
+            return services.verify_claim_code(self.tenant, claim=claim, code=code, ip=None)
 
     def guard(self, claim):
         return ClaimVerificationGuard.all_tenants.get(
@@ -793,7 +793,7 @@ class VerifySuccessTests(_Base):
         claim = self.submit(method="domain_email")
         self.assertTrue(claim.code_hash)
         with tenant_context(self.tenant):
-            services.verify_claim_code(self.tenant, claim=claim, code="000000")  # no refusal
+            services.verify_claim_code(self.tenant, claim=claim, code="000000", ip=None)  # no refusal
 
     def test_a_suspended_listing_keeps_the_claim_open_with_verified_at(self):
         claim = self.submit(method="domain_email")

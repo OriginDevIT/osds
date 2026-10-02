@@ -16,15 +16,36 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
+from audit.ratelimit import RateLimited
 from directory import services
 from directory.claims import domain_email_host
 from directory.forms import ClaimForm, ClaimVerifyForm
 from directory.masking import mask_email, mask_phone_e164
 from directory.models import Claim, ClaimVerificationGuard, Listing
+from osds.client_ip import client_ip as _client_ip
 
 
-def _client_ip(request) -> str:
-    return request.META.get("REMOTE_ADDR", "") or ""
+def _wait_text(seconds: int) -> str:
+    """A wait as a human would say it, rounded up: never "0 minutes"."""
+    if seconds < 60:
+        return "a minute"
+    minutes = -(-seconds // 60)
+    if minutes < 60:
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    hours = -(-minutes // 60)
+    return f"{hours} hour{'s' if hours != 1 else ''}"
+
+
+def _limited(response, exc: RateLimited):
+    """Turn a rendered page into the 429 for ``exc``. The wait is the one fact
+    the claimant needs; which rule fired is not shown."""
+    response.status_code = 429
+    response["Retry-After"] = str(exc.retry_after)
+    return response
+
+
+def _limit_message(exc: RateLimited) -> str:
+    return f"Too many attempts. Please try again in {_wait_text(exc.retry_after)}."
 
 
 def _fetch_guard(claim) -> "ClaimVerificationGuard | None":
@@ -73,6 +94,7 @@ def claim_form(request, public_id):
     consent_text = services.get_default_consent_text(tenant)
     enabled_methods = services.enabled_claim_methods(tenant)
 
+    limited = None
     if request.method == "POST":
         form = ClaimForm(
             request.POST, listing=listing, enabled_methods=enabled_methods
@@ -93,6 +115,9 @@ def claim_form(request, public_id):
                     consent=form.consent_payload(),
                     ip=_client_ip(request),
                 )
+            except RateLimited as exc:
+                limited = exc
+                form.add_error(None, _limit_message(exc))
             except services.ConsentRequired:
                 form.add_error(None, "Please respond to every consent option below.")
             except services.SchemaError as exc:
@@ -113,7 +138,7 @@ def claim_form(request, public_id):
             initial={"role_claimed": "owner"},
         )
 
-    return render(
+    response = render(
         request,
         "public/claim_form.html",
         {
@@ -126,6 +151,7 @@ def claim_form(request, public_id):
             "masked_email": mask_email(listing.email) if listing.email else "",
         },
     )
+    return _limited(response, limited) if limited else response
 
 
 @require_http_methods(["GET"])
@@ -254,13 +280,19 @@ def claim_verify(request, public_id):
     tenant = request.tenant
     form = ClaimVerifyForm(request.POST if request.method == "POST" else None)
     attempted = False
+    limited = None
 
     if request.method == "POST" and form.is_valid():
         attempted = True
         try:
             claim, correct = services.verify_claim_code(
-                tenant, claim=claim, code=form.cleaned_data["code"]
+                tenant,
+                claim=claim,
+                code=form.cleaned_data["code"],
+                ip=_client_ip(request),
             )
+        except RateLimited as exc:
+            limited = exc
         except services.VerificationRefused:
             pass  # the recomputed status below explains why
         else:
@@ -268,7 +300,9 @@ def claim_verify(request, public_id):
                 return render(request, "public/claim_verified.html", {"claim": claim})
 
     status = _verify_context(claim)
-    if attempted:
+    if limited:
+        form.add_error(None, _limit_message(limited))
+    elif attempted:
         if status["reason"]:
             form.add_error(None, status["message"])
         else:
@@ -278,11 +312,12 @@ def claim_verify(request, public_id):
                 "before a 15-minute wait.",
             )
 
-    return render(
+    response = render(
         request,
         "public/claim_verify.html",
         {"claim": claim, "form": form, "status": status},
     )
+    return _limited(response, limited) if limited else response
 
 
 @require_http_methods(["POST"])
@@ -290,7 +325,26 @@ def claim_verify_resend(request, public_id):
     claim = get_object_or_404(Claim.objects, public_id=public_id)
     tenant = request.tenant
     try:
-        services.start_claim_verification(tenant, claim=claim)
+        services.start_claim_verification(
+            tenant, claim=claim, ip=_client_ip(request)
+        )
+    except RateLimited as exc:
+        # A POST-only route with nothing of its own to render: show the verify
+        # page, which already explains where the claimant stands, with the
+        # refusal as a flash message like every other resend refusal.
+        messages.error(request, _limit_message(exc))
+        return _limited(
+            render(
+                request,
+                "public/claim_verify.html",
+                {
+                    "claim": claim,
+                    "form": ClaimVerifyForm(),
+                    "status": _verify_context(claim),
+                },
+            ),
+            exc,
+        )
     except services.VerificationRefused as exc:
         messages.error(
             request, _refusal_text(exc.reason, claim=claim, guard=_fetch_guard(claim))

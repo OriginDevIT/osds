@@ -256,6 +256,41 @@ class OutboundMessage(models.Model):
         return f"{self.kind}:{self.status}"
 
 
+class RateLimitCounter(models.Model):
+    """One fixed-window hit counter (``audit.ratelimit``, decisions.md §4.8).
+
+    ``subject_hash`` is a keyed hash of an IP bucket or a claimant email, never
+    the value itself. Incremented by a raw atomic upsert in autocommit, so a
+    count survives the rollback of the command it guards. Pruned a day after
+    its window ends by the worker's ``rate_limit_prune`` job -- a window is at
+    most 24 hours, so a row older than 48 hours is dead.
+    """
+
+    tenant = models.ForeignKey(
+        "tenants.Tenant", on_delete=models.CASCADE, related_name="rate_limit_counters"
+    )
+    rule = models.CharField(max_length=60)
+    subject_hash = models.CharField(max_length=64)
+    window_start = models.DateTimeField()
+    count = models.PositiveIntegerField(default=0)
+
+    objects = TenantScopedManager()
+    all_tenants = models.Manager()
+
+    class Meta:
+        db_table = "rate_limit_counters"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "rule", "subject_hash", "window_start"],
+                name="uniq_rate_limit_counter",
+            ),
+        ]
+        indexes = [models.Index(fields=["window_start"])]
+
+    def __str__(self) -> str:
+        return f"{self.rule}:{self.count}"
+
+
 class CommandLog(models.Model):
     class Outcome(models.TextChoices):
         APPLIED = "applied", "Applied"

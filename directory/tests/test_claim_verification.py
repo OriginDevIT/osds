@@ -88,11 +88,11 @@ class _Base(TransactionTestCase):
 
     def resend(self, claim):
         with tenant_context(self.tenant):
-            return services.start_claim_verification(self.tenant, claim=claim)
+            return services.start_claim_verification(self.tenant, claim=claim, ip=None)
 
     def verify(self, claim, code):
         with tenant_context(self.tenant):
-            return services.verify_claim_code(self.tenant, claim=claim, code=code)
+            return services.verify_claim_code(self.tenant, claim=claim, code=code, ip=None)
 
 
 # --- submit-time eligibility (correction c: resolved before Claim.objects.create) ---

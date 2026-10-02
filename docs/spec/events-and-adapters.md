@@ -1,13 +1,18 @@
 # OSDS — Event Schema, Adapter Interface & Entitlements
 
 **Open Source Directory Site**
-**Status:** Draft v0.12 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
+**Status:** Draft v0.13 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
 **Audience:** core maintainers, adapter authors
 
 This document defines the contract between the OSDS core and everything outside it. The core is a multi-tenant directory engine. It knows nothing about email providers, CRMs, payment gateways, or messaging platforms. It emits facts and accepts commands. Adapters translate.
 
 If you are writing an adapter, sections 3, 7 and 8 are the ones you need.
 If you are implementing the paid tiers, section 5 is the whole job.
+
+### Changes from v0.12
+
+- **§15.6.** Claim submission, verification and resend rate limits are
+  settled (#210); only code-entry attempts are §9.6's.
 
 ### Changes from v0.11
 
@@ -1682,4 +1687,4 @@ minio          (bundled S3-compatible storage; overridable via S3_* vars)
 3. **Data model and migrations** — entitlement and slot tables are specified behaviourally, not yet as schema.
 4. **Owner dashboard scope** — what an owner can edit without re-verification, and what re-opens moderation.
 5. **Import pipeline detail** — CSV column mapping, dedupe strategy against `suppression_key`, batch rollback mechanics.
-6. **Rate limiting and abuse** — public API limits, review submission limits, and operator login attempt limits. Claim attempt limits are settled in §9.6. Operator login ships unthrottled; the Node-era `operator_login_attempts` design is superseded and is not the answer.
+6. **Rate limiting and abuse** — public API limits, review submission limits, and operator login attempt limits. Claim code-entry attempts are settled in §9.6; the per-IP and per-email claim submission, verification and resend limits of §9.4 are core-fixed (#210). Operator login ships unthrottled; the Node-era `operator_login_attempts` design is superseded and is not the answer.

@@ -159,7 +159,7 @@ class EntryPointTests(_NoticeBase):
         with tenant_context(self.tenant):
             from directory import services
 
-            services.start_claim_verification(self.tenant, claim=claim)
+            services.start_claim_verification(self.tenant, claim=claim, ip=None)
         self.assertEqual(self.fresh(claim).method, "manual")
         self.assertEqual(self.notices().count(), 1)
 

@@ -31,7 +31,13 @@ from datetime import timedelta
 
 from django.db.models import Exists, OuterRef
 
-from audit.models import CommandLog, OutboundMessage, OutboxDelivery, OutboxEvent
+from audit.models import (
+    CommandLog,
+    OutboundMessage,
+    OutboxDelivery,
+    OutboxEvent,
+    RateLimitCounter,
+)
 from audit.worker.tick import TickResult
 
 RETENTION = timedelta(days=90)
@@ -100,4 +106,20 @@ def null_command_payloads(*, now) -> TickResult:
     done = CommandLog.all_tenants.filter(
         id__in=ids, payload__isnull=False
     ).update(payload=None)
+    return TickResult(done=done, more=len(ids) == RETENTION_CHUNK)
+
+
+# A rate-limit window is at most 24 hours (``directory.claim_limits``), so a
+# counter whose window began more than twice that ago can never be read again.
+RATE_LIMIT_KEEP = timedelta(hours=48)
+
+
+def prune_rate_limit_counters(*, now) -> TickResult:
+    """#210: delete dead rate-limit counters. Not a §11.2 retention rule -- the
+    counters hold only keyed hashes -- but the same shape: bounded, idempotent,
+    run from the tick."""
+    ids = _first_ids(
+        RateLimitCounter.all_tenants.filter(window_start__lt=now - RATE_LIMIT_KEEP)
+    )
+    done, _ = RateLimitCounter.all_tenants.filter(id__in=ids).delete()
     return TickResult(done=done, more=len(ids) == RETENTION_CHUNK)
