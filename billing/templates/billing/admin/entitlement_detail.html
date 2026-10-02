@@ -1,0 +1,42 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}{{ ent.listing.name }} &middot; entitlement{% endblock %}
+{% block content %}
+<p><a href="{% url 'billing_admin:entitlement-list' %}">&larr; Entitlements</a></p>
+<h1>{{ ent.listing.name }}</h1>
+<table>
+  <tr><th>Tier</th><td>{{ ent.tier.name }} (rank {{ ent.tier.rank }})</td></tr>
+  <tr><th>Status</th><td>{{ ent.get_status_display }}</td></tr>
+  <tr><th>Billing</th><td>{{ ent.get_billing_mode_display }}</td></tr>
+  <tr><th>Started</th><td>{{ ent.started_at|default_if_none:"—" }}</td></tr>
+  <tr><th>Period ends</th><td>{{ ent.current_period_end|default_if_none:"—" }}</td></tr>
+  {% if ent.trial_ends_at %}<tr><th>Trial ends</th><td>{{ ent.trial_ends_at }}</td></tr>{% endif %}
+  {% if ent.dunning_ends_at %}<tr><th>Dunning ends</th><td>{{ ent.dunning_ends_at }} (failed attempts: {{ ent.failed_attempts }})</td></tr>{% endif %}
+  {% if ent.grace_ends_at %}<tr><th>Grace ends</th><td>{{ ent.grace_ends_at }}</td></tr>{% endif %}
+  {% if ent.status == "comped" %}
+    <tr><th>Comp</th><td>granted by {{ ent.comp_granted_by.email|default:"—" }}: {{ ent.comp_reason }}{% if ent.comp_expires_at %}; expires {{ ent.comp_expires_at }}{% else %}; no expiry{% endif %}</td></tr>
+  {% endif %}
+  {% if ent.hidden_by_expiry %}<tr><th>Hidden</th><td>The listing was hidden when this entitlement expired (no rank-0 tier).</td></tr>{% endif %}
+</table>
+
+{% if ent.status == "comped" %}
+<h2>Revoke the comp</h2>
+<form method="post" action="{% url 'billing_admin:entitlement-revoke' public_id=ent.public_id %}">
+  {% csrf_token %}
+  {{ revoke_form.as_p }}
+  <button type="submit">Revoke comp</button>
+</form>
+{% endif %}
+
+<h2>Override</h2>
+<p class="muted">Moves the entitlement to any status. The reason is recorded in <code>entitlement.overridden</code>. Use it to correct a payment the payment provider got wrong.</p>
+<form method="post" action="{% url 'billing_admin:entitlement-override' public_id=ent.public_id %}">
+  {% csrf_token %}
+  {{ override_form.as_p }}
+  <button type="submit">Override</button>
+</form>
+
+<h2>History</h2>
+<ul>
+  {% for e in timeline %}<li>{{ e.occurred_at }} &mdash; {{ e.type }}</li>{% empty %}<li class="muted">No events.</li>{% endfor %}
+</ul>
+{% endblock %}

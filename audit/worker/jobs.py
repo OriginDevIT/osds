@@ -21,12 +21,15 @@ from typing import IO
 from audit.worker.loop import TICK_PERIOD
 from audit.worker import retention
 from audit.worker.tick import TickRegistry
+from billing import jobs as billing_jobs
 from directory import jobs as directory_jobs
 
 REINDEX_EVERY = timedelta(seconds=30)
 RETENTION_EVERY = timedelta(hours=24)
 RATE_LIMIT_PRUNE_EVERY = timedelta(hours=1)
 OWNER_AUTH_PRUNE_EVERY = timedelta(hours=1)
+ENTITLEMENT_TRANSITIONS_EVERY = timedelta(minutes=5)
+RENEWAL_NOTICES_EVERY = timedelta(hours=1)
 
 
 def _heartbeat(out: IO[str], *, now) -> None:
@@ -83,5 +86,16 @@ def build_tick_registry(*, out: IO[str]) -> TickRegistry:
         "owner_auth_prune",
         directory_jobs.owner_auth_prune,
         every=OWNER_AUTH_PRUNE_EVERY,
+    )
+    # Entitlement transitions on the clock (spec §13; decisions.md §4.11).
+    registry.register(
+        "entitlement_transitions",
+        billing_jobs.entitlement_transitions,
+        every=ENTITLEMENT_TRANSITIONS_EVERY,
+    )
+    registry.register(
+        "entitlement_renewal_notices",
+        billing_jobs.renewal_notices,
+        every=RENEWAL_NOTICES_EVERY,
     )
     return registry
