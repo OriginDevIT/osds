@@ -1,0 +1,22 @@
+{% if state.kind or state.plan_line or state.can_cancel %}
+<h2>Your plan</h2>
+{% if state.plan_line %}<p>{{ state.plan_line }}</p>{% endif %}
+{% if state.text %}<p class="{% if state.kind == 'warn' %}errors{% endif %}" role="status">{{ state.text }}</p>{% endif %}
+{% if state.portal_label %}
+  <p><a href="{% url 'owner-billing-portal' public_id=listing.public_id %}">{{ state.portal_label }}</a></p>
+{% endif %}
+{% if state.can_buy %}
+  <form method="post" action="{% url 'owner-billing-checkout' public_id=listing.public_id %}">
+    {% csrf_token %}
+    {% for tier in state.tiers %}
+      <p><button type="submit" name="tier" value="{{ tier.key }}">Upgrade to {{ tier.name }} &mdash; {{ tier.price_minor }} {{ tier.currency }} / {{ tier.interval }}{% if tier.trial_days %} ({{ tier.trial_days }}-day trial){% endif %}</button></p>
+    {% endfor %}
+  </form>
+{% endif %}
+{% if state.can_cancel %}
+  <form method="post" action="{% url 'owner-billing-cancel' public_id=listing.public_id %}"
+        onsubmit="return confirm('Cancel your plan?');">
+    {% csrf_token %}<button type="submit">Cancel plan</button>
+  </form>
+{% endif %}
+{% endif %}

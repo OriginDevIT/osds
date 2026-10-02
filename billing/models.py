@@ -12,7 +12,7 @@ from django.db import models
 from django.utils import timezone
 
 from osds.db import TenantScopedManager
-from osds.ids import ent_id, tier_id
+from osds.ids import chk_id, ent_id, tier_id
 
 
 class Tier(models.Model):
@@ -179,3 +179,93 @@ class Entitlement(models.Model):
 
     def __str__(self) -> str:
         return f"{self.public_id}:{self.status}"
+
+
+class CheckoutAttempt(models.Model):
+    """One checkout core started for a listing (decisions.md §4.11).
+
+    Core decides the tier and the price when it creates this row, and hands the
+    provider only what the provider needs; a completion that comes back must
+    name an attempt core started, for this listing, so a signed event cannot
+    buy a tier core never offered. ``external_ref`` is whatever the provider
+    calls the session -- opaque to core.
+    """
+
+    class Status(models.TextChoices):
+        STARTED = "started", "Started"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    tenant = models.ForeignKey(
+        "tenants.Tenant", on_delete=models.CASCADE, related_name="checkout_attempts"
+    )
+    listing = models.ForeignKey(
+        "directory.Listing", on_delete=models.CASCADE, related_name="checkout_attempts"
+    )
+    tier = models.ForeignKey(Tier, on_delete=models.PROTECT, related_name="checkout_attempts")
+    public_id = models.CharField(
+        max_length=40, unique=True, editable=False, default=chk_id
+    )
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.STARTED)
+    adapter_id = models.CharField(max_length=50, blank=True)
+    external_ref = models.CharField(max_length=200, blank=True)
+    # Who asked: the owner's user row. Not an operator.
+    started_by = models.ForeignKey(
+        "directory.DirectoryUser", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="checkout_attempts",
+    )
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    expires_at = models.DateTimeField()
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    objects = TenantScopedManager()
+    all_tenants = models.Manager()
+
+    class Meta:
+        db_table = "checkout_attempts"
+        indexes = [models.Index(fields=["tenant", "listing", "created_at"])]
+
+    def __str__(self) -> str:
+        return self.public_id
+
+
+class PaymentReceipt(models.Model):
+    """A payment report core has seen, keyed by the provider's event id
+    (decisions.md §4.11). Inserted in the same transaction as the state change
+    it caused, so a redelivery -- including two at once -- loses to the unique
+    constraint and never applies twice.
+    """
+
+    class Outcome(models.TextChoices):
+        APPLIED = "applied", "Applied"
+        IGNORED = "ignored", "Ignored"
+
+    tenant = models.ForeignKey(
+        "tenants.Tenant", on_delete=models.CASCADE, related_name="payment_receipts"
+    )
+    adapter_id = models.CharField(max_length=50)
+    external_event_id = models.CharField(max_length=200)
+    kind = models.CharField(max_length=40)
+    listing = models.ForeignKey(
+        "directory.Listing", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="payment_receipts",
+    )
+    outcome = models.CharField(max_length=10, choices=Outcome.choices)
+    # Why it was ignored (the state machine's refusal, an unknown checkout).
+    reason = models.CharField(max_length=60, blank=True)
+    received_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    objects = TenantScopedManager()
+    all_tenants = models.Manager()
+
+    class Meta:
+        db_table = "payment_receipts"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "adapter_id", "external_event_id"],
+                name="uniq_payment_receipt_event",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.adapter_id}:{self.external_event_id}"

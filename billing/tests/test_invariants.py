@@ -17,9 +17,10 @@ from django.test import SimpleTestCase
 import audit
 import billing
 import directory
+import osds
 import tenants
 
-CORE = (audit, billing, directory, tenants)
+CORE = (audit, billing, directory, osds, tenants)
 # "square" is left out on purpose: it is an ordinary word, and ``square.site`` is a
 # free-hosted-site domain in ``directory.claims.PLATFORM_HOSTS``, data and not an
 # integration.

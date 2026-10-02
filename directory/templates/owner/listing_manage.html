@@ -1,4 +1,5 @@
 {% extends "public/base.html" %}
+{% load billing_owner %}
 {% block title %}{{ listing.name }} &middot; {{ request.tenant.name }}{% endblock %}
 {% block content %}
 <p><a href="{% url 'owner-dashboard' %}">&larr; Your listings</a></p>
@@ -9,6 +10,7 @@
   {% if listing.current_tier %}<tr><th>Tier</th><td>{{ listing.current_tier.name }}</td></tr>{% endif %}
 </table>
 {% if public_path %}<p><a href="{{ public_path }}">View your public page</a></p>{% endif %}
+{% owner_billing_panel listing %}
 
 <h2>Details the directory manages</h2>
 <table>

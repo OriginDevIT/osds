@@ -1,4 +1,5 @@
 {% extends "public/base.html" %}
+{% load billing_owner %}
 {% block title %}Your listings &middot; {{ request.tenant.name }}{% endblock %}
 {% block content %}
 <h1>Your listings</h1>
@@ -10,7 +11,7 @@
       <td>{{ listing.name }}</td>
       <td>{{ listing.listing_type.label_singular }}</td>
       <td>{{ listing.get_visibility_display }}</td>
-      <td>{{ listing.get_status_display }}</td>
+      <td>{{ listing.get_status_display }} {% owner_billing_banner listing %}</td>
       <td><a href="{% url 'owner-listing' public_id=listing.public_id %}">Open</a></td>
     </tr>
   {% empty %}

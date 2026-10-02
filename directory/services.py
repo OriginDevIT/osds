@@ -82,6 +82,7 @@ RESERVED_SLUGS = frozenset(
         "media",
         "claim",
         "owner",
+        "_adapters",
         "robots.txt",
         "sitemap.xml",
         "sitemaps",

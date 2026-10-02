@@ -1,0 +1,21 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Payment settings{% endblock %}
+{% block content %}
+<p><a href="{% url 'directory_admin:index' %}">&larr; Admin home</a></p>
+<h1>Payment settings</h1>
+{% if not provider %}
+<p>No payment provider is installed on this OSDS, so listings cannot be sold. Comps still work.</p>
+{% else %}
+<p>Provider: <strong>{{ provider.adapter_id }}</strong>.
+  Payments are <strong>{% if available %}available{% else %}not available{% endif %}</strong>{% if not has_base %}: this directory needs a verified domain, served over HTTPS, before it can take payments{% endif %}.</p>
+{% if webhook_url %}
+<p>Point the provider's webhook at <code>{{ webhook_url }}</code>.</p>
+{% endif %}
+<p class="muted">Secrets are stored encrypted and are never shown again.</p>
+<form method="post">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit">Save</button>
+</form>
+{% endif %}
+{% endblock %}

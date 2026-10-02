@@ -31,7 +31,7 @@ from django.db import transaction
 
 from audit import events
 from audit.outbox import emit
-from billing import machine
+from billing import machine, notices
 from billing.machine import GRACE, DUNNING, Trigger
 from billing.models import Entitlement, Tier
 from directory import services as directory_services
@@ -70,7 +70,8 @@ def effective_tier(tenant, ent: Entitlement) -> "Tier | None":
     return rank0_tier(tenant)
 
 
-def _set_tier(tenant, listing: Listing, tier: "Tier | None", *, cause: str, now, actor: dict) -> bool:
+def _set_tier(tenant, listing: Listing, tier: "Tier | None", *, cause: str, now, actor: dict,
+              origin: str = "") -> bool:
     """The only write to ``Listing.current_tier`` in the codebase. Returns
     whether it changed. The listing row must already be locked."""
     new_id = tier.pk if tier is not None else None
@@ -84,6 +85,7 @@ def _set_tier(tenant, listing: Listing, tier: "Tier | None", *, cause: str, now,
         subject=listing.public_id,
         tenant=tenant,
         actor=actor,
+        origin=origin,
         data={
             "from_tier": before.key if before else None,
             "to_tier": tier.key if tier else None,
@@ -310,7 +312,8 @@ def _tier_cause(rule, prior_tier: "Tier | None", target: "Tier | None") -> str:
 
 
 def apply_trigger(
-    tenant, listing: Listing, trigger: str, *, now, actor: dict = SYSTEM_ACTOR, **params
+    tenant, listing: Listing, trigger: str, *, now, actor: dict = SYSTEM_ACTOR,
+    origin: str = "", **params
 ) -> Outcome:
     """Apply ``trigger`` to ``listing``'s entitlement, creating the row on a
     first start or grant. Raises ``InvalidTransition`` for a move the table does
@@ -361,15 +364,17 @@ def apply_trigger(
                 subject=ent.public_id,
                 tenant=tenant,
                 actor=actor,
+                origin=origin,
                 data=_event_data(ent, name, rule, facts, params, now, prior),
             )
             out.events.append(name)
 
         out.tier_changed = _set_tier(
             tenant, listing, target, cause=_tier_cause(rule, prior_tier, target),
-            now=now, actor=actor,
+            now=now, actor=actor, origin=origin,
         )
         _visibility_after(tenant, ent, listing, out, actor=actor)
+        notices.after_transition(tenant, ent, listing, rule, now=now)
         return out
 
 
