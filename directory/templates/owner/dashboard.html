@@ -1,0 +1,27 @@
+{% extends "public/base.html" %}
+{% block title %}Your listings &middot; {{ request.tenant.name }}{% endblock %}
+{% block content %}
+<h1>Your listings</h1>
+<table>
+  <thead><tr><th>Listing</th><th>Type</th><th>Visibility</th><th>Status</th><th></th></tr></thead>
+  <tbody>
+  {% for listing in listings %}
+    <tr>
+      <td>{{ listing.name }}</td>
+      <td>{{ listing.listing_type.label_singular }}</td>
+      <td>{{ listing.get_visibility_display }}</td>
+      <td>{{ listing.get_status_display }}</td>
+      <td><a href="{% url 'owner-listing' public_id=listing.public_id %}">Open</a></td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="5" class="muted">You do not own a listing here.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p><a href="{% url 'owner-leads' %}">Inquiries{% if lead_count %} ({{ lead_count }}){% endif %}</a></p>
+<form method="post" action="{% url 'owner-signout' %}">
+  {% csrf_token %}
+  <button type="submit">Sign out</button>
+  <button type="submit" name="everywhere" value="1">Sign out everywhere</button>
+</form>
+{% endblock %}

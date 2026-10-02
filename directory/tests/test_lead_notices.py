@@ -54,7 +54,7 @@ class OwnerNoticeTests(_NoticeBase):
         msg = self.notices().get()
         self.assertEqual(msg.subject, f"New inquiry on {self.tenant.name}")
         self.assertIn("You have 1 new inquiry on Owned Plumbing.", msg.body_text)
-        self.assertIn("https://acme.test/owner/", msg.body_text)
+        self.assertIn("https://acme.test/owner/leads/", msg.body_text)
         for text in (msg.subject, msg.body_text):
             self.assertNotIn(HOSTILE, text)
             self.assertNotIn(HOSTILE.lower(), text)

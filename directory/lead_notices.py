@@ -7,8 +7,8 @@ text: anyone can write anything into the form, and a notice goes out from the
 operator's domain.
 
 * A listing **with an owner**: the owner is told ("N new inquiries"), with a
-  link to ``/owner/`` when the tenant has an absolute base. The owner's leads
-  page is where the inquiries are read.
+  link to ``/owner/leads/`` when the tenant has an absolute base. That page is
+  where the inquiries are read.
 * A listing **with no owner**: only the staff who can act (EDITOR and above)
   are told, with a link to the admin leads page. An unclaimed listing's own
   email address is never mailed -- it was imported, not given.
@@ -89,7 +89,7 @@ def _notify_owner(tenant, *, recipient, now) -> int:
         where = f"on {listings[0][1]}"
     else:
         where = f"across your listings on {tenant.name}"
-    url = _link(tenant, "/owner/")
+    url = _link(tenant, "/owner/leads/")
     link_line = f"\n\nSee them at: {url}" if url else (
         f"\n\nSign in to your owner page on {tenant.name} to see them."
     )

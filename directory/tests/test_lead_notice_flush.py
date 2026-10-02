@@ -58,7 +58,7 @@ class OwnerFlushTests(_FlushBase):
         self.assertEqual(flushed.kind, lead_notices.OWNER_NOTICE_KIND)
         self.assertEqual(flushed.to_address, self.owner.email)
         self.assertIn("You have 1 new inquiry on Owned Plumbing.", flushed.body_text)
-        self.assertIn("https://acme.test/owner/", flushed.body_text)
+        self.assertIn("https://acme.test/owner/leads/", flushed.body_text)
 
     def test_the_count_covers_every_deferred_lead(self):
         for _ in range(4):

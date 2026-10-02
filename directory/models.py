@@ -176,6 +176,70 @@ class DirectoryUser(models.Model):
         super().save(*args, **kwargs)
 
 
+class OwnerSignInToken(models.Model):
+    """A single-use emailed sign-in link for an owner (spec §4.3, decisions.md
+    §4.9). Only the SHA-256 of the token is stored: the plaintext is a
+    256-bit random value that exists in the mail and nowhere else. The token
+    is consumed by a POST from the confirm page, never by following the link,
+    so a mail scanner's GET cannot burn it."""
+
+    tenant = models.ForeignKey(
+        "tenants.Tenant", on_delete=models.CASCADE, related_name="owner_signin_tokens"
+    )
+    user = models.ForeignKey(
+        DirectoryUser, on_delete=models.CASCADE, related_name="signin_tokens"
+    )
+    token_hash = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+    message = models.ForeignKey(
+        "audit.OutboundMessage",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="owner_signin_tokens",
+    )
+
+    objects = TenantScopedManager()
+    all_tenants = models.Manager()
+
+    class Meta:
+        db_table = "owner_signin_tokens"
+        indexes = [models.Index(fields=["tenant", "user", "created_at"])]
+
+    def __str__(self) -> str:
+        return f"signin:{self.user_id}"
+
+
+class OwnerSession(models.Model):
+    """An owner's session, separate from the operator's Django session
+    (decisions.md §4.9): its own table and its own cookie, so neither can
+    satisfy the other's guard. Expires after 12 hours without activity and
+    after 30 days regardless."""
+
+    tenant = models.ForeignKey(
+        "tenants.Tenant", on_delete=models.CASCADE, related_name="owner_sessions"
+    )
+    user = models.ForeignKey(
+        DirectoryUser, on_delete=models.CASCADE, related_name="owner_sessions"
+    )
+    token_hash = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    last_seen_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+
+    objects = TenantScopedManager()
+    all_tenants = models.Manager()
+
+    class Meta:
+        db_table = "owner_sessions"
+        indexes = [models.Index(fields=["tenant", "user"])]
+
+    def __str__(self) -> str:
+        return f"session:{self.user_id}"
+
+
 class ImportBatch(models.Model):
     """A CSV upload and its outcome (spec §4.1.1, import.* events). The pipeline
     is block 3; the model exists now so provenance FKs have a target."""

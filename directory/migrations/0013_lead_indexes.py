@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('directory', '0011_claims_review'),
+        ('directory', '0012_owner_auth'),
         ('tenants', '0003_smtp_security'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]

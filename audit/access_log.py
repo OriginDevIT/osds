@@ -35,3 +35,28 @@ def record_view(
         user_agent=(user_agent or "")[:400],
         extra=extra or {},
     )
+
+
+def record_owner_view(
+    *,
+    tenant,
+    user,
+    resource_type: str,
+    resource_id: str,
+    ip: "str | None",
+    user_agent: str = "",
+    extra: "dict | None" = None,
+) -> AccessLog:
+    """One row for one owner viewing records that hold other people's personal
+    data (a visitor's name, email, phone and message). ``user`` is the owner, a
+    ``DirectoryUser``; the actor type is ``owner``, never ``staff``."""
+    return AccessLog.all_tenants.create(
+        tenant=tenant,
+        actor={"type": "owner", "id": user.public_id},
+        action=AccessLog.Action.VIEWED,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        ip=storable_ip(ip),
+        user_agent=(user_agent or "")[:400],
+        extra=extra or {},
+    )

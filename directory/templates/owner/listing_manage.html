@@ -1,0 +1,50 @@
+{% extends "public/base.html" %}
+{% block title %}{{ listing.name }} &middot; {{ request.tenant.name }}{% endblock %}
+{% block content %}
+<p><a href="{% url 'owner-dashboard' %}">&larr; Your listings</a></p>
+<h1>{{ listing.name }}</h1>
+<table>
+  <tr><th>Visibility</th><td>{{ listing.get_visibility_display }}</td></tr>
+  <tr><th>Status</th><td>{{ listing.get_status_display }}</td></tr>
+  {% if listing.current_tier %}<tr><th>Tier</th><td>{{ listing.current_tier.name }}</td></tr>{% endif %}
+</table>
+{% if public_path %}<p><a href="{{ public_path }}">View your public page</a></p>{% endif %}
+
+<h2>Details the directory manages</h2>
+<table>
+  <tr><th>Name</th><td>{{ listing.name }}</td></tr>
+  <tr><th>Email</th><td>{{ listing.email|default:"—" }}</td></tr>
+  <tr><th>Website</th><td>{{ listing.website|default:"—" }}</td></tr>
+  <tr><th>Address</th><td>{{ listing.address_line1|default:"—" }}{% if listing.locality %}, {{ listing.locality }}{% endif %}</td></tr>
+</table>
+<p class="muted">To change your name, categories, website, email or address, contact the directory.</p>
+
+{% if editable %}
+<h2>Edit your listing</h2>
+<form method="post" action="{% url 'owner-listing' public_id=listing.public_id %}">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit">Save</button>
+</form>
+
+<h2>Images</h2>
+<ul>
+  {% for asset in assets %}
+    <li>{{ asset.get_role_display }}{% if asset.alt_text %} &mdash; {{ asset.alt_text }}{% endif %}
+      <form method="post" style="display:inline" action="{% url 'owner-media-remove' public_id=listing.public_id asset_public_id=asset.public_id %}">
+        {% csrf_token %}<button type="submit">Remove</button>
+      </form>
+    </li>
+  {% empty %}
+    <li class="muted">No images yet.</li>
+  {% endfor %}
+</ul>
+<form method="post" enctype="multipart/form-data" action="{% url 'owner-media-add' public_id=listing.public_id %}">
+  {% csrf_token %}
+  {{ media_form.as_p }}
+  <button type="submit">Add image</button>
+</form>
+{% else %}
+<p class="muted">This listing is suspended. Contact the directory.</p>
+{% endif %}
+{% endblock %}

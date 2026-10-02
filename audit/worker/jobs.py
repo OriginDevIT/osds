@@ -26,6 +26,7 @@ from directory import jobs as directory_jobs
 REINDEX_EVERY = timedelta(seconds=30)
 RETENTION_EVERY = timedelta(hours=24)
 RATE_LIMIT_PRUNE_EVERY = timedelta(hours=1)
+OWNER_AUTH_PRUNE_EVERY = timedelta(hours=1)
 
 
 def _heartbeat(out: IO[str], *, now) -> None:
@@ -76,5 +77,11 @@ def build_tick_registry(*, out: IO[str]) -> TickRegistry:
         "rate_limit_prune",
         retention.prune_rate_limit_counters,
         every=RATE_LIMIT_PRUNE_EVERY,
+    )
+    # Owner sign-in links and sessions past their end (decisions.md §4.9).
+    registry.register(
+        "owner_auth_prune",
+        directory_jobs.owner_auth_prune,
+        every=OWNER_AUTH_PRUNE_EVERY,
     )
     return registry

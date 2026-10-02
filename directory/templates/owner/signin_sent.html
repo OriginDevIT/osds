@@ -1,0 +1,7 @@
+{% extends "public/base.html" %}
+{% block title %}Check your email &middot; {{ request.tenant.name }}{% endblock %}
+{% block content %}
+<h1>Check your email</h1>
+<p>If that address owns a listing here, we have sent it a sign-in link. The link works once and expires after 12 hours. Nothing was sent if the address does not own a listing.</p>
+<p class="muted">Links are limited to a few an hour. If nothing arrives, check your spam folder before asking again.</p>
+{% endblock %}
