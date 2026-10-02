@@ -11,7 +11,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('audit', '0004_outboundmessage'),
-        ('directory', '0009_claim_verification'),
+        ('directory', '0010_searchreindexjob_cursor'),
         ('tenants', '0003_smtp_security'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
