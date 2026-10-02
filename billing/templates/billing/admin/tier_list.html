@@ -1,0 +1,32 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Tiers{% endblock %}
+{% block content %}
+<p><a href="{% url 'directory_admin:index' %}">&larr; Admin home</a></p>
+<h1>Tiers</h1>
+{% if no_rank0 %}
+<p class="errors" role="alert">This directory has no rank-0 tier, so there is no free listing: a listing whose entitlement expires is <strong>hidden</strong> instead of falling back to a free tier. Add a tier with rank 0 to keep expired listings published.</p>
+{% endif %}
+<p><a href="{% url 'billing_admin:tier-create' %}">New tier</a></p>
+<table>
+  <thead><tr><th>Rank</th><th>Key</th><th>Name</th><th>Price</th><th>Trial</th><th>Badge</th><th></th></tr></thead>
+  <tbody>
+  {% for t in tiers %}
+    <tr>
+      <td>{{ t.rank }}</td>
+      <td>{{ t.key }}</td>
+      <td>{{ t.name }}</td>
+      <td>{% if t.purchasable %}{{ t.price_minor }} {{ t.currency }} / {{ t.interval }}{% else %}not for sale{% endif %}</td>
+      <td>{% if t.trial_days %}{{ t.trial_days }} days{% else %}&mdash;{% endif %}</td>
+      <td>{{ t.badge_label|default:"—" }}</td>
+      <td>
+        <a href="{% url 'billing_admin:tier-edit' key=t.key %}">Edit</a>
+        <form method="post" style="display:inline" action="{% url 'billing_admin:tier-delete' key=t.key %}"
+              onsubmit="return confirm('Delete this tier?');">{% csrf_token %}<button type="submit">Delete</button></form>
+      </td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="7" class="muted">No tiers yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
