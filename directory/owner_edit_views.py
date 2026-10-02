@@ -1,5 +1,5 @@
-"""The owner's listing page, edit and media routes, and the leads placeholder
-(decisions.md §4.9).
+"""The owner's listing page, edit and media routes, and the owner's leads page
+(decisions.md §4.9, §4.10).
 
 ``/owner/listings/<id>/`` is the read view with the edit form. Each POST route
 calls exactly one command in ``directory.owner_edit``. Ownership is resolved
@@ -9,15 +9,17 @@ live on every request: a listing that is not the owner's is a 404.
 from __future__ import annotations
 
 from django.contrib import messages
+from django.core.paginator import Paginator
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 
+from audit.access_log import record_owner_view
 from directory import media as media_service
 from directory import owner_edit, routing
 from directory.field_schema import SchemaError
-from directory.models import Listing, MediaAsset
+from directory.models import Lead, Listing, MediaAsset
 from directory.owner_auth import owner_required
 from directory.owner_forms import (
     OwnerMediaForm,
@@ -26,6 +28,7 @@ from directory.owner_forms import (
     initial_from_listing,
 )
 from directory.storage import DeferredFeatureError
+from osds.client_ip import client_ip
 
 # Keys the write path refuses outright (spec §7.1) plus identity, which a
 # crafted form post might try. Anything else unknown is just noise.
@@ -148,8 +151,39 @@ def media_remove(request, public_id, asset_public_id):
     return redirect("owner-listing", public_id=public_id)
 
 
+LEADS_PAGE_SIZE = 50
+
+
+def owned_leads(owner):
+    """The owner's inquiries: non-spam leads on listings they own, newest first.
+    Ownership is read live, so a listing the owner no longer holds takes its
+    leads with it, and another owner's leads can never be reached from here."""
+    return (
+        Lead.objects.filter(listing__owner=owner, marked_spam=False)
+        .select_related("listing")
+        .order_by("-created_at", "-id")
+    )
+
+
+@never_cache
 @owner_required
 def leads(request):
-    """A placeholder: the owner's leads page arrives with lead capture, which
-    has no producer yet. 404 until then, and the dashboard does not link it."""
-    raise Http404("lead capture has not shipped")
+    """``/owner/leads/``: the inquiries visitors sent to the owner's listings,
+    with the visitor's name, email, phone and message in full -- the owner is
+    who they were sent to. Everything a visitor typed is escaped, and every view
+    writes an access-log row naming the leads it showed."""
+    page = Paginator(owned_leads(request.owner), LEADS_PAGE_SIZE).get_page(
+        request.GET.get("page")
+    )
+    record_owner_view(
+        tenant=request.tenant,
+        user=request.owner,
+        resource_type="owner_leads",
+        resource_id=request.owner.public_id,
+        ip=client_ip(request),
+        user_agent=request.META.get("HTTP_USER_AGENT", ""),
+        extra={"page": page.number, "lead_ids": [lead.public_id for lead in page]},
+    )
+    response = render(request, "owner/leads.html", {"page": page})
+    response["X-Robots-Tag"] = "noindex, nofollow"
+    return response

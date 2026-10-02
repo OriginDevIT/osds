@@ -1,0 +1,35 @@
+{% extends "public/base.html" %}
+{% block title %}Send an inquiry to {{ listing.name }} &middot; {{ request.tenant.name }}{% endblock %}
+{% block content %}
+<meta name="robots" content="noindex, nofollow">
+<h1>Send an inquiry to {{ listing.name }}</h1>
+
+{% if form.non_field_errors %}
+  <ul class="errors">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>
+{% endif %}
+
+<form method="post">
+  {% csrf_token %}
+  {{ form.form_token }}
+
+  <p>{{ form.name.label_tag }}<br>{{ form.name }}{{ form.name.errors }}</p>
+  <p>{{ form.email.label_tag }}<br>{{ form.email }}{{ form.email.errors }}</p>
+  <p>{{ form.phone_e164.label_tag }}<br>{{ form.phone_e164 }}{{ form.phone_e164.errors }}</p>
+  <p>{{ form.message.label_tag }}<br>{{ form.message }}{{ form.message.errors }}</p>
+
+  {# Trap: no person sees or fills this. #}
+  <div aria-hidden="true" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden">
+    <label for="id_company_url">{{ form.company_url.label }}</label>
+    <input type="text" name="company_url" id="id_company_url" tabindex="-1" autocomplete="off" value="">
+  </div>
+
+  <fieldset>
+    <legend>{{ consent_text.body|linebreaksbr }}</legend>
+    <p>{{ form.contact_by_business }}
+      <label for="id_contact_by_business">I agree that {{ listing.name }} may contact me about this inquiry.</label>
+      {{ form.contact_by_business.errors }}</p>
+  </fieldset>
+
+  <button type="submit">Send</button>
+</form>
+{% endblock %}

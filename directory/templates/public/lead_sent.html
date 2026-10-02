@@ -1,0 +1,10 @@
+{% extends "public/base.html" %}
+{% block title %}Inquiry received &middot; {{ request.tenant.name }}{% endblock %}
+{% block content %}
+<meta name="robots" content="noindex, nofollow">
+<h1>Thanks, we have your message</h1>
+<p>Your inquiry about {{ listing.name }} has been received by {{ request.tenant.name }}.
+We pass inquiries on to businesses that have claimed their listing, and we will not
+email you about this one.</p>
+<p><a href="/">Back to the directory</a></p>
+{% endblock %}

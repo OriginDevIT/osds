@@ -1,5 +1,5 @@
 """PR B: what an owner may change on their listing (spec §15.4 as ruled in
-decisions.md §4.9), the edit form and media routes, and the leads placeholder.
+decisions.md §4.9), the edit form and media routes.
 """
 
 from __future__ import annotations
@@ -8,7 +8,6 @@ import shutil
 import tempfile
 
 from django.test import Client, override_settings
-from django.utils import timezone
 
 from audit.models import CommandLog, OutboxEvent
 from directory import owner_edit
@@ -16,7 +15,7 @@ from directory.field_schema import SchemaError
 from directory.models import DirectoryUser, Listing, ListingType, MediaAsset
 from directory.tests.test_claim_review import DANA, HOST, Role
 from directory.tests.test_media import _upload
-from directory.tests.test_owner_auth import OWNER_EMAIL, _OwnerBase
+from directory.tests.test_owner_auth import _OwnerBase
 from osds.tenancy import tenant_context
 
 SCHEMA = [
@@ -392,20 +391,3 @@ class MediaTests(_EditBase):
         self.approve(dispute, self.op(Role.EDITOR), transfer=True)
         self.assertEqual(self.add().status_code, 404)
         self.assertFalse(MediaAsset.all_tenants.exists())
-
-
-class LeadsPlaceholderTests(_EditBase):
-    def test_it_is_404_for_a_signed_in_owner(self):
-        self.sign_in()
-        self.assertEqual(self.get("/owner/leads/").status_code, 404)
-
-    def test_anonymous_is_sent_to_sign_in_first(self):
-        r = self.get("/owner/leads/")
-        self.assertEqual((r.status_code, r["Location"]), (302, "/owner/signin/"))
-
-    def test_nothing_links_to_it(self):
-        self.sign_in()
-        self.assertNotContains(self.get("/owner/"), "/owner/leads/")
-        self.assertNotContains(self.get(f"/owner/listings/{self.listing.public_id}/"), "/owner/leads/")
-        self.assertIsNotNone(timezone.now())
-        self.assertEqual(OWNER_EMAIL, self.owner.email)

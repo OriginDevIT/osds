@@ -946,6 +946,10 @@ class Lead(models.Model):
 
     class Meta:
         db_table = "leads"
+        indexes = [
+            models.Index(fields=["tenant", "marked_spam", "created_at"]),
+            models.Index(fields=["listing", "created_at"]),
+        ]
 
     def __str__(self) -> str:
         return self.public_id

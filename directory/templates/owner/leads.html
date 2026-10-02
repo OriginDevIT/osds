@@ -1,0 +1,29 @@
+{% extends "public/base.html" %}
+{% block title %}Inquiries &middot; {{ request.tenant.name }}{% endblock %}
+{% block content %}
+<p><a href="{% url 'owner-dashboard' %}">&larr; Your listings</a></p>
+<h1>Inquiries</h1>
+<p class="muted">Sent by visitors to your listings. What they wrote was typed by them and was not
+written or checked by {{ request.tenant.name }}.</p>
+{% for lead in page %}
+  <article>
+    <h2>{{ lead.listing.name }}</h2>
+    <p class="muted">Received {{ lead.created_at }}</p>
+    <dl>
+      <dt>Name</dt><dd>{{ lead.name }}</dd>
+      <dt>Email</dt><dd>{{ lead.email }}</dd>
+      {% if lead.phone_e164 %}<dt>Phone</dt><dd>{{ lead.phone_e164 }}</dd>{% endif %}
+      <dt>Message</dt><dd>{{ lead.message|linebreaksbr }}</dd>
+    </dl>
+  </article>
+{% empty %}
+  <p class="muted">No inquiries yet.</p>
+{% endfor %}
+{% if page.has_other_pages %}
+  <p class="muted">
+    {% if page.has_previous %}<a href="?page={{ page.previous_page_number }}">&larr; Newer</a>{% endif %}
+    Page {{ page.number }} of {{ page.paginator.num_pages }}
+    {% if page.has_next %}<a href="?page={{ page.next_page_number }}">Older &rarr;</a>{% endif %}
+  </p>
+{% endif %}
+{% endblock %}

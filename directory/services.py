@@ -81,6 +81,7 @@ RESERVED_SLUGS = frozenset(
         "admin",
         "media",
         "claim",
+        "lead",
         "owner",
         "robots.txt",
         "sitemap.xml",
@@ -1021,6 +1022,23 @@ def _do_rollback(batch: ImportBatch, *, actor: dict, operator) -> str:
                 "created_listing_claimed",
                 f"these imported listings now carry a claim and cannot be "
                 f"removed: {names}. Resolve the claims first.",
+            )
+
+        # A lead's consent is evidence (spec §9.0), and Lead.listing and
+        # Consent.lead cascade: removing the listing would delete both.
+        with_leads = [
+            r.listing
+            for r in created
+            if r.listing is not None and r.listing.leads.exists()
+        ]
+        if with_leads:
+            names = ", ".join(
+                sorted(f"{lst.name} ({lst.public_id})" for lst in with_leads)
+            )
+            raise RollbackRefused(
+                "created_listing_has_leads",
+                f"these imported listings now carry leads and cannot be "
+                f"removed: {names}. A lead's consent record is kept as evidence.",
             )
 
         create_ids = [r.listing_id for r in created]

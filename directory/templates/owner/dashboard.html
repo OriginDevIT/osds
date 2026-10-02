@@ -18,6 +18,7 @@
   {% endfor %}
   </tbody>
 </table>
+<p><a href="{% url 'owner-leads' %}">Inquiries{% if lead_count %} ({{ lead_count }}){% endif %}</a></p>
 <form method="post" action="{% url 'owner-signout' %}">
   {% csrf_token %}
   <button type="submit">Sign out</button>

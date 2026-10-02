@@ -1,0 +1,19 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Lead forms{% endblock %}
+{% block content %}
+<p><a href="{% url 'directory_admin:index' %}">&larr; Admin home</a></p>
+<h1>Lead forms</h1>
+<p class="muted">Visitors can send an inquiry about a listing. If the listing has an owner,
+the owner is told (without the visitor's text). If it has no owner, the staff who can act
+on it are told. Nothing is ever emailed to an unclaimed listing's own address, and the
+visitor is never emailed.</p>
+{% if form.non_field_errors %}<ul class="errors">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+<form method="post">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit">Save</button>
+</form>
+<h2>Consent wording shown to visitors ({{ consent_text }})</h2>
+<blockquote>{{ consent_text.body|linebreaksbr }}</blockquote>
+<p class="muted">This wording is fixed for now and has not had legal review.</p>
+{% endblock %}
