@@ -875,31 +875,73 @@ class OwnerWriterTests(TransactionTestCase):
                 parts = set(path.parts)
                 if "tests" in parts or "migrations" in parts:
                     continue
-                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-                for func_or_module, node in _walk_with_scope(tree):
-                    hit = None
-                    if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
-                        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                        for t in targets:
-                            if isinstance(t, ast.Attribute) and t.attr in ("owner", "owner_id"):
-                                hit = t.attr
-                    elif isinstance(node, ast.keyword) and node.arg in ("owner", "owner_id"):
-                        hit = node.arg
-                    if hit and not (
-                        path.name == "claim_review.py" and func_or_module == "_assign_owner"
-                    ):
-                        offenders.append(f"{path.relative_to(root)}:{getattr(node, 'lineno', '?')} {hit}")
+                for scope, lineno, name in _owner_writes(
+                    path.read_text(encoding="utf-8"), str(path)
+                ):
+                    if path.name == "claim_review.py" and scope == "_assign_owner":
+                        continue
+                    offenders.append(f"{path.relative_to(root)}:{lineno} {name}")
         self.assertEqual(offenders, [])
 
-    def test_the_scanner_would_catch_a_violation(self):
-        tree = ast.parse("def f(listing, u):\n    listing.owner = u\n")
-        hits = [
-            n for _, n in _walk_with_scope(tree)
-            if isinstance(n, ast.Assign)
-            and isinstance(n.targets[0], ast.Attribute)
-            and n.targets[0].attr == "owner"
-        ]
-        self.assertEqual(len(hits), 1)
+    def test_the_scanner_catches_every_kind_of_write(self):
+        writes = {
+            "attribute": "def f(listing, u):\n    listing.owner = u\n",
+            "augmented": "def f(listing, u):\n    listing.owner_id += u\n",
+            "update": "def f(u):\n    Listing.objects.filter(pk=1).update(owner=u)\n",
+            "create": "def f(u):\n    Listing.objects.create(owner=u)\n",
+            "constructor": "def f(u):\n    return Listing(owner=u)\n",
+            "get_or_create": "def f(u):\n    Listing.objects.get_or_create(x=1, defaults={}, owner=u)\n",
+        }
+        for label, source in writes.items():
+            with self.subTest(label):
+                self.assertEqual(len(_owner_writes(source, "snippet")), 1)
+
+    def test_the_scanner_ignores_reads_and_request_attributes(self):
+        reads = {
+            "filter": "def f(u):\n    return Listing.objects.filter(owner=u)\n",
+            "chained read": "def f(u):\n    return Listing.objects.exclude(owner=u).get(pk=1)\n",
+            "request attribute": "def f(request, s):\n    request.owner = s.user\n",
+        }
+        for label, source in reads.items():
+            with self.subTest(label):
+                self.assertEqual(_owner_writes(source, "snippet"), [])
+
+
+# A call whose keywords only describe which rows to read is not a write.
+_READ_CALLS = frozenset(
+    {"filter", "exclude", "get", "annotate", "select_related", "prefetch_related",
+     "order_by", "values", "values_list", "count", "exists", "first", "last",
+     "aggregate", "in_bulk"}
+)
+
+
+def _owner_writes(source: str, filename: str) -> list:
+    """Every ``(enclosing function, line, name)`` in ``source`` that assigns or
+    passes ``owner`` / ``owner_id``, except reads (``.filter(owner=...)``) and
+    attributes of a ``request`` (the owner guard's own ``request.owner``)."""
+    hits = []
+    exempt_keywords: set = set()
+    for scope, node in _walk_with_scope(ast.parse(source, filename=filename)):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr in _READ_CALLS:
+                exempt_keywords.update(id(k) for k in node.keywords)
+        elif isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for t in targets:
+                if (
+                    isinstance(t, ast.Attribute)
+                    and t.attr in ("owner", "owner_id")
+                    and not (isinstance(t.value, ast.Name) and t.value.id == "request")
+                ):
+                    hits.append((scope, node.lineno, t.attr))
+        elif (
+            isinstance(node, ast.keyword)
+            and node.arg in ("owner", "owner_id")
+            and id(node) not in exempt_keywords
+        ):
+            hits.append((scope, getattr(node, "lineno", 0), node.arg))
+    return hits
 
 
 def _walk_with_scope(tree):

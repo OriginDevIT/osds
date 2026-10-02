@@ -1,0 +1,11 @@
+{% extends "public/base.html" %}
+{% block title %}Owner sign in &middot; {{ request.tenant.name }}{% endblock %}
+{% block content %}
+<h1>Owner sign in</h1>
+<p>Enter the email address you used to claim your listing. We will email you a link that works once and expires after 12 hours. There is no password.</p>
+<form method="post">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit">Email me a sign-in link</button>
+</form>
+{% endblock %}

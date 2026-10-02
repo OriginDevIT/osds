@@ -1,0 +1,10 @@
+{% extends "public/base.html" %}
+{% block title %}Sign in &middot; {{ request.tenant.name }}{% endblock %}
+{% block content %}
+<h1>Sign in</h1>
+<p>Press the button to sign in to {{ request.tenant.name }}. This link works once.</p>
+<form method="post">
+  {% csrf_token %}
+  <button type="submit">Sign in</button>
+</form>
+{% endblock %}

@@ -8,6 +8,10 @@ tenant-scoped models through ``all_tenants`` and enter a tenant explicitly.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
+from django.db.models import Q
+
 from audit.worker.tick import TickResult
 from directory import importing, sitemaps
 from directory.search import drain_reindex_markers
@@ -54,3 +58,37 @@ def sitemap_regeneration(*, now) -> TickResult:
         if sitemaps.refresh(tenant, now=now) == "rebuilt":
             rebuilt += 1
     return TickResult(done=rebuilt, more=waiting)
+
+
+# Rows per call, like the audit sweeps.
+OWNER_AUTH_CHUNK = 1000
+# A spent or expired link and a dead session are kept a day past their end,
+# for diagnosing "my link did not work", then deleted.
+OWNER_AUTH_KEEP = timedelta(days=1)
+
+
+def owner_auth_prune(*, now) -> TickResult:
+    """Decisions.md §4.9: delete sign-in links and owner sessions that can no
+    longer be used. Cross-tenant by nature, so it reads through
+    ``all_tenants``; bounded to one chunk a call per table, and ``more`` while
+    either has backlog."""
+    from directory.models import OwnerSession, OwnerSignInToken
+    from directory.owner_auth import SESSION_IDLE
+
+    cutoff = now - OWNER_AUTH_KEEP
+    token_ids = list(
+        OwnerSignInToken.all_tenants.filter(expires_at__lt=cutoff)
+        .order_by("id").values_list("id", flat=True)[:OWNER_AUTH_CHUNK]
+    )
+    session_ids = list(
+        OwnerSession.all_tenants.filter(
+            Q(expires_at__lt=cutoff) | Q(last_seen_at__lt=cutoff - SESSION_IDLE)
+        )
+        .order_by("id").values_list("id", flat=True)[:OWNER_AUTH_CHUNK]
+    )
+    deleted_tokens, _ = OwnerSignInToken.all_tenants.filter(id__in=token_ids).delete()
+    deleted_sessions, _ = OwnerSession.all_tenants.filter(id__in=session_ids).delete()
+    return TickResult(
+        done=deleted_tokens + deleted_sessions,
+        more=len(token_ids) == OWNER_AUTH_CHUNK or len(session_ids) == OWNER_AUTH_CHUNK,
+    )
