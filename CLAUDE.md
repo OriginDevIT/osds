@@ -187,14 +187,16 @@ The development machine is **Windows with PowerShell 7**. Commands you propose
 must be PowerShell. Use here-strings for file creation — `>` writes UTF-16 and
 breaks everything downstream.
 
-Nine environment variables. `DJANGO_SECRET_KEY`, `OSDS_SECRET_KEY` and
+Ten environment variables. `DJANGO_SECRET_KEY`, `OSDS_SECRET_KEY` and
 `DATABASE_URL` raise at import if unset. `DATABASE_URL_ADMIN` is used by the
 entrypoint to migrate as the database owner. `DJANGO_DEBUG` and
 `OSDS_CONSOLE_HOST` configure the install. `OSDS_SECURE_COOKIES` defaults true
 and must be false on an HTTP-only install or no login POST can pass CSRF.
 `OSDS_DEV_TENANT_SLUG` is DEBUG-only. `OSDS_MEDIA_ROOT` sets the local storage
 root and defaults to `BASE_DIR/media`; per-tenant media lands under
-`<OSDS_MEDIA_ROOT>/<tenant.public_id>/`.
+`<OSDS_MEDIA_ROOT>/<tenant.public_id>/`. `OSDS_TRUSTED_PROXIES` lists the
+reverse-proxy addresses or CIDRs whose `X-Forwarded-For` is believed; unset, the
+header is ignored (decisions.md §4.8).
 
 `python manage.py ensure_setup_token` mints the `InstallSetup` row and prints
 the first-run token. Nothing else creates it — a fresh database 404s the wizard
