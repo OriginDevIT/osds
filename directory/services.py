@@ -1391,7 +1391,10 @@ def _apply_submit_claim(
     # that is already Status.CLAIMED routes here -- verification alone never
     # moves ownership away from a sitting owner (spec §9.4).
     if listing.status == Listing.Status.CLAIMED:
-        claim_review.dispute(tenant, claim=claim, actor=actor)
+        claim_review.dispute(tenant, claim=claim, actor=actor)  # notifies
+    elif claim.method == Claim.Method.MANUAL:
+        # Chosen manual, or flipped to it at submit: in front of a human now.
+        claim_review.notify_operators(tenant)
 
     return claim, result_event_id
 
@@ -1525,6 +1528,8 @@ def _apply_start_verification(
     )
     if ineligible is not None:
         _flip_to_manual(claim, now=timezone.now(), reason=ineligible)
+        if claim.status != Claim.Status.DISPUTED:  # a dispute is already queued
+            claim_review.notify_operators(tenant)
         event = emit(
             events.CLAIM_VERIFICATION_FAILED,
             subject=claim.public_id,
@@ -1791,6 +1796,8 @@ def _apply_verify_claim_code(
             rules=["verification_cooldowns_exhausted"],
             actor=actor,
         )
+        if claim.status != Claim.Status.DISPUTED:  # a dispute is already queued
+            claim_review.notify_operators(tenant)
     return claim, False, event.event_id
 
 

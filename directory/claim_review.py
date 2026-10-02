@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from audit import events
@@ -50,6 +51,12 @@ ANTI_HIJACK_NOTICE_TTL = timedelta(days=7)
 REJECTION_NOTICE_TTL = timedelta(days=7)
 
 LOSER_REASON = "Another claim for this listing was approved."
+
+# The operator notice (#218, decisions.md §4.6): one message per recipient per
+# window, whatever number of claims entered review inside it.
+OPERATOR_NOTICE_KIND = "claim.review_notice"
+OPERATOR_NOTICE_TTL = timedelta(hours=48)
+OPERATOR_NOTICE_THROTTLE = timedelta(minutes=15)
 
 # The decision recorded when an unlock or unblock finds nothing left to clear.
 ALREADY_CLEARED = "already_cleared"
@@ -237,6 +244,7 @@ def dispute(tenant, *, claim: Claim, actor: dict):
         rules=["duplicate_claim"],
         actor=actor,
     )
+    notify_operators(tenant)
     return event
 
 
@@ -249,6 +257,123 @@ def _assign_owner(listing: Listing, user) -> None:
     listing.owner = user
     listing.status = Listing.Status.CLAIMED
     listing.save(update_fields=["owner", "status"])
+
+
+# --- the review queue's queries ----------------------------------------------
+
+
+def review_claims():
+    """Claims waiting on a human: chosen or flipped to manual, or a verified
+    code that could not move ownership (a suspended listing)."""
+    return (
+        Claim.objects.filter(status=Claim.Status.PENDING_VERIFICATION)
+        .filter(Q(method=Claim.Method.MANUAL) | Q(verified_at__isnull=False))
+        .select_related("listing", "claimant")
+        .order_by("created_at")
+    )
+
+
+def open_items(*item_types):
+    return (
+        ModerationItem.objects.filter(
+            status=ModerationItem.Status.OPEN, item_type__in=item_types
+        )
+        .select_related("listing", "claimant", "claim")
+        .order_by("created_at")
+    )
+
+
+def dispute_items():
+    return open_items(ModerationItem.ItemType.CLAIM_DISPUTE)
+
+
+def lock_items():
+    return open_items(
+        ModerationItem.ItemType.VERIFICATION_LOCK,
+        ModerationItem.ItemType.CLAIM_BLOCK,
+    )
+
+
+def open_count() -> int:
+    """Everything waiting on a human, for the admin home page."""
+    return review_claims().count() + dispute_items().count() + lock_items().count()
+
+
+def waiting_claims_count() -> int:
+    """Claims waiting for a human, for the operator notice: those in manual
+    review plus open disputes. A lock's claim is already a manual-review claim
+    and a block's claim is rejected, so neither adds to the figure."""
+    return review_claims().count() + dispute_items().count()
+
+
+def notify_operators(tenant, *, now=None) -> int:
+    """Tell the staff who can act that a claim has entered manual review
+    (#218; spec §9.6 "with the operator notified"). Called from the
+    transaction that put the claim there -- chosen manual, any flip to manual,
+    or a dispute -- so the message commits with the state change. Returns the
+    number of messages queued.
+
+    Recipients are active memberships at ``DECIDE_ROLE`` and above: the people
+    who can approve or reject. A recipient who was sent one in the last
+    ``OPERATOR_NOTICE_THROTTLE`` is skipped -- a leading-edge throttle derived
+    from recent ``OutboundMessage`` rows, with no table of its own -- and the
+    next message states how many claims are waiting, so nothing is lost by the
+    skip. Claim submission is unauthenticated, so without the throttle anyone
+    could flood every editor.
+
+    The message carries a count and, only when the tenant has an absolute
+    base, a link to the queue. It carries no claimant-supplied text.
+    """
+    now = now or timezone.now()
+    recipients: list[str] = []
+    for membership in (
+        StaffMembership.objects.filter(
+            tenant=tenant,
+            status=StaffMembership.Status.ACTIVE,
+            role__gte=DECIDE_ROLE,
+            operator__is_active=True,
+        )
+        .select_related("operator")
+        .order_by("id")
+    ):
+        address = (membership.operator.email or "").strip().lower()
+        if address and address not in recipients:
+            recipients.append(address)
+    if not recipients:
+        return 0
+
+    recent = set(
+        OutboundMessage.all_tenants.filter(
+            tenant=tenant,
+            kind=OPERATOR_NOTICE_KIND,
+            to_address__in=recipients,
+            created_at__gt=now - OPERATOR_NOTICE_THROTTLE,
+        ).values_list("to_address", flat=True)
+    )
+    due = [address for address in recipients if address not in recent]
+    if not due:
+        return 0
+
+    waiting = waiting_claims_count()
+    noun = "claim is" if waiting == 1 else "claims are"
+    url = _link(tenant, "/admin/claims/")
+    link_line = f"\n\nReview them at: {url}" if url else ""
+    body = (
+        f"{waiting} {noun} waiting for review on {tenant.name}."
+        f"{link_line}"
+        f"\n\nYou get at most one of these every 15 minutes, so the number "
+        f"may be higher by the time you open the queue."
+    )
+    for address in due:
+        enqueue(
+            tenant=tenant,
+            kind=OPERATOR_NOTICE_KIND,
+            to_address=address,
+            subject=f"Claims waiting for review on {tenant.name}",
+            body_text=body,
+            expires_at=now + OPERATOR_NOTICE_TTL,
+        )
+    return len(due)
 
 
 def _link(tenant, path: str) -> "str | None":
