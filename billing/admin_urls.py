@@ -1,10 +1,12 @@
 from django.urls import path
 
 from billing import admin_views as views
+from billing import settings_views as views_settings
 
 app_name = "billing_admin"
 
 urlpatterns = [
+    path("settings/payments/", views_settings.payment_settings, name="payment-settings"),
     path("tiers/", views.tier_list, name="tier-list"),
     path("tiers/new/", views.tier_create, name="tier-create"),
     path("tiers/<slug:key>/", views.tier_edit, name="tier-edit"),

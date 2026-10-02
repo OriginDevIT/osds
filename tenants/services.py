@@ -105,6 +105,24 @@ def _validate_smtp(value) -> None:
         )
 
 
+def _validate_adapters(value) -> None:
+    """``settings["adapters"]``: ``{adapter_id: {key: scalar}}``. Secrets are
+    never in here -- they live in the secret store -- so a value is a string,
+    number, boolean or null, and anything nested is refused."""
+    if not isinstance(value, dict):
+        raise InvalidTenantSettings("adapters must be an object")
+    for adapter_id, config in value.items():
+        if not isinstance(adapter_id, str) or not adapter_id:
+            raise InvalidTenantSettings("an adapter id must be a non-empty string")
+        if not isinstance(config, dict):
+            raise InvalidTenantSettings(f"adapters.{adapter_id} must be an object")
+        for key, item in config.items():
+            if not isinstance(key, str) or not (item is None or isinstance(item, (str, int, float, bool))):
+                raise InvalidTenantSettings(
+                    f"adapters.{adapter_id}.{key} must be a string, number, boolean or null"
+                )
+
+
 def _validate_leads(value) -> None:
     """``{"enabled": bool}``. Lead forms are off until an admin turns them on
     (decisions.md §4.10)."""
@@ -122,6 +140,7 @@ def _validate_leads(value) -> None:
 _SETTINGS_VALIDATORS = {
     "claim_verification": _validate_claim_verification,
     "smtp": _validate_smtp,
+    "adapters": _validate_adapters,
     "leads": _validate_leads,
 }
 

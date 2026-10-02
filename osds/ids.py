@@ -65,6 +65,10 @@ def mod_id() -> str:
     return _prefixed("mod_")
 
 
+def chk_id() -> str:
+    return _prefixed("chk_")
+
+
 def lead_id() -> str:
     return _prefixed("lead_")
 

@@ -26,6 +26,7 @@ _FACTORIES = [
     (ids.lead_id, "lead_"),
     (ids.cns_id, "cns_"),
     (ids.mod_id, "mod_"),
+    (ids.chk_id, "chk_"),
     (ids.tier_id, "tier_"),
     (ids.ent_id, "ent_"),
     (ids.imp_id, "imp_"),

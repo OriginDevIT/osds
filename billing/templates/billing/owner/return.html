@@ -1,0 +1,12 @@
+{% extends "public/base.html" %}
+{% block title %}Your plan &middot; {{ request.tenant.name }}{% endblock %}
+{% block content %}
+<p><a href="{% url 'owner-listing' public_id=listing.public_id %}">&larr; {{ listing.name }}</a></p>
+{% if outcome == "success" %}
+<h1>Thank you</h1>
+<p>Your payment is being confirmed. Your plan appears on your listing page within a few minutes; refresh it if it has not changed yet.</p>
+{% else %}
+<h1>Checkout cancelled</h1>
+<p>Nothing was charged. You can upgrade any time from your listing page.</p>
+{% endif %}
+{% endblock %}

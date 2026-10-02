@@ -10,6 +10,7 @@
     {% if membership.role >= 1 %}<li><a href="{% url 'directory_admin:leads' %}">Leads</a></li>{% endif %}
     {% if membership.role >= 3 %}<li><a href="{% url 'billing_admin:entitlement-list' %}">Entitlements and comps</a></li>{% endif %}
     {% if membership.role >= 4 %}<li><a href="{% url 'billing_admin:tier-list' %}">Tiers</a></li>{% endif %}
+    {% if membership.role >= 4 %}<li><a href="{% url 'billing_admin:payment-settings' %}">Payment settings</a></li>{% endif %}
     {% if membership.role >= 4 %}<li><a href="{% url 'directory_admin:mail-settings' %}">Mail settings</a></li>{% endif %}
     {% if membership.role >= 4 %}<li><a href="{% url 'directory_admin:lead-settings' %}">Lead forms</a></li>{% endif %}
   </ul>

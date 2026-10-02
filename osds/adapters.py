@@ -143,6 +143,16 @@ def capability_provider(name: str) -> "object | None":
     return _CAPABILITIES.get(name)
 
 
+def adapter_by_id(adapter_id: str) -> "object | None":
+    """The registered provider whose ``adapter_id`` is ``adapter_id``, or
+    ``None``. The inbound route resolves an adapter by the id in its URL; core
+    never imports the adapter, it only finds what registered itself."""
+    for provider in _CAPABILITIES.values():
+        if getattr(provider, "adapter_id", None) == adapter_id:
+            return provider
+    return None
+
+
 def email_available(tenant) -> bool:
     """Whether ``email.send`` is configured for ``tenant`` (decisions.md §4.5):
     configured, not reachable. False with no provider registered, or with a

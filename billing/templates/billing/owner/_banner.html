@@ -1,0 +1,1 @@
+{% if state.kind == "warn" or state.kind == "info" %}<span class="{% if state.kind == 'warn' %}errors{% else %}muted{% endif %}">{{ state.text }}</span>{% endif %}

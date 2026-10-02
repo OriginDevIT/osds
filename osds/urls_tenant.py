@@ -11,6 +11,8 @@ from django.http import HttpResponse
 from django.urls import include, path, re_path
 from django.views.generic.base import RedirectView
 
+from billing import inbound as billing_inbound
+from billing import owner_views as billing_owner_views
 from directory import (
     claim_views,
     lead_views,
@@ -72,7 +74,34 @@ urlpatterns = [
         owner_edit_views.media_remove,
         name="owner-media-remove",
     ),
-    # A placeholder until lead capture ships: 404, and nothing links to it.
+    path(
+        "owner/listings/<str:public_id>/billing/checkout/",
+        billing_owner_views.checkout,
+        name="owner-billing-checkout",
+    ),
+    path(
+        "owner/listings/<str:public_id>/billing/cancel/",
+        billing_owner_views.cancel,
+        name="owner-billing-cancel",
+    ),
+    path(
+        "owner/listings/<str:public_id>/billing/portal/",
+        billing_owner_views.portal,
+        name="owner-billing-portal",
+    ),
+    path(
+        "owner/listings/<str:public_id>/billing/return/",
+        billing_owner_views.return_page,
+        name="owner-billing-return",
+    ),
+    # A payment provider's webhook (decisions.md §4.11). CSRF-exempt: the
+    # caller is a provider's server, and the adapter verifies its signature.
+    path(
+        "_adapters/<slug:adapter_id>/inbound/",
+        billing_inbound.adapter_inbound,
+        name="adapter-inbound",
+    ),
+    # The owner's inquiries (decisions.md §4.10), and nothing links to it.
     path("owner/leads/", owner_edit_views.leads, name="owner-leads"),
     # Claim submission (spec §9). "claim" is a reserved slug (directory.services
     # .RESERVED_SLUGS) so no listing or category can shadow this.
