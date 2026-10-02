@@ -3,6 +3,7 @@ from django.urls import path
 from directory import admin_views as views
 from directory import auth_views
 from directory import claim_admin_views as claim_views
+from directory import lead_admin_views
 from tenants import mail_views
 
 app_name = "directory_admin"
@@ -40,6 +41,15 @@ urlpatterns = [
         name="moderation-unblock",
     ),
     path("settings/mail/", mail_views.mail_settings, name="mail-settings"),
+    # lead capture
+    path("leads/", lead_admin_views.leads_list, name="leads"),
+    path("leads/<str:public_id>/", lead_admin_views.lead_detail, name="lead-detail"),
+    path(
+        "leads/<str:public_id>/spam/",
+        lead_admin_views.lead_mark_spam,
+        name="lead-mark-spam",
+    ),
+    path("settings/leads/", lead_admin_views.lead_settings, name="lead-settings"),
     path("listing-types/", views.listing_type_list, name="type-list"),
     path("listing-types/new/", views.listing_type_create, name="type-create"),
     path("listing-types/<slug:key>/", views.listing_type_edit, name="type-edit"),

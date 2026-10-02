@@ -41,6 +41,11 @@ def build_tick_registry(*, out: IO[str]) -> TickRegistry:
     registry.register(
         "sitemaps", directory_jobs.sitemap_regeneration, every=TICK_PERIOD
     )
+    # Leads a notice throttle deferred (decisions.md §4.10): a minute is the
+    # finest the 15-minute window needs, and an idle call is one query.
+    registry.register(
+        "lead_notice_flush", directory_jobs.lead_notice_flush, every=TICK_PERIOD
+    )
     # Retention sweeps (spec §11.2): daily, idempotent, bounded per call.
     registry.register(
         "import_pre_image_retention",
@@ -60,6 +65,11 @@ def build_tick_registry(*, out: IO[str]) -> TickRegistry:
     registry.register(
         "command_payload_retention",
         retention.null_command_payloads,
+        every=RETENTION_EVERY,
+    )
+    registry.register(
+        "access_log_retention",
+        retention.prune_access_log,
         every=RETENTION_EVERY,
     )
     registry.register(

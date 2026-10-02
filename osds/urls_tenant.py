@@ -11,7 +11,7 @@ from django.http import HttpResponse
 from django.urls import include, path, re_path
 from django.views.generic.base import RedirectView
 
-from directory import claim_views, public_views
+from directory import claim_views, lead_views, public_views
 
 handler404 = "directory.public_views.not_found"
 
@@ -57,6 +57,9 @@ urlpatterns = [
         claim_views.claim_verify_resend,
         name="public-claim-resend",
     ),
+    # Lead capture (spec §3.3). "lead" is a reserved slug.
+    path("lead/<str:public_id>/", lead_views.lead_form, name="public-lead"),
+    path("lead/<str:public_id>/sent/", lead_views.lead_sent, name="public-lead-sent"),
     # robots.txt and the sitemap. "sitemap.xml" / "sitemaps" are reserved
     # slugs; all three sit ahead of the catch-all.
     path("robots.txt", public_views.robots_txt, name="robots-txt"),

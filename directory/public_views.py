@@ -25,13 +25,13 @@ from django.http import (
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_safe
 
-from directory import routing, sitemaps
+from directory import leads, routing, sitemaps
 from directory.models import Category, Listing, ListingType, MediaAsset, PathRedirect
 from directory.search import search
 from directory.storage import get_tenant_storage
 
 # Top-level paths with their own routes, never rewritten by a PathRedirect.
-_RESERVED_TOP = {"robots.txt", "sitemap.xml", "sitemaps"}
+_RESERVED_TOP = {"robots.txt", "sitemap.xml", "sitemaps", "lead"}
 
 
 # --- helpers ------------------------------------------------------------------
@@ -256,6 +256,7 @@ def _listing_detail(request, listing_type, category_slug, listing_slug, *, multi
         request,
         "public/listing_detail.html",
         {
+            "leads_enabled": leads.leads_enabled(request.tenant),
             "listing": listing,
             "listing_type": listing_type,
             "category": category,

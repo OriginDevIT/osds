@@ -1,0 +1,33 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Lead {{ lead.public_id }}{% endblock %}
+{% block content %}
+<p><a href="{% url 'directory_admin:leads' %}">&larr; Leads</a></p>
+<h1>Lead for {{ listing.name }}</h1>
+<p class="muted">Received {{ lead.created_at }}{% if lead.marked_spam %} &middot; <strong>marked as spam</strong>{% endif %}
+  &middot; {{ lead.get_kind_display }}{% if lead.spam_score is not None %} &middot; spam score {{ lead.spam_score }}{% endif %}</p>
+
+<p class="muted">Typed by a visitor. It was not written or checked by this directory.</p>
+<dl>
+  <dt>Name</dt><dd>{{ lead.name }}</dd>
+  <dt>Email</dt><dd>{{ email }}</dd>
+  {% if phone %}<dt>Phone</dt><dd>{{ phone }}</dd>{% endif %}
+  <dt>Message</dt><dd>{{ lead.message|linebreaksbr }}</dd>
+  {% if lead.source_page %}<dt>Sent from</dt><dd>{{ lead.source_page }}</dd>{% endif %}
+</dl>
+{% if not full %}<p class="muted">Contact details are masked at your role.</p>{% endif %}
+
+{% if consents %}
+  <h2>Consent</h2>
+  <ul>
+    {% for c in consents %}
+      <li>{{ c.channel }}: {{ c.granted|yesno:"granted,declined" }}{% if c.granted_at %} at {{ c.granted_at }}{% endif %}{% if c.ip %} from {{ c.ip }}{% endif %} &middot; wording {{ c.text_version }}</li>
+    {% endfor %}
+  </ul>
+{% endif %}
+
+{% if not lead.marked_spam %}
+  <form method="post" action="{% url 'directory_admin:lead-mark-spam' public_id=lead.public_id %}">
+    {% csrf_token %}<button type="submit">Mark as spam</button>
+  </form>
+{% endif %}
+{% endblock %}

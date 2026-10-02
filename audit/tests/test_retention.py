@@ -14,7 +14,13 @@ from django.utils import timezone
 
 from audit import models as audit_models
 from audit.envelope import to_wire
-from audit.models import CommandLog, OutboundMessage, OutboxDelivery, OutboxEvent
+from audit.models import (
+    AccessLog,
+    CommandLog,
+    OutboundMessage,
+    OutboxDelivery,
+    OutboxEvent,
+)
 from audit.worker import retention
 from tenants.models import Tenant
 
@@ -296,6 +302,60 @@ class CommandPayloadTests(_Base):
                          [(2, True), (1, False)])
 
 
+TWO_YEARS = timedelta(days=730)
+
+
+class AccessLogTests(_Base):
+    def _row(self, age, *, tenant=None, resource_id="lead_1"):
+        return AccessLog.all_tenants.create(
+            tenant=tenant or self.tenant,
+            actor={"type": "staff", "id": "op_1"},
+            action="viewed",
+            resource_type="lead",
+            resource_id=resource_id,
+            occurred_at=NOW - age,
+        )
+
+    def test_deletes_rows_older_than_two_years_and_keeps_the_rest(self):
+        old = self._row(TWO_YEARS + timedelta(seconds=1))
+        edge = self._row(TWO_YEARS, resource_id="lead_2")
+        recent = self._row(timedelta(days=30), tenant=self.other, resource_id="lead_3")
+
+        result = retention.prune_access_log(now=NOW)
+
+        self.assertEqual(result.done, 1)
+        remaining = set(AccessLog.all_tenants.values_list("pk", flat=True))
+        self.assertEqual(remaining, {edge.pk, recent.pk})
+        self.assertNotIn(old.pk, remaining)
+
+    def test_a_row_with_no_tenant_is_swept_too(self):
+        row = AccessLog.all_tenants.create(
+            tenant=None, actor={}, action="exported", resource_type="listing",
+            occurred_at=NOW - TWO_YEARS - timedelta(days=1),
+        )
+        retention.prune_access_log(now=NOW)
+        self.assertFalse(AccessLog.all_tenants.filter(pk=row.pk).exists())
+
+    def test_is_idempotent(self):
+        self._row(TWO_YEARS + timedelta(days=5))
+        self.assertEqual(retention.prune_access_log(now=NOW).done, 1)
+        again = retention.prune_access_log(now=NOW)
+        self.assertEqual((again.done, again.more), (0, False))
+
+    def test_is_bounded_and_reports_backlog(self):
+        for i in range(3):
+            self._row(TWO_YEARS + timedelta(days=5 + i), resource_id=f"lead_{i}")
+        with mock.patch.object(retention, "RETENTION_CHUNK", 2):
+            first = retention.prune_access_log(now=NOW)
+            second = retention.prune_access_log(now=NOW)
+        self.assertEqual(
+            [(first.done, first.more), (second.done, second.more)], [(2, True), (1, False)]
+        )
+
+    def test_the_window_is_two_years(self):
+        self.assertEqual(retention.ACCESS_LOG_KEEP, TWO_YEARS)
+
+
 class RegistrationTests(TestCase):
     def test_the_retention_jobs_are_registered_daily(self):
         import io
@@ -308,6 +368,7 @@ class RegistrationTests(TestCase):
             "outbound_address_retention",
             "event_payload_retention",
             "command_payload_retention",
+            "access_log_retention",
         ):
             self.assertEqual(jobs[name].every, RETENTION_EVERY, name)
         self.assertEqual(RETENTION_EVERY, timedelta(hours=24))

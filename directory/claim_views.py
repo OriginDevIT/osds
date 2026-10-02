@@ -17,7 +17,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from audit.ratelimit import RateLimited
-from directory import services
+from directory import limit_responses, services
 from directory.claims import domain_email_host
 from directory.forms import ClaimForm, ClaimVerifyForm
 from directory.masking import mask_email, mask_phone_e164
@@ -25,27 +25,9 @@ from directory.models import Claim, ClaimVerificationGuard, Listing
 from osds.client_ip import client_ip as _client_ip
 
 
-def _wait_text(seconds: int) -> str:
-    """A wait as a human would say it, rounded up: never "0 minutes"."""
-    if seconds < 60:
-        return "a minute"
-    minutes = -(-seconds // 60)
-    if minutes < 60:
-        return f"{minutes} minute{'s' if minutes != 1 else ''}"
-    hours = -(-minutes // 60)
-    return f"{hours} hour{'s' if hours != 1 else ''}"
-
-
-def _limited(response, exc: RateLimited):
-    """Turn a rendered page into the 429 for ``exc``. The wait is the one fact
-    the claimant needs; which rule fired is not shown."""
-    response.status_code = 429
-    response["Retry-After"] = str(exc.retry_after)
-    return response
-
-
-def _limit_message(exc: RateLimited) -> str:
-    return f"Too many attempts. Please try again in {_wait_text(exc.retry_after)}."
+_wait_text = limit_responses.wait_text
+_limited = limit_responses.limited
+_limit_message = limit_responses.limit_message
 
 
 def _fetch_guard(claim) -> "ClaimVerificationGuard | None":

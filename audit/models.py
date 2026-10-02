@@ -365,7 +365,10 @@ class AccessLog(models.Model):
     occurred_at = models.DateTimeField(default=timezone.now, editable=False)
     extra = models.JSONField(default=dict, blank=True)
 
+    # Plain manager (allowlisted, tenants/tests/test_scoped_manager.py); the
+    # worker's ``access_log_retention`` job reaches it through ``all_tenants``.
     objects = models.Manager()
+    all_tenants = models.Manager()
 
     class Meta:
         db_table = "access_log"
