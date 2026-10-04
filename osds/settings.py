@@ -63,6 +63,14 @@ OSDS_SECURE_COOKIES = os.environ.get(
 # never believed. Validated here so a typo stops the process at boot.
 OSDS_TRUSTED_PROXIES = parse_networks(os.environ.get('OSDS_TRUSTED_PROXIES', ''))
 
+# Whether the webhook adapter may POST to a *private* address (RFC 1918, ULA,
+# CGNAT) and use plain HTTP to one -- an n8n on the same Docker network, say.
+# Off by default. Loopback and the link-local range that holds the cloud
+# metadata service (169.254.169.254) are never reachable, whatever this says.
+OSDS_WEBHOOK_ALLOW_PRIVATE = os.environ.get(
+    'OSDS_WEBHOOK_ALLOW_PRIVATE', ''
+).strip().lower() in {'1', 'true', 'yes', 'on'}
+
 # Listings per page on the public category-browse and search pages.
 OSDS_PUBLIC_PAGE_SIZE = 20
 
@@ -93,6 +101,7 @@ INSTALLED_APPS = [
     # The app's own AppConfig.ready() registers the email.send capability;
     # nothing under tenants/, directory/, billing/ or audit/ imports it.
     'adapters.smtp',
+    'adapters.webhook',
     'adapters.stripe',
 ]
 
@@ -270,3 +279,30 @@ SESSION_SAVE_EVERY_REQUEST = False
 # LOGOUT_REDIRECT_URL are deliberately unset: every login and logout view names
 # its own redirect target.
 LOGIN_URL = "/admin/login/"
+
+
+# Logging (#179). One handler, on stdout -- the container's log stream -- with
+# credentials in URL paths masked (osds.logging_filters), and a level for osds.*
+# so INFO lines print. Gunicorn's access log is masked separately, by the logger
+# class the entrypoint selects (osds.gunicorn_logging). Adapters log through
+# ``ctx.logger``, which scrubs every secret it has resolved before the record
+# exists; every existing osds.* call carries ids, counts and error classes, never
+# contact values (spec §8.3).
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "filters": {"mask_secret_paths": {"()": "osds.logging_filters.MaskSecretPaths"}},
+    "formatters": {
+        "plain": {"format": "%(asctime)s %(levelname)s %(name)s: %(message)s"},
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stdout",
+            "formatter": "plain",
+            "filters": ["mask_secret_paths"],
+        },
+    },
+    "root": {"handlers": ["console"], "level": "WARNING"},
+    "loggers": {"osds": {"level": "INFO"}},
+}

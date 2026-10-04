@@ -5,10 +5,20 @@ imports adapter code (CLAUDE.md invariant 1): an adapter package calls
 ``register()`` at import time, and the worker only ever sees the ``Subscriber``
 protocol and the ``Result`` it returns.
 
-The registry is empty until the SMTP and webhook adapters land (mvp-plan
-block 5). Pattern matching of an event type against an adapter's ``subscribes``
-list lands with the drain, so for now ``subscribers_for`` returns whatever is
-registered -- which is nothing.
+A subscriber may declare more than ``id`` and ``handle``:
+
+* ``subscribes`` -- patterns of event types it wants (``"claim.*"``,
+  ``"lead.captured"``, ``"*"``); absent means everything. ``subscribers_for``
+  applies them.
+* ``scopes`` -- what it asks to see (``pii:contact``, ``pii:message``). Asking is
+  not receiving: the tenant's admin grants a scope, and the drain redacts
+  everything it was not granted before ``handle`` is called (invariant 8,
+  ``audit.redaction``). A subscriber that declares none sees none.
+* ``wants(event_type, config)`` -- a per-tenant filter the fan-out consults, with
+  the adapter's own config (``None`` for a ``tenant.*`` event), so a tenant that
+  has not configured the adapter gets no delivery rows at all.
+* ``config_key`` and ``egress_allowlist_for(config)`` -- see
+  ``osds.adapter_context``.
 
 Beside the event-subscriber registry sits a second one, for capabilities
 (decisions.md §4.3): a capability is a named ability -- ``email.send`` today
@@ -25,6 +35,7 @@ de-duplicate.
 from __future__ import annotations
 
 import contextlib
+import fnmatch
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
@@ -66,11 +77,13 @@ class Result:
 class Subscriber(Protocol):
     """What the worker sees. An adapter implements this; the worker never
     imports the implementation, only calls ``handle`` with a wire envelope
-    (``audit.envelope.to_wire``)."""
+    (``audit.envelope.to_wire``) that ``audit.redaction`` has already stripped
+    of whatever the tenant has not granted, and an ``AdapterContext`` for the
+    delivery's tenant (``None`` for a ``tenant.*`` event, which has none)."""
 
     id: str
 
-    def handle(self, envelope: dict) -> Result: ...
+    def handle(self, envelope: dict, ctx) -> Result: ...
 
 
 _REGISTRY: "list[Subscriber]" = []
@@ -84,9 +97,32 @@ def register(subscriber: Subscriber) -> None:
     _REGISTRY.append(subscriber)
 
 
+def matches(patterns, event_type: str) -> bool:
+    """Whether ``event_type`` matches any of ``patterns`` (``fnmatch`` globs:
+    ``*`` is everything, ``claim.*`` a namespace, a bare name itself)."""
+    return any(fnmatch.fnmatchcase(event_type, p) for p in patterns)
+
+
 def subscribers_for(event_type: str) -> "list[Subscriber]":
-    """Subscribers that want ``event_type``. Empty until an adapter registers
-    (mvp-plan block 5); ``subscribes`` pattern matching lands with the drain."""
+    """Subscribers whose ``subscribes`` patterns match ``event_type`` (all of
+    them, for one that declares none)."""
+    return [
+        s
+        for s in _REGISTRY
+        if matches(getattr(s, "subscribes", None) or ("*",), event_type)
+    ]
+
+
+def subscriber_by_id(adapter_id: str) -> "Subscriber | None":
+    """The registered subscriber with this id, or ``None``. The settings and
+    deliveries pages find an adapter here and never import one."""
+    for subscriber in _REGISTRY:
+        if subscriber.id == adapter_id:
+            return subscriber
+    return None
+
+
+def all_subscribers() -> "list[Subscriber]":
     return list(_REGISTRY)
 
 
@@ -159,11 +195,13 @@ def email_available(tenant) -> bool:
     provider that does not expose ``available`` -- fail closed, so an
     unmarked provider never tells a claimant a code is coming. Core asks
     here and never reads the provider's own settings."""
+    from osds.adapter_context import build_context
+
     provider = capability_provider("email.send")
     available = getattr(provider, "available", None)
     if available is None:
         return False
-    return bool(available(tenant))
+    return bool(available(build_context(tenant, provider)))
 
 
 @contextlib.contextmanager

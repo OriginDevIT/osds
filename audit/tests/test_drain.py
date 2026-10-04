@@ -44,7 +44,7 @@ class OkSubscriber:
     def __init__(self):
         self.calls = []
 
-    def handle(self, envelope):
+    def handle(self, envelope, ctx=None):
         self.calls.append(envelope["id"])
         return Result.ok()
 
@@ -59,7 +59,7 @@ class FlakySubscriber:
         self._left = {eid: fail_times for eid in flaky}
         self.delivered = []
 
-    def handle(self, envelope):
+    def handle(self, envelope, ctx=None):
         eid = envelope["id"]
         if self._left.get(eid, 0) > 0:
             self._left[eid] -= 1
@@ -77,7 +77,7 @@ class AlwaysRetrySubscriber:
         self._doomed = set(doomed)
         self.delivered = []
 
-    def handle(self, envelope):
+    def handle(self, envelope, ctx=None):
         if envelope["id"] in self._doomed:
             return Result.retry(1000, "still down")
         self.delivered.append(envelope["id"])
@@ -92,7 +92,7 @@ class CrashThenOkSubscriber:
     def __init__(self):
         self._crashed = False
 
-    def handle(self, envelope):
+    def handle(self, envelope, ctx=None):
         if not self._crashed:
             self._crashed = True
             raise SystemExit("worker killed mid-handler")
@@ -105,7 +105,7 @@ class TenantSpySubscriber:
     def __init__(self):
         self.seen = {}
 
-    def handle(self, envelope):
+    def handle(self, envelope, ctx=None):
         self.seen[envelope["subject"]] = get_current_tenant()
         return Result.ok()
 
@@ -119,7 +119,7 @@ class ScriptedSubscriber:
         self._script = list(script)
         self._i = 0
 
-    def handle(self, envelope):
+    def handle(self, envelope, ctx=None):
         verb = self._script[self._i]
         self._i += 1
         if verb == "ok":
@@ -134,7 +134,7 @@ class ScriptedSubscriber:
 class KeyboardInterruptSubscriber:
     id = "webhook"
 
-    def handle(self, envelope):
+    def handle(self, envelope, ctx=None):
         raise KeyboardInterrupt("SIGINT during delivery")
 
 

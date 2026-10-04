@@ -38,6 +38,8 @@ from django.db.models.functions import Coalesce
 
 from audit.models import OutboundMessage
 from audit.worker.drain import backoff
+from osds.adapter_api import MailMessage
+from osds.adapter_context import build_context
 from osds.adapters import CapabilityUnconfigured, Result, capability_provider
 from osds.tenancy import tenant_context
 
@@ -156,7 +158,18 @@ def attempt_message(message: OutboundMessage, *, now) -> str:
         return "unconfigured" if applied else "discarded"
 
     try:
-        result = provider.send(message)
+        # The provider gets a context and plain data -- never the ORM row
+        # and never the tenant (#215).
+        result = provider.send(
+            build_context(message.tenant, provider),
+            MailMessage(
+                message_id=message.message_id,
+                kind=message.kind,
+                to_address=message.to_address or "",
+                subject=message.subject,
+                body_text=message.body_text or "",
+            ),
+        )
     except CapabilityUnconfigured as exc:
         applied = _record(
             message,

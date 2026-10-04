@@ -21,6 +21,9 @@ x-osds: &osds
     # Reverse proxies trusted to set X-Forwarded-For (see the README). Empty:
     # the connecting address is the client.
     OSDS_TRUSTED_PROXIES: ${OSDS_TRUSTED_PROXIES:-}
+    # Whether the webhook adapter may reach private-network addresses (see
+    # .env.example). Loopback and the metadata address stay blocked.
+    OSDS_WEBHOOK_ALLOW_PRIVATE: ${OSDS_WEBHOOK_ALLOW_PRIVATE:-false}
   volumes:
     - osds-secrets:/run/osds-secrets:ro
     - osds-media:/var/lib/osds/media

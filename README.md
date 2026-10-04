@@ -53,6 +53,7 @@ to a direct install: it shows every request as coming from the Docker gateway.
 
 ## Documentation
 - [Specification](docs/spec/events-and-adapters.md)
+- [Receiving webhooks](docs/webhook.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 

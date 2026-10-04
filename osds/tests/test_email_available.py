@@ -3,14 +3,18 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from django.test import SimpleTestCase
 
 from osds.adapters import email_available, override_capability
 from osds.tests.mail_stub import email_send_stub
 
 
-class _Tenant:
-    settings: dict = {}
+def _Tenant():
+    return SimpleNamespace(
+        public_id="tnt_test", slug="test", primary_domain=None, settings={}
+    )
 
 
 class EmailAvailableTests(SimpleTestCase):
@@ -20,7 +24,7 @@ class EmailAvailableTests(SimpleTestCase):
 
     def test_false_for_a_provider_without_available(self):
         class Bare:
-            def send(self, message): ...
+            def send(self, ctx, message): ...
 
         with override_capability({"email.send": Bare()}):
             self.assertFalse(email_available(_Tenant()))

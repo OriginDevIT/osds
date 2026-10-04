@@ -76,7 +76,7 @@ class SubmitMailUnavailableTests(VerificationBase):
 
     def test_a_provider_without_available_fails_closed(self):
         class Bare:
-            def send(self, message):
+            def send(self, ctx, message):
                 raise AssertionError("never sent")
 
         with override_capability({"email.send": Bare()}):

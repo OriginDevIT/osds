@@ -23,6 +23,7 @@ from audit.worker.mail_drain import (
     attempt_message,
     mail_drain_once,
 )
+from osds.adapter_api import MailMessage
 from osds.adapters import CapabilityUnconfigured, Result, override_capability
 from osds.tenancy import get_current_tenant, tenant_context
 from tenants.models import Tenant
@@ -37,12 +38,14 @@ class ScriptedProvider:
     """Returns a pre-set verb per call: ``ok`` | ``retry`` | ``permanent``.
     Records the tenant in scope on each call."""
 
+    adapter_id = "scripted"
+
     def __init__(self, script):
         self._script = list(script)
         self._i = 0
         self.seen_tenants = []
 
-    def send(self, message) -> Result:
+    def send(self, ctx, message) -> Result:
         self.seen_tenants.append(get_current_tenant())
         verb = self._script[self._i]
         self._i += 1
@@ -56,17 +59,21 @@ class ScriptedProvider:
 
 
 class UnconfiguredProvider:
-    def send(self, message) -> Result:
+    adapter_id = "unconfigured"
+
+    def send(self, ctx, message) -> Result:
         raise CapabilityUnconfigured("smtp is not configured for this tenant")
 
 
 class CrashThenOkProvider:
     """First call raises an ordinary exception; then works."""
 
+    adapter_id = "crashy"
+
     def __init__(self):
         self._crashed = False
 
-    def send(self, message) -> Result:
+    def send(self, ctx, message) -> Result:
         if not self._crashed:
             self._crashed = True
             raise RuntimeError("connection reset")
@@ -482,3 +489,49 @@ class DrainSourceInvariantTests(SimpleTestCase):
             elif isinstance(node, ast.ImportFrom):
                 head = (node.module or "").split(".")[0]
                 self.assertNotEqual(head, "adapters")
+
+
+class ProviderContractTests(_MailDrainBase):
+    """#215: the provider is handed a context and plain data -- never the ORM
+    row, never the tenant."""
+
+    def test_the_provider_gets_a_context_and_a_mail_message(self):
+        seen = []
+
+        class Recorder:
+            adapter_id = "recorder"
+
+            def send(self, ctx, message) -> Result:
+                seen.append((ctx, message))
+                return Result.ok()
+
+        self.register(Recorder())
+        row = self.enqueue(to_address="to@example.test", body_text="hello there", kind="claim.verification_code")
+
+        mail_drain_once(now=timezone.now())
+
+        [(ctx, message)] = seen
+        self.assertEqual((ctx.tenant_id, ctx.tenant_slug), (self.tenant.public_id, "acme"))
+        self.assertIsInstance(message, MailMessage)
+        self.assertEqual(
+            (message.message_id, message.kind, message.to_address, message.subject, message.body_text),
+            (row.message_id, "claim.verification_code", "to@example.test", "Your verification code", "hello there"),
+        )
+        self.assertNotIsInstance(message, OutboundMessage)
+        self.assertFalse(hasattr(message, "tenant"))
+
+    def test_a_message_with_no_body_or_address_is_passed_as_empty_strings(self):
+        seen = []
+
+        class Recorder:
+            adapter_id = "recorder"
+
+            def send(self, ctx, message) -> Result:
+                seen.append(message)
+                return Result.ok()
+
+        self.register(Recorder())
+        row = self.enqueue()
+        OutboundMessage.all_tenants.filter(pk=row.pk).update(to_address=None, body_text=None)
+        mail_drain_once(now=timezone.now())
+        self.assertEqual((seen[0].to_address, seen[0].body_text), ("", ""))

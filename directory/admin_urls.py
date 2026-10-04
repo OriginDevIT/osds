@@ -3,7 +3,7 @@ from django.urls import path
 from directory import admin_views as views
 from directory import auth_views
 from directory import claim_admin_views as claim_views
-from directory import lead_admin_views
+from directory import adapter_admin_views, lead_admin_views
 from tenants import mail_views
 
 app_name = "directory_admin"
@@ -50,6 +50,23 @@ urlpatterns = [
         name="lead-mark-spam",
     ),
     path("settings/leads/", lead_admin_views.lead_settings, name="lead-settings"),
+    # adapters: settings, deliveries, dead letters (decisions.md §4.12)
+    path("settings/adapters/", adapter_admin_views.adapter_list, name="adapters"),
+    path(
+        "settings/adapters/<str:adapter_id>/",
+        adapter_admin_views.adapter_settings,
+        name="adapter-settings",
+    ),
+    path(
+        "settings/adapters/<str:adapter_id>/deliveries/",
+        adapter_admin_views.adapter_deliveries,
+        name="adapter-deliveries",
+    ),
+    path(
+        "settings/adapters/<str:adapter_id>/deliveries/<str:event_id>/replay/",
+        adapter_admin_views.adapter_replay,
+        name="adapter-replay",
+    ),
     path("listing-types/", views.listing_type_list, name="type-list"),
     path("listing-types/new/", views.listing_type_create, name="type-create"),
     path("listing-types/<slug:key>/", views.listing_type_edit, name="type-edit"),
