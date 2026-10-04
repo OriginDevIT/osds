@@ -9,6 +9,7 @@ from __future__ import annotations
 from django.test import TransactionTestCase
 from django.utils import timezone
 
+from audit.tests.window_clock import pinned_windows
 from directory import leads
 from directory.models import Category, DirectoryUser, Listing, ListingType
 from osds.tenancy import tenant_context
@@ -23,6 +24,8 @@ Role = StaffMembership.Role
 
 class LeadBase(TransactionTestCase):
     def setUp(self):
+        # Every flood lands in one window, however slow the runner (#245).
+        self.enterContext(pinned_windows())
         InstallSetup.objects.create(token_hash="x" * 64, completed_at=timezone.now())
         self.tenant = Tenant.objects.create(
             slug="acme", name="Acme", primary_domain=HOST,

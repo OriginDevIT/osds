@@ -132,6 +132,28 @@ class PaymentSettingsTests(PaymentTestCase):
                 self.tenant, provider=self.provider, values={"nope": "x", "api_key": "k"}, changed_by=self.admin
             )
 
+    def test_a_declared_pattern_is_enforced_without_echoing_the_value(self):
+        from osds.adapter_api import SettingField
+
+        class Patterned:
+            adapter_id = ADAPTER_ID
+
+            def settings_fields(self):
+                return [SettingField("token", "Token", secret=True, pattern=r"tok_[a-z]+"),
+                        SettingField("ids", "Ids", pattern=r"[a-z]+=[0-9]+")]
+
+        for values in ({"token": "WRONG-SECRET-VALUE"}, {"ids": "oops"}):
+            with self.subTest(values=values):
+                with self.assertRaises(settings_service.AdapterSettingsError) as cm:
+                    settings_service.update_adapter_settings(
+                        self.tenant, provider=Patterned(), values=values, changed_by=self.admin)
+                self.assertIn("not in the expected format", str(cm.exception))
+                self.assertNotIn("WRONG-SECRET-VALUE", str(cm.exception))
+        self.assertFalse(Secret.objects.filter(key__startswith=ADAPTER_ID).exists())
+        settings_service.update_adapter_settings(
+            self.tenant, provider=Patterned(), values={"token": "tok_abc", "ids": "a=1"}, changed_by=self.admin)
+        self.assertEqual(get_secret(f"{ADAPTER_ID}_token", tenant=self.tenant), "tok_abc")
+
     def test_the_admin_home_links_to_it(self):
         home = self.client_for(self.admin).get("/admin/", HTTP_HOST="acme.test")
         self.assertContains(home, "Payment settings")

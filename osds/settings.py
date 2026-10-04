@@ -102,6 +102,7 @@ INSTALLED_APPS = [
     # nothing under tenants/, directory/, billing/ or audit/ imports it.
     'adapters.smtp',
     'adapters.webhook',
+    'adapters.stripe',
 ]
 
 # Operators are the installation's people; a directory's users are a separate,
