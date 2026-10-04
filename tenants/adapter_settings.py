@@ -29,6 +29,7 @@ from django.db import transaction
 from audit.command_log import log_conclude, log_received, require_autocommit
 from osds.adapter_api import SCOPE_LABELS
 from osds.adapter_context import adapter_config, provider_id, scope_setting, secret_name
+from osds.setting_pattern import pattern_error
 from tenants import services as tenant_services
 from tenants.models import StaffMembership
 from tenants.secrets import delete_secret, has_secret, set_secret
@@ -125,6 +126,11 @@ def update_adapter_settings(
     for key, field in fields.items():
         if field.required and field.secret and key not in after:
             errors.append(f"{field.label} is required.")
+        # A secret is checked only when typed now; a stored one was checked then.
+        typed = new_secrets.get(key) if field.secret else submitted.get(key)
+        bad = pattern_error(field, typed)
+        if bad:
+            errors.append(bad)
     if errors:
         raise AdapterSettingsError(" ".join(errors))
 

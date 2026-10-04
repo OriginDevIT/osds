@@ -154,6 +154,31 @@ class PaymentSettingsTests(PaymentTestCase):
             self.tenant, provider=Patterned(), values={"token": "tok_abc", "ids": "a=1"}, changed_by=self.admin)
         self.assertEqual(get_secret(f"{ADAPTER_ID}_token", tenant=self.tenant), "tok_abc")
 
+    def test_the_page_refuses_a_value_that_does_not_match_its_pattern(self):
+        from osds.adapter_api import SettingField
+
+        provider = self.provider
+        provider.settings_fields = lambda: [
+            SettingField("account", "Account id", pattern=r"acct_[a-z]+"),
+            SettingField("api_key", "API key", secret=True, pattern=r"tok_[a-z]+"),
+        ]
+        before = dict(Tenant.objects.get(pk=self.tenant.pk).settings)
+        for data in ({"account": "WRONG-ACCOUNT-VALUE", "api_key": "tok_abc"},
+                     {"account": "acct_a", "api_key": "WRONG-SECRET-VALUE"},
+                     {"account": "acct_a1", "api_key": "tok_abc"},
+                     {"account": "acct_a", "api_key": "tok_abc1"}):
+            with self.subTest(data=data):
+                r = self.post(data)
+                self.assertEqual(r.status_code, 200)
+                self.assertContains(r, "is not in the expected format")
+                errors = " ".join(r.context["form"].non_field_errors())
+                for value in data.values():
+                    self.assertNotIn(value, errors)
+                self.assertNotContains(r, data["api_key"])  # a secret is never rendered back
+        self.assertEqual(Tenant.objects.get(pk=self.tenant.pk).settings, before)
+        self.assertFalse(Secret.objects.filter(key__startswith=ADAPTER_ID).exists())
+        self.assertEqual(self.post({"account": "acct_a", "api_key": "tok_abc"}).status_code, 302)
+
     def test_the_admin_home_links_to_it(self):
         home = self.client_for(self.admin).get("/admin/", HTTP_HOST="acme.test")
         self.assertContains(home, "Payment settings")
