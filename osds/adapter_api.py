@@ -73,6 +73,10 @@ class SettingField:
     secret: bool = False
     required: bool = False
     help_text: str = ""
+    # A regular expression the whole value must match, checked by core before
+    # anything is saved. A failure names the field and never echoes the value
+    # (it may be a secret).
+    pattern: str = ""
 
 
 @dataclass(frozen=True)

@@ -13,6 +13,7 @@ from django.test import Client, override_settings
 from django.utils import timezone
 
 from audit.models import CommandLog, OutboundMessage, OutboxEvent, RateLimitCounter
+from audit.tests.window_clock import pinned_windows
 from audit.worker.jobs import build_tick_registry
 from directory import jobs as directory_jobs
 from directory import owner_auth, services
@@ -43,6 +44,8 @@ _FAST_HASH = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 class _OwnerBase(_Base):
     def setUp(self):
         super().setUp()
+        # Every flood lands in one window, however slow the runner (#245).
+        self.enterContext(pinned_windows())
         self.client = Client()
         self.claim = self.own()  # OTHER becomes the sitting owner
         self.owner = DirectoryUser.all_tenants.get(email=OWNER_EMAIL)

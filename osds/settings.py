@@ -93,6 +93,7 @@ INSTALLED_APPS = [
     # The app's own AppConfig.ready() registers the email.send capability;
     # nothing under tenants/, directory/, billing/ or audit/ imports it.
     'adapters.smtp',
+    'adapters.stripe',
 ]
 
 # Operators are the installation's people; a directory's users are a separate,
