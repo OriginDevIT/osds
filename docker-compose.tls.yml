@@ -1,0 +1,61 @@
+# Opt-in HTTPS for a server install (decisions.md §4.13). An overlay, never
+# used on its own:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d --build
+#
+# Adds Caddy, which owns ports 80 and 443 and gets certificates on demand. The
+# app is no longer published. OSDS_CONSOLE_HOST must be set to the real
+# hostname, in the shell or in .env. See "HTTPS on a server" in the README.
+# Needs Docker Compose 2.24 or later (for !reset).
+
+x-osds-tls: &osds-tls
+  # Required here, not defaulted to localhost as in the base file: a certificate
+  # cannot be issued for it.
+  OSDS_CONSOLE_HOST: ${OSDS_CONSOLE_HOST:?set OSDS_CONSOLE_HOST to the public hostname, for example directory.example.com}
+  OSDS_SECURE_COOKIES: "true"
+  # Caddy's own address on the network below, and the only peer whose
+  # X-Forwarded-* headers and tls-ask call the app believes.
+  OSDS_TRUSTED_PROXIES: 172.28.77.10
+
+services:
+  caddy:
+    # An exact tag, never :latest or :2, so an upgrade is a deliberate edit.
+    image: caddy:2.11.6
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Issued certificates and the ACME account. Losing it means reissuing
+      # every certificate, which runs into the CA's rate limits.
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      default:
+        ipv4_address: 172.28.77.10
+    depends_on:
+      osds-app:
+        condition: service_healthy
+
+  osds-app:
+    # Reached through Caddy only.
+    ports: !reset []
+    environment: *osds-tls
+
+  osds-worker:
+    environment: *osds-tls
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.28.77.0/24
+          # Containers that are not pinned draw from the upper half, so none can
+          # take Caddy's address first.
+          ip_range: 172.28.77.128/25
+
+volumes:
+  caddy-data:
+  caddy-config:
