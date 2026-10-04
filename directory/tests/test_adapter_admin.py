@@ -16,8 +16,9 @@ from audit import events
 from audit.models import CommandLog, OutboxDelivery, OutboxEvent
 from audit.outbox import emit
 from directory.tests.lead_base import HOST, LeadBase, Role
-from osds.adapter_api import HttpResponse
+from osds.adapter_api import HttpResponse, SettingField
 from osds.adapter_logging import make_adapter_logger
+from osds.adapters import override_subscribers
 from tenants.models import Tenant
 from tenants.secrets import get_secret, has_secret
 
@@ -251,6 +252,82 @@ class SaveTests(_Base):
         r = self.post(admin, SETTINGS, {"action": "explode"})
         self.assertEqual(r.status_code, 200)
         self.assertEqual(self.config(), {})
+
+
+class PatternedSubscriber:
+    """A stub subscriber whose fields declare a ``pattern`` (#248). Defined
+    here: core tests never import adapter code."""
+
+    id = "stubsub"
+    scopes = ()
+
+    def settings_fields(self):
+        return [
+            SettingField("account", "Account id", pattern=r"acct_[a-z]+"),
+            SettingField("token", "Access token", secret=True, pattern=r"tok_[a-z]+"),
+        ]
+
+    def handle(self, envelope, ctx):
+        raise NotImplementedError
+
+
+class PatternTests(_Base):
+    PAGE = "/admin/settings/adapters/stubsub/"
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(override_subscribers(PatternedSubscriber()))
+
+    def stub_config(self):
+        self.tenant.refresh_from_db()
+        return (self.tenant.settings.get("adapters") or {}).get("stubsub")
+
+    def test_a_value_that_does_not_match_is_refused_without_echoing_it(self):
+        admin = self.client_as(Role.ADMIN)
+        before = dict(self.tenant.settings)
+        cases = [
+            {"account": "WRONG-ACCOUNT-VALUE", "token": "tok_abc"},
+            {"account": "acct_a", "token": "WRONG-SECRET-VALUE"},
+            {"account": "acct_a1", "token": "tok_abc"},  # a partial match is not a match
+            {"account": "acct_a", "token": "tok_abc1"},
+        ]
+        for data in cases:
+            with self.subTest(data=data):
+                r = self.post(admin, self.PAGE, {"action": "save", **data})
+                self.assertEqual(r.status_code, 200)
+                self.assertContains(r, "is not in the expected format")
+                errors = " ".join(r.context["form"].non_field_errors())
+                for value in data.values():
+                    self.assertNotIn(value, errors)
+                self.assertNotContains(r, data["token"])  # a secret is never rendered back
+        self.tenant.refresh_from_db()
+        self.assertEqual(self.tenant.settings, before)  # no config, so no settings_changed either
+        self.assertFalse(has_secret("stubsub_token", tenant=self.tenant))
+
+    def test_a_refusal_names_the_field(self):
+        r = self.post(self.client_as(Role.ADMIN), self.PAGE,
+                      {"action": "save", "account": "nope", "token": "tok_abc"})
+        self.assertContains(r, "Account id is not in the expected format.")
+        self.assertNotContains(r, "Access token is not in the expected format.")
+
+    def test_a_refused_secret_leaves_an_earlier_one_and_the_config_alone(self):
+        admin = self.client_as(Role.ADMIN)
+        self.assertEqual(self.post(admin, self.PAGE, {"action": "save", "account": "acct_a",
+                                                      "token": "tok_one"}).status_code, 302)
+        self.post(admin, self.PAGE, {"action": "save", "account": "acct_b", "token": "WRONG-SECRET-VALUE"})
+        self.assertEqual(get_secret("stubsub_token", tenant=self.tenant), "tok_one")
+        self.assertEqual(self.stub_config(), {"account": "acct_a"})
+
+    def test_values_that_match_are_saved(self):
+        r = self.post(self.client_as(Role.ADMIN), self.PAGE,
+                      {"action": "save", "account": "acct_a", "token": "tok_abc"})
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(self.stub_config(), {"account": "acct_a"})
+        self.assertEqual(get_secret("stubsub_token", tenant=self.tenant), "tok_abc")
+
+    def test_a_blank_field_is_not_pattern_checked(self):
+        r = self.post(self.client_as(Role.ADMIN), self.PAGE, {"action": "save", "account": "", "token": ""})
+        self.assertEqual(r.status_code, 302)
 
 
 class RotateTests(_Base):

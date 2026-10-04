@@ -11,11 +11,10 @@ it.
 
 from __future__ import annotations
 
-import re
-
 from django.db import transaction
 
 from osds.adapter_context import adapter_config, secret_name
+from osds.setting_pattern import pattern_error
 from tenants import services as tenant_services
 from tenants.secrets import delete_secret, has_secret, set_secret
 
@@ -64,11 +63,11 @@ def update_adapter_settings(tenant, *, provider, values: dict, clear: "set[str]"
                     errors.append(f"{f.label} is required.")
             else:
                 config[f.key] = raw
-        # A typed value must have the shape the adapter declares; the message
-        # names the field and never the value, which may be a secret.
+        # A typed value must have the shape the adapter declares.
         typed = new_secrets.get(secret_name(provider.adapter_id, f.key)) if f.secret else config.get(f.key)
-        if f.pattern and typed and not re.fullmatch(f.pattern, str(typed)):
-            errors.append(f"{f.label} is not in the expected format.")
+        bad = pattern_error(f, typed)
+        if bad:
+            errors.append(bad)
     if errors:
         raise AdapterSettingsError(" ".join(errors))
 
