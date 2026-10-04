@@ -1,13 +1,19 @@
 # OSDS — Event Schema, Adapter Interface & Entitlements
 
 **Open Source Directory Site**
-**Status:** Draft v0.13 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
+**Status:** Draft v0.14 · **License:** Apache-2.0 · **Steward:** Origin Development & IT, Inc.
 **Audience:** core maintainers, adapter authors
 
 This document defines the contract between the OSDS core and everything outside it. The core is a multi-tenant directory engine. It knows nothing about email providers, CRMs, payment gateways, or messaging platforms. It emits facts and accepts commands. Adapters translate.
 
 If you are writing an adapter, sections 3, 7 and 8 are the ones you need.
 If you are implementing the paid tiers, section 5 is the whole job.
+
+### Changes from v0.13
+
+- **§8.4.** `X-OSDS-Signature` is `t=<unix>,v1=<hex>`, HMAC-SHA256 over
+  `"<t>.<raw body>"` with a per-tenant key, replacing a body-only HMAC
+  with a per-install key (decisions.md §4.12).
 
 ### Changes from v0.12
 
@@ -1292,7 +1298,7 @@ Secrets never appear in `config`, never appear in event payloads, and are redact
 
 ### 8.4 Non-TypeScript adapters
 
-`GET {base_url}/manifest` returns the manifest. `POST {base_url}/events` receives the event with `X-OSDS-Signature` (HMAC-SHA256 over the raw body, key rotated per install). Responses: `2xx` ok · `409` duplicate · `429` with `Retry-After` · `5xx` retry.
+`GET {base_url}/manifest` returns the manifest. `POST {base_url}/events` receives the event with `X-OSDS-Signature` (`t=<unix>,v1=<hex>`, HMAC-SHA256 over `"<t>.<raw body>"`, per-tenant key; decisions.md §4.12). Responses: `2xx` ok · `409` duplicate · `429` with `Retry-After` · `5xx` retry.
 
 ### 8.5 Agent restrictions — enforced by scope, not by prompt
 
