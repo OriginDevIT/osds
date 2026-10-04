@@ -1,0 +1,47 @@
+# Caddy for the opt-in TLS recipe (docker-compose.tls.yml; decisions.md §4.13).
+#
+# Certificates are issued on demand, the first time a name is requested, and
+# only after the app agrees: the console host and every verified tenant domain
+# get a certificate, nothing else does.
+{
+	on_demand_tls {
+		ask http://osds-app:8000/_internal/tls-ask
+	}
+}
+
+# Plain HTTP. Domain verification fetches /.well-known/osds-challenge here and
+# follows redirects, so it is proxied as it is and never sent to HTTPS: the
+# redirect would need a certificate the app will not approve until the domain is
+# verified. Everything else goes to HTTPS.
+http:// {
+	@internal path /_internal/*
+	handle @internal {
+		respond 404
+	}
+
+	handle /.well-known/osds-challenge* {
+		reverse_proxy osds-app:8000
+	}
+
+	handle {
+		redir https://{host}{uri} permanent
+	}
+}
+
+https:// {
+	tls {
+		on_demand
+	}
+
+	# The ask endpoint is for this proxy alone. The app also refuses a relayed
+	# request, since Caddy adds X-Forwarded-* headers to it, but a visitor should
+	# not get as far as asking.
+	@internal path /_internal/*
+	handle @internal {
+		respond 404
+	}
+
+	handle {
+		reverse_proxy osds-app:8000
+	}
+}

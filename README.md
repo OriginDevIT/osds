@@ -67,6 +67,30 @@ no `X-Forwarded-*` headers to that call. Your proxy must also:
   to HTTPS**. Domain verification fetches that URL over HTTP; a redirect needs a
   certificate the app will not approve until the domain is verified.
 
+### HTTPS on a server
+For a server with a public address, an optional overlay adds Caddy, which owns
+ports 80 and 443, gets certificates from Let's Encrypt on demand, and passes the
+app only the names it approves. Everything in the section above is already set
+for you. The default `docker-compose.yml` is unchanged; this is opt-in.
+
+1. **DNS.** Point an A (and AAAA, if you have IPv6) record for the hostname at
+   the server, and open ports 80 and 443. Add the same records for each tenant
+   domain later, as you verify them.
+2. **Name the console.** `OSDS_CONSOLE_HOST` must be a real, public hostname
+   with at least one dot, such as `directory.example.com`, set in your shell or
+   `.env`. Not `localhost`, not an IP address: the app will not approve a
+   certificate for either, and the overlay refuses to start without it.
+3. **Start it.**
+
+       docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d --build
+
+Then open `https://<your hostname>`. The first request for a name takes a few
+seconds while its certificate is issued. The app is no longer published on port
+8000; Caddy is the only way in. Certificates live in the `caddy-data` volume, so
+keep it with your backups. The overlay needs Docker Compose 2.24 or later, and
+uses the address range `172.28.77.0/24`; if that clashes with a network on your
+host, see decisions.md §4.13.
+
 ## Documentation
 - [Specification](docs/spec/events-and-adapters.md)
 - [Receiving webhooks](docs/webhook.md)
