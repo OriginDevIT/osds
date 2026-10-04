@@ -305,3 +305,85 @@ class ThrottleTests(_NoticeBase):
         claim = Claim.all_tenants.get(tenant=self.tenant)
         self.assertEqual(claim.review_reason, "chosen")
         self.assertLessEqual(message.created_at, timezone.now())
+
+
+class TrailingFlushTests(_NoticeBase):
+    """#241: a claim a throttle deferred is announced once the window has
+    passed, exactly once, with no later claim needed."""
+
+    def setUp(self):
+        super().setUp()
+        self.editor = self.op(Role.EDITOR)
+
+    def flush(self, *, minutes_from_now):
+        from directory import jobs
+
+        return jobs.claim_notice_flush(
+            now=timezone.now() + timedelta(minutes=minutes_from_now)
+        )
+
+    def test_a_claim_inside_the_window_is_announced_after_it(self):
+        self.submit(claimant=self.other_claimant(1))  # announced inline
+        self.submit(claimant=self.other_claimant(2))  # inside the window: throttled
+        self.assertEqual(self.notices().count(), 1)
+
+        early = self.flush(minutes_from_now=5)  # window still open
+        self.assertEqual((early.done, self.notices().count()), (0, 1))
+
+        late = self.flush(minutes_from_now=20)
+        self.assertEqual((late.done, late.more), (1, False))
+        flushed = self.notices(self.editor.email).order_by("id").last()
+        self.assertEqual(self.notices().count(), 2)
+        self.assertIn("2 claims are waiting", flushed.body_text)
+
+    def test_nothing_is_sent_twice(self):
+        self.submit(claimant=self.other_claimant(1))
+        self.submit(claimant=self.other_claimant(2))
+        self.assertEqual(self.flush(minutes_from_now=20).done, 1)
+        self.assertEqual(self.flush(minutes_from_now=21).done, 0)
+        self.assertEqual(self.flush(minutes_from_now=60).done, 0)
+        self.assertEqual(self.notices().count(), 2)
+
+    def test_a_claim_already_announced_inline_is_not_flushed(self):
+        self.submit(claimant=self.other_claimant(1))
+        self.assertEqual(self.flush(minutes_from_now=20).done, 0)
+        self.assertEqual(self.notices().count(), 1)
+
+    def test_a_dispute_inside_the_window_is_announced_after_it(self):
+        self.submit(claimant=self.other_claimant(1))
+        self.own()
+        self.submit(claimant=DANA)  # a dispute, throttled
+        self.assertEqual(self.notices(self.editor.email).count(), 1)
+        self.assertEqual(self.flush(minutes_from_now=20).done, 1)
+        self.assertEqual(self.notices(self.editor.email).count(), 2)
+
+    def test_a_decided_claim_is_not_announced(self):
+        claim = self.submit(claimant=self.other_claimant(1))
+        second = self.submit(claimant=self.other_claimant(2))
+        self.reject(second, self.editor)
+        self.approve(claim, self.editor)
+        self.assertEqual(self.flush(minutes_from_now=20).done, 0)
+
+    def test_same_recipients_and_no_claimant_text(self):
+        moderator = self.op(Role.MODERATOR)
+        claimant = {**self.other_claimant(2), "name": "Zed Mallory-Unique"}
+        self.submit(claimant=self.other_claimant(1))
+        self.submit(claimant=claimant)
+        self.flush(minutes_from_now=20)
+        told = set(self.notices().values_list("to_address", flat=True))
+        self.assertEqual(told, {self.editor.email})
+        self.assertNotIn(moderator.email, told)
+        text = "\n".join(m.subject + m.body_text for m in self.notices())
+        self.assertNotIn("zed", text.lower())
+
+    def test_it_is_registered_and_takes_now_with_no_default(self):
+        import io
+        import inspect
+
+        from audit.worker.jobs import build_tick_registry
+        from directory import jobs
+
+        names = {j.name for j in build_tick_registry(out=io.StringIO()).jobs}
+        self.assertIn("claim_notice_flush", names)
+        param = inspect.signature(jobs.claim_notice_flush).parameters["now"]
+        self.assertIs(param.default, inspect.Parameter.empty)

@@ -50,6 +50,10 @@ def build_tick_registry(*, out: IO[str]) -> TickRegistry:
     registry.register(
         "lead_notice_flush", directory_jobs.lead_notice_flush, every=TICK_PERIOD
     )
+    # Claims the operator-notice throttle deferred (decisions.md §4.6, #241).
+    registry.register(
+        "claim_notice_flush", directory_jobs.claim_notice_flush, every=TICK_PERIOD
+    )
     # Retention sweeps (spec §11.2): daily, idempotent, bounded per call.
     registry.register(
         "import_pre_image_retention",
