@@ -1,0 +1,57 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}{{ adapter_id }} settings{% endblock %}
+{% block content %}
+<p><a href="{% url 'directory_admin:adapters' %}">&larr; Integrations</a></p>
+<h1>{{ adapter_id }}</h1>
+
+{% if shown_once %}
+  <div class="field-row">
+    <strong>Copy this now. It is shown once and cannot be recovered.</strong>
+    {% for key, value in shown_once.items %}
+      <p>{{ key }}: <code>{{ value }}</code></p>
+    {% endfor %}
+    <p class="muted">Use it to verify each request's signature. Rotating replaces it immediately.</p>
+  </div>
+{% endif %}
+
+{% if test_result %}
+  <p class="{% if test_result.ok %}messages{% else %}errors{% endif %}">
+    Test event: {% if test_result.ok %}delivered{% else %}not delivered{% endif %} &mdash; {{ test_result.detail }}
+  </p>
+{% endif %}
+
+<p class="muted">
+  {% if health.failing %}<strong>Failing.</strong> {{ health.retrying }} retrying, {{ health.dead }} gave up
+    (last error: {{ health.last_error|default:"none" }}).{% else %}Deliveries are healthy.{% endif %}
+  <a href="{% url 'directory_admin:adapter-deliveries' adapter_id=adapter_id %}">Deliveries</a>
+</p>
+{% if host %}<p class="muted">Sends to <strong>{{ host }}</strong>.</p>{% endif %}
+
+{% if form.non_field_errors %}<ul class="errors">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+<form method="post">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="save">
+  {{ form.as_p }}
+  {% if scopes %}<p class="muted">Contact details and message text are withheld from this integration unless you allow them above. Allowing one releases it for every event the integration receives.</p>{% endif %}
+  <button type="submit">Save</button>
+</form>
+
+{% for key in rotatable %}
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="rotate"><input type="hidden" name="key" value="{{ key }}">
+    <p>{{ key }}: {% if key in stored %}set{% else %}not set{% endif %}
+       <button type="submit">{% if key in stored %}Rotate{% else %}Generate{% endif %}</button></p>
+  </form>
+{% endfor %}
+
+{% if can_test %}
+  <form method="post">
+    {% csrf_token %}<input type="hidden" name="action" value="test">
+    <button type="submit">Send a test event</button>
+  </form>
+{% endif %}
+
+<p class="muted">{% if allow_private %}This deployment allows delivery to private-network addresses.{% else %}Delivery to private-network addresses is blocked. The deployment can allow it.{% endif %}
+Loopback and the cloud metadata address are never reachable.</p>
+{% endblock %}

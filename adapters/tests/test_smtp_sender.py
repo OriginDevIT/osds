@@ -14,6 +14,7 @@ from unittest import mock
 from django.test import TestCase
 
 from adapters.smtp.sender import SmtpSender
+from osds.adapter_context import build_context
 from osds.adapters import CapabilityUnconfigured
 from tenants.models import Tenant
 from tenants.secrets import set_secret
@@ -47,6 +48,16 @@ class SmtpSenderTests(TestCase):
         self.tenant = Tenant.objects.create(slug="acme", name="Acme")
         self.sender = SmtpSender()
 
+    def _ctx(self):
+        # Built per call: the tests change ``self.tenant.settings`` between them.
+        return build_context(self.tenant, self.sender)
+
+    def _send(self, message):
+        return self.sender.send(self._ctx(), message)
+
+    def _available(self):
+        return self.sender.available(self._ctx())
+
     def _configure(self, **overrides):
         cfg = {
             "host": "smtp.example.test",
@@ -62,23 +73,23 @@ class SmtpSenderTests(TestCase):
     def test_missing_host_raises_capability_unconfigured(self):
         self._configure(host="")
         with self.assertRaises(CapabilityUnconfigured):
-            self.sender.send(_message(self.tenant))
+            self._send(_message(self.tenant))
 
     def test_missing_from_email_raises_capability_unconfigured(self):
         self._configure(from_email="")
         with self.assertRaises(CapabilityUnconfigured):
-            self.sender.send(_message(self.tenant))
+            self._send(_message(self.tenant))
 
     def test_missing_smtp_settings_entirely_raises_capability_unconfigured(self):
         self.tenant.settings = {}
         with self.assertRaises(CapabilityUnconfigured):
-            self.sender.send(_message(self.tenant))
+            self._send(_message(self.tenant))
 
     def test_no_smtp_call_is_made_when_unconfigured(self):
         self._configure(host="")
         with mock.patch("adapters.smtp.sender.smtplib.SMTP") as smtp_cls:
             with self.assertRaises(CapabilityUnconfigured):
-                self.sender.send(_message(self.tenant))
+                self._send(_message(self.tenant))
         smtp_cls.assert_not_called()
 
     # -- success ----------------------------------------------------------
@@ -88,7 +99,7 @@ class SmtpSenderTests(TestCase):
         with mock.patch(
             "adapters.smtp.sender.smtplib.SMTP", return_value=client
         ) as smtp_cls:
-            result = self.sender.send(_message(self.tenant))
+            result = self._send(_message(self.tenant))
         smtp_cls.assert_called_once_with("smtp.example.test", 2525, timeout=30)
         self.assertEqual(result.status, "ok")
         client.send_message.assert_called_once()
@@ -97,7 +108,7 @@ class SmtpSenderTests(TestCase):
         self._configure(security="starttls")
         client = _fake_client()
         with mock.patch("adapters.smtp.sender.smtplib.SMTP", return_value=client):
-            self.sender.send(_message(self.tenant))
+            self._send(_message(self.tenant))
         client.starttls.assert_called_once()
         ctx = client.starttls.call_args.kwargs["context"]
         self.assertIsInstance(ctx, ssl.SSLContext)
@@ -110,7 +121,7 @@ class SmtpSenderTests(TestCase):
         with mock.patch(
             "adapters.smtp.sender.smtplib.SMTP_SSL", return_value=client
         ) as ssl_cls, mock.patch("adapters.smtp.sender.smtplib.SMTP") as plain_cls:
-            result = self.sender.send(_message(self.tenant))
+            result = self._send(_message(self.tenant))
         self.assertEqual(result.status, "ok")
         plain_cls.assert_not_called()
         client.starttls.assert_not_called()
@@ -124,7 +135,7 @@ class SmtpSenderTests(TestCase):
         self._configure(security="none")
         client = _fake_client()
         with mock.patch("adapters.smtp.sender.smtplib.SMTP", return_value=client):
-            self.sender.send(_message(self.tenant))
+            self._send(_message(self.tenant))
         client.starttls.assert_not_called()
 
     def test_starttls_not_offered_fails_the_send_and_never_sends_in_clear(self):
@@ -133,7 +144,7 @@ class SmtpSenderTests(TestCase):
             starttls_exc=smtplib.SMTPNotSupportedError("STARTTLS not supported")
         )
         with mock.patch("adapters.smtp.sender.smtplib.SMTP", return_value=client):
-            result = self.sender.send(_message(self.tenant))
+            result = self._send(_message(self.tenant))
         self.assertEqual(result.status, "failed")
         self.assertFalse(result.permanent)
         client.send_message.assert_not_called()
@@ -144,7 +155,7 @@ class SmtpSenderTests(TestCase):
             "adapters.smtp.sender.smtplib.SMTP_SSL",
             side_effect=ssl.SSLCertVerificationError("bad cert"),
         ):
-            result = self.sender.send(_message(self.tenant))
+            result = self._send(_message(self.tenant))
         self.assertEqual(result.status, "failed")
         self.assertFalse(result.permanent)
 
@@ -152,7 +163,7 @@ class SmtpSenderTests(TestCase):
         self._configure(security="none", username="bot")
         with mock.patch("adapters.smtp.sender.smtplib.SMTP") as smtp_cls:
             with self.assertRaises(CapabilityUnconfigured):
-                self.sender.send(_message(self.tenant))
+                self._send(_message(self.tenant))
         smtp_cls.assert_not_called()
 
     def test_missing_or_unknown_security_is_unconfigured(self):
@@ -160,13 +171,13 @@ class SmtpSenderTests(TestCase):
             with self.subTest(security=security):
                 self._configure(security=security)
                 with self.assertRaises(CapabilityUnconfigured):
-                    self.sender.send(_message(self.tenant))
+                    self._send(_message(self.tenant))
 
     def test_the_legacy_use_tls_key_is_not_read(self):
         self._configure(use_tls=True)
         del self.tenant.settings["smtp"]["security"]
         with self.assertRaises(CapabilityUnconfigured):
-            self.sender.send(_message(self.tenant))
+            self._send(_message(self.tenant))
 
     # -- available() ------------------------------------------------------
     def test_available_truth_table(self):
@@ -184,18 +195,18 @@ class SmtpSenderTests(TestCase):
         for overrides, expected in cases:
             with self.subTest(overrides=overrides):
                 self._configure(**overrides)
-                self.assertIs(self.sender.available(self.tenant), expected)
+                self.assertIs(self._available(), expected)
 
     def test_available_false_with_no_settings_or_an_empty_skip_block(self):
         self.tenant.settings = {}
-        self.assertFalse(self.sender.available(self.tenant))
+        self.assertFalse(self._available())
         self.tenant.settings = {"smtp": {}}
-        self.assertFalse(self.sender.available(self.tenant))
+        self.assertFalse(self._available())
 
     def test_available_means_configured_not_reachable(self):
         self._configure()
         with mock.patch("adapters.smtp.sender.smtplib.SMTP") as smtp_cls:
-            self.assertTrue(self.sender.available(self.tenant))
+            self.assertTrue(self._available())
         smtp_cls.assert_not_called()
 
     def test_username_resolves_the_secret_password_and_logs_in(self):
@@ -203,21 +214,21 @@ class SmtpSenderTests(TestCase):
         set_secret("smtp_password", "s3cret", tenant=self.tenant)
         client = _fake_client()
         with mock.patch("adapters.smtp.sender.smtplib.SMTP", return_value=client):
-            self.sender.send(_message(self.tenant))
+            self._send(_message(self.tenant))
         client.login.assert_called_once_with("bot", "s3cret")
 
     def test_no_username_skips_login(self):
         self._configure(username="")
         client = _fake_client()
         with mock.patch("adapters.smtp.sender.smtplib.SMTP", return_value=client):
-            self.sender.send(_message(self.tenant))
+            self._send(_message(self.tenant))
         client.login.assert_not_called()
 
     def test_from_and_to_and_subject_are_set_on_the_message(self):
         self._configure(from_email="noreply@example.test")
         client = _fake_client()
         with mock.patch("adapters.smtp.sender.smtplib.SMTP", return_value=client):
-            self.sender.send(_message(self.tenant, to_address="claimant@example.test"))
+            self._send(_message(self.tenant, to_address="claimant@example.test"))
         sent = client.send_message.call_args[0][0]
         self.assertEqual(sent["From"], "noreply@example.test")
         self.assertEqual(sent["To"], "claimant@example.test")
@@ -229,7 +240,7 @@ class SmtpSenderTests(TestCase):
         exc = smtplib.SMTPRecipientsRefused({"claimant@example.test": (550, b"no such user")})
         client = _fake_client(send_exc=exc)
         with mock.patch("adapters.smtp.sender.smtplib.SMTP", return_value=client):
-            result = self.sender.send(_message(self.tenant))
+            result = self._send(_message(self.tenant))
         self.assertEqual(result.status, "failed")
         self.assertTrue(result.permanent)
         self.assertEqual(result.reason, "SMTPRecipientsRefused")
@@ -239,7 +250,7 @@ class SmtpSenderTests(TestCase):
         exc = smtplib.SMTPDataError(550, b"message refused")
         client = _fake_client(send_exc=exc)
         with mock.patch("adapters.smtp.sender.smtplib.SMTP", return_value=client):
-            result = self.sender.send(_message(self.tenant))
+            result = self._send(_message(self.tenant))
         self.assertEqual(result.status, "failed")
         self.assertTrue(result.permanent)
 
@@ -249,7 +260,7 @@ class SmtpSenderTests(TestCase):
         exc = smtplib.SMTPDataError(450, b"try again later")
         client = _fake_client(send_exc=exc)
         with mock.patch("adapters.smtp.sender.smtplib.SMTP", return_value=client):
-            result = self.sender.send(_message(self.tenant))
+            result = self._send(_message(self.tenant))
         self.assertEqual(result.status, "failed")
         self.assertFalse(result.permanent)
 
@@ -259,7 +270,7 @@ class SmtpSenderTests(TestCase):
         exc = smtplib.SMTPAuthenticationError(535, b"authentication failed")
         client = _fake_client(login_exc=exc)
         with mock.patch("adapters.smtp.sender.smtplib.SMTP", return_value=client):
-            result = self.sender.send(_message(self.tenant))
+            result = self._send(_message(self.tenant))
         self.assertEqual(result.status, "failed")
         self.assertFalse(result.permanent)
 
@@ -268,7 +279,7 @@ class SmtpSenderTests(TestCase):
         exc = smtplib.SMTPSenderRefused(550, b"sender refused", "noreply@example.test")
         client = _fake_client(send_exc=exc)
         with mock.patch("adapters.smtp.sender.smtplib.SMTP", return_value=client):
-            result = self.sender.send(_message(self.tenant))
+            result = self._send(_message(self.tenant))
         self.assertEqual(result.status, "failed")
         self.assertFalse(result.permanent)
 
@@ -278,7 +289,7 @@ class SmtpSenderTests(TestCase):
             "adapters.smtp.sender.smtplib.SMTP",
             side_effect=ConnectionRefusedError("connection refused"),
         ):
-            result = self.sender.send(_message(self.tenant))
+            result = self._send(_message(self.tenant))
         self.assertEqual(result.status, "failed")
         self.assertFalse(result.permanent)
 
@@ -290,7 +301,7 @@ class SmtpSenderTests(TestCase):
         )
         client = _fake_client(send_exc=exc)
         with mock.patch("adapters.smtp.sender.smtplib.SMTP", return_value=client):
-            result = self.sender.send(_message(self.tenant))
+            result = self._send(_message(self.tenant))
         self.assertNotIn("claimant@example.test", result.reason)
         self.assertEqual(result.reason, "SMTPRecipientsRefused")
 
@@ -302,8 +313,8 @@ class SmtpSenderTests(TestCase):
         client = _fake_client(send_exc=exc)
         message = _message(self.tenant, body_text="the-secret-code-987654")
         with mock.patch("adapters.smtp.sender.smtplib.SMTP", return_value=client):
-            with self.assertLogs("osds.mail.smtp", level="WARNING") as captured:
-                self.sender.send(message)
+            with self.assertLogs("osds.adapters.smtp", level="WARNING") as captured:
+                self._send(message)
         joined = "\n".join(captured.output)
         self.assertNotIn("claimant@example.test", joined)
         self.assertNotIn("the-secret-code-987654", joined)

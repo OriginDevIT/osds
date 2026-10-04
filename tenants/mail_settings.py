@@ -2,7 +2,7 @@
 
 Core validates and renders this configuration; it never reads it to decide
 whether mail can be sent -- that question goes to the ``email.send``
-provider's ``available(tenant)`` through ``osds.adapters.email_available``.
+provider's ``available(ctx)`` through ``osds.adapters.email_available``.
 """
 
 from __future__ import annotations

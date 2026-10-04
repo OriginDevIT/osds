@@ -88,6 +88,7 @@ PY
     exec gunicorn osds.wsgi:application \
       --bind 0.0.0.0:8000 \
       --workers "${GUNICORN_WORKERS:-3}" \
+      --logger-class osds.gunicorn_logging.MaskingLogger \
       --access-logfile - --error-logfile -
     ;;
   *)

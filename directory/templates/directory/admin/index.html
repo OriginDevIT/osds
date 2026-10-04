@@ -13,6 +13,7 @@
     {% if membership.role >= 4 %}<li><a href="{% url 'billing_admin:payment-settings' %}">Payment settings</a></li>{% endif %}
     {% if membership.role >= 4 %}<li><a href="{% url 'directory_admin:mail-settings' %}">Mail settings</a></li>{% endif %}
     {% if membership.role >= 4 %}<li><a href="{% url 'directory_admin:lead-settings' %}">Lead forms</a></li>{% endif %}
+    {% if membership.role >= 4 %}<li><a href="{% url 'directory_admin:adapters' %}">Integrations</a></li>{% endif %}
   </ul>
   <form method="post" action="{% url 'directory_admin:logout' %}">
     {% csrf_token %}<button type="submit">Sign out</button>

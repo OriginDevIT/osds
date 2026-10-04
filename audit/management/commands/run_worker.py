@@ -2,8 +2,9 @@
 
 One instance per installation, guarded by a Postgres advisory lock. LISTEN on
 ``osds_outbox`` for latency, poll every second as the reliable fallback
-(spec §11.1). The adapter registry is empty until block 5, so today the drain
-fans events out to nothing -- which is all CSV import needs from the worker.
+(spec §11.1). The drain fans each event out to the registered subscribers that
+want it -- the bundled webhook adapter, for a tenant that has configured it --
+after redacting what the tenant has not granted (decisions.md §4.12).
 
 Shutdown contract, honoured by ``docker-compose.yml`` (``stop_grace_period: 10s``):
 

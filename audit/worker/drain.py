@@ -37,11 +37,20 @@ releases the stream.
 1h is a cap, not a term of the sequence. The initial delivery is immediate;
 the first retry follows ~1s. ``attempt`` counts *completed* attempts and is
 written only after the handler returns. ``attempt >= 12`` dead-letters; a
-``permanent`` failure dead-letters at once.
+``permanent`` failure dead-letters at once. A subscriber's own retry hint (a
+``Retry-After``) is honoured as ``max(backoff, hint)``, never longer than the 1h
+cap (decisions.md §4.12): the drain never retries sooner than the schedule, and
+never waits past the cap because a remote asked it to.
+
+**Redaction** (invariant 8, #238): the handler receives the envelope after
+``audit.redaction.redact``, with only the scopes the tenant granted, and an
+``AdapterContext`` for the delivery's tenant. This is the one place an envelope
+reaches a subscriber.
 """
 
 from __future__ import annotations
 
+import logging
 import random
 from dataclasses import dataclass
 from datetime import timedelta
@@ -51,8 +60,12 @@ from django.db.models import Exists, OuterRef
 
 from audit.envelope import to_wire
 from audit.models import OutboxDelivery, OutboxEvent
+from audit.redaction import CONTACT, LISTING_EVENTS, redact
+from osds.adapter_context import adapter_config, build_context, granted_scopes, provider_id
 from osds.adapters import Result, subscribers_for
 from osds.tenancy import tenant_context
+
+logger = logging.getLogger("osds.drain")
 
 MAX_ATTEMPTS = 12
 BACKOFF_CAP_SECONDS = 3600
@@ -103,6 +116,27 @@ def _delivery_tenant(event: OutboxEvent):
     return None if event.type.startswith(_TENANT_PREFIX) else event.tenant
 
 
+def _wants(subscriber, event: OutboxEvent) -> bool:
+    """A subscriber's per-tenant filter, when it has one. A tenant that has not
+    configured an adapter gets no delivery rows for it. A filter that raises is
+    a bug in the adapter, not a reason to drop the event: deliver, and let the
+    handler decide."""
+    wants = getattr(subscriber, "wants", None)
+    if wants is None:
+        return True
+    tenant = _delivery_tenant(event)
+    # The adapter gets its own config, never the tenant row (spec §8, #215);
+    # ``None`` for a tenant.* event, which has no tenant to configure it.
+    config = None if tenant is None else adapter_config(
+        tenant, provider_id(subscriber), config_key=getattr(subscriber, "config_key", None)
+    )
+    try:
+        return bool(wants(event.type, config))
+    except Exception as exc:
+        logger.warning("subscriber %s wants() failed: %s", subscriber.id, type(exc).__name__)
+        return True
+
+
 def fan_out_once(*, now) -> FanOutResult:
     """Create the missing ``OutboxDelivery`` rows for every ``pending`` event
     and mark each event ``dispatched``.
@@ -131,6 +165,8 @@ def fan_out_once(*, now) -> FanOutResult:
             if locked.status != OutboxEvent.Status.PENDING:
                 continue
             for subscriber in subscribers_for(locked.type):
+                if not _wants(subscriber, locked):
+                    continue
                 _, made = OutboxDelivery.all_tenants.get_or_create(
                     event=locked,
                     adapter_id=subscriber.id,
@@ -227,6 +263,24 @@ def _record(
     return bool(applied)
 
 
+def _private_custom_fields(event: OutboxEvent) -> frozenset:
+    """Keys of the custom fields the operator marked non-public on the listing
+    type this listing event is about. They are withheld without ``pii:contact``."""
+    if event.type not in LISTING_EVENTS:
+        return frozenset()
+    type_key = (event.data or {}).get("type")
+    if not type_key:
+        return frozenset()
+    from directory.models import ListingType
+
+    listing_type = ListingType.all_tenants.filter(tenant=event.tenant, key=type_key).first()
+    if listing_type is None:
+        return frozenset()
+    return frozenset(
+        f["key"] for f in (listing_type.fields or []) if f.get("key") and not f.get("public", True)
+    )
+
+
 def attempt_delivery(delivery: OutboxDelivery, *, now) -> str:
     """Run one delivery attempt for an already-claimed row. Returns
     ``"delivered"`` | ``"retried"`` | ``"dead"`` | ``"discarded"`` -- the last
@@ -248,11 +302,23 @@ def attempt_delivery(delivery: OutboxDelivery, *, now) -> str:
         )
         return "dead" if applied else "discarded"
 
-    envelope = to_wire(delivery.event)
+    event = delivery.event
+    tenant = delivery.tenant  # None for a tenant.* event
+    granted = granted_scopes(subscriber, tenant)
+    envelope = redact(
+        to_wire(event),
+        granted=granted,
+        private_custom_fields=(
+            _private_custom_fields(event) if CONTACT not in granted else frozenset()
+        ),
+    )
+    ctx = build_context(tenant, subscriber) if tenant is not None else None
     try:
-        result = subscriber.handle(envelope)
+        result = subscriber.handle(envelope, ctx)
     except Exception as exc:  # a returned exception is a retryable failure
-        result = Result.failed(f"{type(exc).__name__}: {exc}")
+        # The class only, never ``str(exc)``: for an HTTP or SMTP error the text
+        # can echo a URL, an address or a credential (spec §8.3).
+        result = Result.failed(type(exc).__name__)
 
     completed = delivery.attempt + 1
 
@@ -265,8 +331,6 @@ def attempt_delivery(delivery: OutboxDelivery, *, now) -> str:
         )
         return "delivered" if applied else "discarded"
 
-    # result.retry_after_ms is a subscriber hint; the exponential schedule
-    # (#172) is what the drain actually applies.
     reason = result.reason or result.status
     permanent = result.status == "failed" and result.permanent
     if permanent or completed >= MAX_ATTEMPTS:
@@ -279,12 +343,19 @@ def attempt_delivery(delivery: OutboxDelivery, *, now) -> str:
         )
         return "dead" if applied else "discarded"
 
+    delay = backoff(completed)
+    if result.retry_after_ms:
+        # max(backoff, hint), clamped to the 1h cap (decisions.md §4.12).
+        delay = min(
+            max(delay, timedelta(milliseconds=result.retry_after_ms)),
+            timedelta(seconds=BACKOFF_CAP_SECONDS),
+        )
     applied = _record(
         delivery,
         now=now,
         status=OutboxDelivery.Status.PENDING,
         attempt=completed,
-        next_attempt_at=now + backoff(completed),
+        next_attempt_at=now + delay,
         error=reason,
     )
     return "retried" if applied else "discarded"

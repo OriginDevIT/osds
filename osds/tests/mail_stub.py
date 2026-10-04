@@ -12,14 +12,16 @@ from osds.adapters import Result, override_capability
 
 
 class StubEmailProvider:
+    adapter_id = "stub"
+
     def __init__(self, available: bool = True):
         self._available = available
         self.sent: list = []
 
-    def available(self, tenant) -> bool:
+    def available(self, ctx) -> bool:
         return self._available
 
-    def send(self, message) -> Result:
+    def send(self, ctx, message) -> Result:
         self.sent.append(message)
         return Result.ok()
 

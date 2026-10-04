@@ -1,0 +1,22 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Integrations{% endblock %}
+{% block content %}
+<p><a href="{% url 'directory_admin:index' %}">&larr; Admin home</a></p>
+<h1>Integrations</h1>
+<table>
+  <thead><tr><th>Integration</th><th>Status</th><th>Delivery</th><th></th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td>{{ row.id }}</td>
+      <td>{% if row.enabled %}On{% else %}Off{% endif %}</td>
+      <td>{% if row.health.failing %}<strong>Failing</strong>: {{ row.health.retrying }} retrying, {{ row.health.dead }} gave up{% else %}OK{% endif %}</td>
+      <td><a href="{% url 'directory_admin:adapter-settings' adapter_id=row.id %}">Settings</a> &middot;
+          <a href="{% url 'directory_admin:adapter-deliveries' adapter_id=row.id %}">Deliveries</a></td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="4" class="muted">No integration can be configured here.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

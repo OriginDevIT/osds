@@ -12,7 +12,7 @@ from django.test import SimpleTestCase, TestCase
 from audit.envelope import to_wire
 from audit.models import OutboxDelivery, OutboxEvent
 from audit.outbox import emit
-from osds.adapters import Result, subscribers_for
+from osds.adapters import Result, override_subscribers, subscribers_for
 from tenants.models import Tenant
 
 
@@ -138,10 +138,15 @@ class ToWireTests(TestCase):
 
 
 class RegistrySeamTests(SimpleTestCase):
-    def test_subscribers_for_is_empty(self):
-        for event_type in ("listing.created", "tenant.created", "any.thing"):
-            self.assertEqual(subscribers_for(event_type), [])
-        self.assertIsInstance(subscribers_for("x"), list)
+    def test_subscribers_for_is_empty_when_no_adapter_is_installed(self):
+        with override_subscribers():
+            for event_type in ("listing.created", "tenant.created", "any.thing"):
+                self.assertEqual(subscribers_for(event_type), [])
+            self.assertIsInstance(subscribers_for("x"), list)
+
+    def test_the_bundled_webhook_adapter_registers_itself_at_startup(self):
+        # Outside override_subscribers: what AppConfig.ready() registered.
+        self.assertEqual([s.id for s in subscribers_for("lead.captured")], ["webhook"])
 
     def test_result_constructors(self):
         self.assertEqual(Result.ok().status, "ok")

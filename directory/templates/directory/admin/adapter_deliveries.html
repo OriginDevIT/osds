@@ -1,0 +1,39 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}{{ adapter_id }} deliveries{% endblock %}
+{% block content %}
+<p><a href="{% url 'directory_admin:adapter-settings' adapter_id=adapter_id %}">&larr; {{ adapter_id }}</a></p>
+<h1>Deliveries</h1>
+<p>
+  {% if health.failing %}<strong>Failing:</strong> {{ health.retrying }} retrying, {{ health.dead }} gave up.
+    Last error: {{ health.last_error|default:"none" }}.{% else %}No failures right now.{% endif %}
+  {{ health.delivered }} delivered in the last 24 hours{% if health.last_delivered_at %}; last at {{ health.last_delivered_at }}{% endif %}.
+</p>
+<p>
+  <a href="?tab=recent">{% if tab == "recent" %}<strong>{% endif %}Recent{% if tab == "recent" %}</strong>{% endif %}</a> &middot;
+  <a href="?tab=dead">{% if tab == "dead" %}<strong>{% endif %}Gave up ({{ health.dead }}){% if tab == "dead" %}</strong>{% endif %}</a>
+</p>
+<table>
+  <thead><tr><th>Event</th><th>Status</th><th>Tries</th><th>Last try</th><th>Error</th><th></th></tr></thead>
+  <tbody>
+  {% for d in rows %}
+    <tr>
+      <td>{{ d.event.type }}<br><span class="muted">{{ d.event.event_id }}</span></td>
+      <td>{{ d.get_status_display }}</td>
+      <td>{{ d.attempt }}</td>
+      <td>{{ d.last_attempted_at|default:"-" }}</td>
+      <td>{{ d.last_error|default:"" }}</td>
+      <td>
+        {% if d.status == "dead" %}
+          {% if d.event.payload_nulled_at %}<span class="muted">details removed</span>{% else %}
+          <form method="post" action="{% url 'directory_admin:adapter-replay' adapter_id=adapter_id event_id=d.event.event_id %}">
+            {% csrf_token %}<button type="submit">Send again</button>
+          </form>{% endif %}
+        {% endif %}
+      </td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="6" class="muted">Nothing here.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
