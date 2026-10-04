@@ -110,7 +110,11 @@ INSTALLED_APPS = [
 AUTH_USER_MODEL = 'tenants.Operator'
 
 MIDDLEWARE = [
-    # First: nothing else validates the Host header (ALLOWED_HOSTS=['*']), and
+    # Above everything: X-Forwarded-Proto is deleted unless the peer is in
+    # OSDS_TRUSTED_PROXIES, before any code asks request.scheme (#234,
+    # decisions.md §4.13).
+    'osds.middleware.TrustedProxyHeadersMiddleware',
+    # Next: nothing else validates the Host header (ALLOWED_HOSTS=['*']), and
     # SecurityMiddleware's SSL redirect would build a URL from the raw host.
     'osds.middleware.TenantResolutionMiddleware',
     # Above Session/Csrf so its response pass runs after they set their
@@ -242,11 +246,14 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Behind TLS termination the app sees plain http on the wire while the browser
 # used https. Without this, CsrfViewMiddleware builds its expected Origin as
 # http://<host>, compares it to the browser's https://<host> Origin header,
-# and rejects every login POST with a 403. Safe ONLY because the deployment
-# proxy strips any client-supplied X-Forwarded-Proto before setting its own --
-# otherwise a client could forge it and defeat the SSL redirect. A deployment
-# terminating TLS elsewhere must guarantee the same.
+# and rejects every login POST with a 403. Django believes the header from any
+# client, so osds.middleware.TrustedProxyHeadersMiddleware deletes it unless the
+# peer is in OSDS_TRUSTED_PROXIES and cuts it to its rightmost token when it is
+# (decisions.md §4.13). A proxy's address missing from that list means every
+# HTTPS form POST fails CSRF. X-Forwarded-Host and -Port stay unread.
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+USE_X_FORWARDED_HOST = False
+USE_X_FORWARDED_PORT = False
 
 # Secure flag is env-controlled (OSDS_SECURE_COOKIES, default true), not
 # DEBUG-gated -- see the variable's definition above.

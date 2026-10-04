@@ -195,8 +195,10 @@ and must be false on an HTTP-only install or no login POST can pass CSRF.
 `OSDS_DEV_TENANT_SLUG` is DEBUG-only. `OSDS_MEDIA_ROOT` sets the local storage
 root and defaults to `BASE_DIR/media`; per-tenant media lands under
 `<OSDS_MEDIA_ROOT>/<tenant.public_id>/`. `OSDS_TRUSTED_PROXIES` lists the
-reverse-proxy addresses or CIDRs whose `X-Forwarded-For` is believed; unset, the
-header is ignored (decisions.md §4.8).
+reverse-proxy addresses or CIDRs whose `X-Forwarded-For` and `X-Forwarded-Proto` are believed, and the
+only peers the on-demand TLS ask endpoint (`/_internal/tls-ask`) answers;
+unset, those headers are ignored and the endpoint is dark (decisions.md §4.8,
+§4.13).
 `OSDS_WEBHOOK_ALLOW_PRIVATE` permits webhook delivery to private addresses and plain HTTP to them (never loopback or 169.254.0.0/16); default false (decisions.md §4.12).
 
 `python manage.py ensure_setup_token` mints the `InstallSetup` row and prints

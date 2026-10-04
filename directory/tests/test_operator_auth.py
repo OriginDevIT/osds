@@ -268,8 +268,15 @@ class LoginCsrfBehindTlsTerminationTests(TestCase):
         resp = self._post(c, self._token(c))
         self.assertEqual(resp.status_code, 403)
 
-    def test_forwarded_proto_https_lets_the_login_post_through(self):
+    @override_settings(OSDS_TRUSTED_PROXIES=("127.0.0.1/32",))
+    def test_forwarded_proto_https_from_a_trusted_proxy_lets_the_login_post_through(self):
         c = Client(enforce_csrf_checks=True)
         resp = self._post(c, self._token(c), HTTP_X_FORWARDED_PROTO="https")
         self.assertEqual(resp.status_code, 302)
         self.assertIn("_auth_user_id", c.session)
+
+    def test_forwarded_proto_https_from_an_untrusted_peer_is_ignored(self):
+        # #234: the Client's 127.0.0.1 is not trusted unless the settings say so.
+        c = Client(enforce_csrf_checks=True)
+        resp = self._post(c, self._token(c), HTTP_X_FORWARDED_PROTO="https")
+        self.assertEqual(resp.status_code, 403)

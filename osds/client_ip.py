@@ -14,6 +14,9 @@ rate limiter and by the consent record. It trusts nothing a client can write:
   against a client that prepends fake entries, because fake entries sit to the
   left of everything a trusted proxy wrote.
 
+The same list decides whether ``X-Forwarded-Proto`` is believed
+(``osds.middleware.TrustedProxyHeadersMiddleware``, decisions.md §4.13).
+
 Behind a proxy with ``OSDS_TRUSTED_PROXIES`` unset, every visitor appears to
 come from the proxy. Per-IP limits then act as one site-wide limit. The module
 logs one WARNING per process when it sees that shape; it does not disable
@@ -96,6 +99,42 @@ def _warn_once(peer, request) -> None:
         "OSDS_TRUSTED_PROXIES is not set, so every visitor behind that proxy is "
         "treated as one client and the claim rate limits act site-wide. Set "
         "OSDS_TRUSTED_PROXIES to the proxy's address or network.",
+        peer,
+    )
+
+
+def peer_is_trusted_proxy(request) -> bool:
+    """Whether the socket peer (``REMOTE_ADDR``, never a forwarded address) is
+    inside ``OSDS_TRUSTED_PROXIES``. False when none are configured, or when
+    the peer is not an IP address (a unix socket)."""
+    peer = _parse(request.META.get("REMOTE_ADDR", "") or "")
+    if peer is None:
+        return False
+    return _is_trusted(peer, _trusted_networks())
+
+
+_warned_proto = False
+
+
+def warn_untrusted_proto(request, value: str) -> None:
+    """One WARNING per process when a private, non-loopback peer that is not a
+    trusted proxy sent ``X-Forwarded-Proto`` (``value``) naming https -- the shape of a TLS
+    proxy whose address is missing from ``OSDS_TRUSTED_PROXIES`` (decisions.md
+    §4.13). Every HTTPS form POST would otherwise fail CSRF with no hint why."""
+    global _warned_proto
+    if _warned_proto:
+        return
+    if "https" not in (value or "").lower():
+        return
+    peer = _parse(request.META.get("REMOTE_ADDR", "") or "")
+    if peer is None or peer.is_loopback or not peer.is_private:
+        return
+    _warned_proto = True
+    logger.warning(
+        "A request from the private address %s carried X-Forwarded-Proto: https, "
+        "but that address is not in OSDS_TRUSTED_PROXIES, so the header was "
+        "ignored and the request is treated as plain HTTP (form POSTs will fail "
+        "CSRF). Set OSDS_TRUSTED_PROXIES to the proxy's address or network.",
         peer,
     )
 
