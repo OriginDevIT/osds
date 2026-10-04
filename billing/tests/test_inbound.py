@@ -10,6 +10,7 @@ from django.test import Client, override_settings
 from django.utils import timezone
 
 from audit.models import CommandLog
+from audit.tests.window_clock import pinned_windows
 from billing.models import CheckoutAttempt, Entitlement, PaymentReceipt
 from billing.tests.base import DAY, T0
 from billing.tests.payments_base import ADAPTER_ID, WEBHOOK_SECRET, PaymentTestCase, sign
@@ -25,6 +26,8 @@ URL = f"/_adapters/{ADAPTER_ID}/inbound/"
 class InboundTests(PaymentTestCase):
     def setUp(self):
         super().setUp()
+        # The 301-request flood must land in one 1-minute window (#245).
+        self.enterContext(pinned_windows())
         InstallSetup.objects.create(token_hash="x" * 64, completed_at=timezone.now())
         set_secret("stubpay_webhook_secret", WEBHOOK_SECRET, tenant=self.tenant)
         self.client = Client(enforce_csrf_checks=True)  # the route must not need a token

@@ -16,6 +16,7 @@ from django.utils import timezone
 
 from audit.models import CommandLog, OutboundMessage, OutboxEvent, RateLimitCounter
 from audit.ratelimit import RateLimited, Rule
+from audit.tests.window_clock import pinned_windows
 from directory import claim_limits, services
 from directory.models import (
     Claim,
@@ -45,6 +46,8 @@ def one_per_minute(name):
 
 class _Base(TransactionTestCase):
     def setUp(self):
+        # Every flood lands in one window, however slow the runner (#245).
+        self.clock = self.enterContext(pinned_windows())
         self.mail = self.enterContext(email_send_stub())
         self.tenant = Tenant.objects.create(
             slug="acme",
@@ -194,9 +197,8 @@ class SubmitIpLimitTests(_Base):
     def test_a_new_window_allows_the_ip_again(self):
         for _ in range(5):
             self.submit()
-        later = timezone.now() + timedelta(minutes=11)
-        with mock.patch("django.utils.timezone.now", return_value=later):
-            self.assertIsNotNone(self.submit())
+        self.clock.advance(minutes=11)
+        self.assertIsNotNone(self.submit())
 
     def test_the_count_survives_a_command_that_fails_mid_apply(self):
         with mock.patch.object(services, "_apply_submit_claim", side_effect=RuntimeError):

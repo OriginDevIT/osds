@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from audit.models import CommandLog
 from audit.ratelimit import RateLimited
+from audit.tests.window_clock import pinned_windows
 from billing import machine, payments
 from billing.models import CheckoutAttempt, Entitlement, Tier
 from billing.tests.base import DAY, T0, Role
@@ -23,6 +24,11 @@ REF = {"adapter": ADAPTER_ID, "external_id": "sub_1"}
 
 
 class _Base(PaymentTestCase):
+    def setUp(self):
+        super().setUp()
+        # The eleven attempts must land in one 1-hour window (#245).
+        self.enterContext(pinned_windows())
+
     def checkout(self, tier_key="featured", user=None, listing=None):
         with tenant_context(self.tenant):
             return payments.start_checkout(
