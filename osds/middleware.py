@@ -1,6 +1,8 @@
 """Host resolution.
 
-``TenantResolutionMiddleware`` is the FIRST middleware in the stack. With
+``TenantResolutionMiddleware`` is the first middleware to look at the Host
+(``TrustedProxyHeadersMiddleware`` sits above it and reads only the peer and
+``X-Forwarded-Proto``, never the Host). With
 ``ALLOWED_HOSTS = ['*']`` nothing else validates the Host header, and
 ``SecurityMiddleware``'s SSL redirect would otherwise build a redirect URL from
 an unvalidated host. This middleware is the authoritative host gate: it decides
@@ -18,11 +20,44 @@ from __future__ import annotations
 from django.conf import settings
 from django.http import HttpResponse, HttpResponseNotFound
 
+from osds.client_ip import peer_is_trusted_proxy, warn_untrusted_proto
 from osds.tenancy import reset_current_tenant, set_current_tenant
 from osds.urlconf import CONSOLE_URLCONF, SETUP_URLCONF, TENANT_URLCONF
 from tenants.dns_check import CHALLENGE_PATH
 from tenants.models import Tenant
 from tenants.setup_state import setup_complete
+from tenants.tls_ask import ask as tls_ask, is_ask_request
+
+
+class TrustedProxyHeadersMiddleware:
+    """Believe ``X-Forwarded-Proto`` only from a trusted proxy (#234,
+    decisions.md §4.13).
+
+    ``SECURE_PROXY_SSL_HEADER`` makes Django read the scheme from that header
+    whoever sent it. This runs first, before anything asks ``request.scheme``:
+
+    * the peer is not in ``OSDS_TRUSTED_PROXIES`` (or none are configured): the
+      header is deleted, and the scheme is whatever the server saw;
+    * the peer is a trusted proxy: the header is cut to its rightmost token.
+      Django reads the leftmost, which is client-written when a proxy appends,
+      and the rightmost is the one the trusted proxy wrote -- the same
+      right-to-left rule ``osds.client_ip`` applies to ``X-Forwarded-For``.
+    """
+
+    HEADER = "HTTP_X_FORWARDED_PROTO"
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        value = request.META.get(self.HEADER)
+        if value is not None:
+            if peer_is_trusted_proxy(request):
+                request.META[self.HEADER] = value.rsplit(",", 1)[-1].strip()
+            else:
+                del request.META[self.HEADER]
+                warn_untrusted_proto(request, value)
+        return self.get_response(request)
 
 
 class SetupCookieSecurityMiddleware:
@@ -63,6 +98,14 @@ class TenantResolutionMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
+        # The TLS proxy's own ask call (decisions.md §4.13) carries an internal
+        # Host no tenant owns, so it is answered before the Host is read. It
+        # sets no urlconf and no tenant scope; anyone else falls through.
+        if is_ask_request(request):
+            request.osds_host_kind = "internal"
+            request.tenant = None
+            return tls_ask(request)
+
         host = self._host(request)
         kind, tenant, early = self._resolve(request, host)
 

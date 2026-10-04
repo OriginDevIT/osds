@@ -51,6 +51,22 @@ proxy, and the per-IP claim rate limits become one limit shared by everyone; the
 app logs a warning when it sees that shape. Docker Desktop does the same thing
 to a direct install: it shows every request as coming from the Docker gateway.
 
+`OSDS_TRUSTED_PROXIES` is also what makes the app believe `X-Forwarded-Proto`.
+**If TLS ends at your proxy and the proxy's address is not listed, every form
+POST over HTTPS (sign-in, claims, leads) fails with a 403 CSRF error**, and the
+app logs a warning naming the address. Where the proxy's address is not stable
+(Railway, Render), list a broad private range such as `10.0.0.0/8`.
+
+If the proxy issues certificates on demand (Caddy's `on_demand_tls`), point its
+`ask` at `http://<app>:8000/_internal/tls-ask`. The app answers 200 only for a
+verified tenant domain or the console host, and only to a listed proxy that adds
+no `X-Forwarded-*` headers to that call. Your proxy must also:
+
+- answer 404 for `/_internal/*` on its public listener, and
+- serve `/.well-known/osds-challenge` over plain HTTP **without redirecting it
+  to HTTPS**. Domain verification fetches that URL over HTTP; a redirect needs a
+  certificate the app will not approve until the domain is verified.
+
 ## Documentation
 - [Specification](docs/spec/events-and-adapters.md)
 - [Receiving webhooks](docs/webhook.md)

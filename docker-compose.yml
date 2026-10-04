@@ -18,8 +18,9 @@ x-osds: &osds
     OSDS_CONSOLE_HOST: ${OSDS_CONSOLE_HOST:-localhost}
     # False because a fresh install is plain HTTP. Set true behind TLS.
     OSDS_SECURE_COOKIES: ${OSDS_SECURE_COOKIES:-false}
-    # Reverse proxies trusted to set X-Forwarded-For (see the README). Empty:
-    # the connecting address is the client.
+    # Reverse proxies trusted to set X-Forwarded-For and X-Forwarded-Proto (see
+    # the README). Empty: the connecting address is the client and the request
+    # is plain HTTP, so set it when TLS ends at a proxy.
     OSDS_TRUSTED_PROXIES: ${OSDS_TRUSTED_PROXIES:-}
     # Whether the webhook adapter may reach private-network addresses (see
     # .env.example). Loopback and the metadata address stay blocked.
