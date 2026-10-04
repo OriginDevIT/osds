@@ -14,8 +14,8 @@ from django.db import transaction
 from django.db.models import Q
 
 from audit.worker.tick import TickResult
-from directory import importing, lead_notices, sitemaps
-from directory.models import Lead
+from directory import claim_review, importing, lead_notices, sitemaps
+from directory.models import Claim, Lead, ModerationItem
 from directory.search import drain_reindex_markers
 from osds.tenancy import tenant_context
 from tenants.models import Tenant
@@ -101,6 +101,39 @@ def lead_notice_flush(*, now) -> TickResult:
         queued += sent
         more = more or hit_limit
     return TickResult(done=queued, more=more)
+
+
+def claim_notice_flush(*, now) -> TickResult:
+    """Decisions.md §4.6 (#241): announce claims the operator-notice throttle
+    deferred.
+
+    The inline notice is leading-edge, so a claim entering review inside a
+    recipient's 15-minute window is not mailed and, with no later claim, would
+    never be. This job finds every tenant with a claim in review or an open
+    dispute inside the notice lifetime and tells each recipient whose window
+    has passed and who has not yet heard about an arrival. When there is
+    nothing unreported it queues nothing.
+    """
+    cutoff = now - claim_review.OPERATOR_NOTICE_TTL
+    tenant_ids = set(
+        Claim.all_tenants.filter(
+            status=Claim.Status.PENDING_VERIFICATION, updated_at__gt=cutoff
+        ).values_list("tenant_id", flat=True)
+    ) | set(
+        ModerationItem.all_tenants.filter(
+            status=ModerationItem.Status.OPEN,
+            item_type=ModerationItem.ItemType.CLAIM_DISPUTE,
+            created_at__gt=cutoff,
+        ).values_list("tenant_id", flat=True)
+    )
+    queued = 0
+    tenants = Tenant.objects.filter(pk__in=tenant_ids).exclude(
+        status=Tenant.Status.SUSPENDED
+    )
+    for tenant in tenants.order_by("id"):
+        with tenant_context(tenant), transaction.atomic():
+            queued += claim_review.flush_operator_notices(tenant, now=now)
+    return TickResult(done=queued, more=False)
 
 
 # Rows per call, like the audit sweeps.

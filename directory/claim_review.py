@@ -306,25 +306,8 @@ def waiting_claims_count() -> int:
     return review_claims().count() + dispute_items().count()
 
 
-def notify_operators(tenant, *, now=None) -> int:
-    """Tell the staff who can act that a claim has entered manual review
-    (#218; spec §9.6 "with the operator notified"). Called from the
-    transaction that put the claim there -- chosen manual, any flip to manual,
-    or a dispute -- so the message commits with the state change. Returns the
-    number of messages queued.
-
-    Recipients are active memberships at ``DECIDE_ROLE`` and above: the people
-    who can approve or reject. A recipient who was sent one in the last
-    ``OPERATOR_NOTICE_THROTTLE`` is skipped -- a leading-edge throttle derived
-    from recent ``OutboundMessage`` rows, with no table of its own -- and the
-    next message states how many claims are waiting, so nothing is lost by the
-    skip. Claim submission is unauthenticated, so without the throttle anyone
-    could flood every editor.
-
-    The message carries a count and, only when the tenant has an absolute
-    base, a link to the queue. It carries no claimant-supplied text.
-    """
-    now = now or timezone.now()
+def _operator_recipients(tenant) -> "list[str]":
+    """Active memberships at ``DECIDE_ROLE`` and above, as lowercased addresses."""
     recipients: list[str] = []
     for membership in (
         StaffMembership.objects.filter(
@@ -339,6 +322,55 @@ def notify_operators(tenant, *, now=None) -> int:
         address = (membership.operator.email or "").strip().lower()
         if address and address not in recipients:
             recipients.append(address)
+    return recipients
+
+
+def _send_operator_notice(tenant, addresses, *, now) -> int:
+    """Queue the count-and-link notice to each address. Carries no
+    claimant-supplied text."""
+    waiting = waiting_claims_count()
+    noun = "claim is" if waiting == 1 else "claims are"
+    url = _link(tenant, "/admin/claims/")
+    link_line = f"\n\nReview them at: {url}" if url else ""
+    body = (
+        f"{waiting} {noun} waiting for review on {tenant.name}."
+        f"{link_line}"
+        f"\n\nYou get at most one of these every 15 minutes, so the number "
+        f"may be higher by the time you open the queue."
+    )
+    for address in addresses:
+        enqueue(
+            tenant=tenant,
+            kind=OPERATOR_NOTICE_KIND,
+            to_address=address,
+            subject=f"Claims waiting for review on {tenant.name}",
+            body_text=body,
+            expires_at=now + OPERATOR_NOTICE_TTL,
+        )
+    return len(addresses)
+
+
+def notify_operators(tenant, *, now=None) -> int:
+    """Tell the staff who can act that a claim has entered manual review
+    (#218; spec §9.6 "with the operator notified"). Called from the
+    transaction that put the claim there -- chosen manual, any flip to manual,
+    or a dispute -- so the message commits with the state change. Returns the
+    number of messages queued.
+
+    Recipients are active memberships at ``DECIDE_ROLE`` and above: the people
+    who can approve or reject. A recipient who was sent one in the last
+    ``OPERATOR_NOTICE_THROTTLE`` is skipped -- a leading-edge throttle derived
+    from recent ``OutboundMessage`` rows, with no table of its own -- and
+    ``flush_operator_notices`` (the worker's ``claim_notice_flush`` job)
+    announces what the skip deferred once the window has passed (#241).
+    Claim submission is unauthenticated, so without the throttle anyone could
+    flood every editor.
+
+    The message carries a count and, only when the tenant has an absolute
+    base, a link to the queue. It carries no claimant-supplied text.
+    """
+    now = now or timezone.now()
+    recipients = _operator_recipients(tenant)
     if not recipients:
         return 0
 
@@ -353,27 +385,51 @@ def notify_operators(tenant, *, now=None) -> int:
     due = [address for address in recipients if address not in recent]
     if not due:
         return 0
+    return _send_operator_notice(tenant, due, now=now)
 
-    waiting = waiting_claims_count()
-    noun = "claim is" if waiting == 1 else "claims are"
-    url = _link(tenant, "/admin/claims/")
-    link_line = f"\n\nReview them at: {url}" if url else ""
-    body = (
-        f"{waiting} {noun} waiting for review on {tenant.name}."
-        f"{link_line}"
-        f"\n\nYou get at most one of these every 15 minutes, so the number "
-        f"may be higher by the time you open the queue."
+
+def _entered_review_since(since) -> bool:
+    """Did a claim enter review, or a dispute open, after ``since``? A claim in
+    review is a pending one and nothing else saves it, so ``updated_at`` is
+    when it flipped; a dispute is its item's ``created_at``."""
+    return (
+        review_claims().filter(updated_at__gt=since).exists()
+        or dispute_items().filter(created_at__gt=since).exists()
     )
-    for address in due:
-        enqueue(
-            tenant=tenant,
-            kind=OPERATOR_NOTICE_KIND,
-            to_address=address,
-            subject=f"Claims waiting for review on {tenant.name}",
-            body_text=body,
-            expires_at=now + OPERATOR_NOTICE_TTL,
+
+
+def flush_operator_notices(tenant, *, now) -> int:
+    """Trailing flush for the operator notice (#241). Call with the tenant in
+    scope and inside a transaction (``enqueue`` requires one).
+
+    A recipient is told when their last notice is past the throttle window and
+    a claim entered review after it (or, with no notice on record, inside the
+    notice lifetime). The notice itself resets the clock, so the same arrival
+    is never announced twice, and the inline path, which reads the same rows,
+    is throttled by it too. Returns the number of messages queued.
+    """
+    recipients = _operator_recipients(tenant)
+    if not recipients:
+        return 0
+    lasts = {
+        address: created
+        for address, created in OutboundMessage.all_tenants.filter(
+            tenant=tenant, kind=OPERATOR_NOTICE_KIND, to_address__in=recipients
         )
-    return len(due)
+        .order_by("created_at")
+        .values_list("to_address", "created_at")
+    }
+    floor = now - OPERATOR_NOTICE_TTL
+    due = []
+    for address in recipients:
+        last = lasts.get(address)
+        if last is not None and last > now - OPERATOR_NOTICE_THROTTLE:
+            continue
+        if _entered_review_since(max(last, floor) if last else floor):
+            due.append(address)
+    if not due:
+        return 0
+    return _send_operator_notice(tenant, due, now=now)
 
 
 def _link(tenant, path: str) -> "str | None":
