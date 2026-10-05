@@ -6,6 +6,14 @@ sites, takes money, and can be installed by someone who rents a server.
 Written 2026-09-05, after the Django reset. Supersedes the task ordering in
 earlier session notes.
 
+**Status, 2026-10-04 (main at #262):** every block is built and merged. What
+remains before the v0.1 alpha tag is a maintainer's: the browser pass each
+block's "Done when" calls for, the manual Stripe test-mode run
+(`docs/stripe-test-mode-checklist.md`), and the tag itself. Install
+documentation is `docs/install.md`. The per-block status lines below cite the
+merged PRs; where a "Done when" criterion has no recorded browser pass in the
+repository, the status line says so instead of asserting it.
+
 ---
 
 ## What "publishable" means here
@@ -86,6 +94,11 @@ the DNS record shown and a verification check, storage selection, SMTP.
 did not land until #127, so this criterion was unmet for two sessions while
 block 1 was marked complete.
 
+**Status: complete.** Models, tenancy and the event registry #118; tenant
+resolution and the wizard #120; operator login and logout #147; completion
+recorded in #148. Since then the wizard gained a skippable SMTP step (#229), and
+the compose install with generated secrets landed in #227.
+
 ### 2 — Directory
 
 Listing type configuration with the field schema. Category tree per type.
@@ -98,6 +111,12 @@ radius filter. Sitemap index and `robots.txt`.
 **Done when** an operator creates a directory type, adds listings with images,
 and the public site renders and searches them. Met 2026-09-08 across six PRs,
 closing with the sitemap index and `robots.txt`.
+
+**Status: complete.** Listing types and categories #124; listing CRUD through
+the service layer #126; search vectors and reindex plumbing #134; the public
+site #135; media upload #152; sitemap index and `robots.txt` #160; closed in
+#161. Media is local disk only (#150): S3, Azure and GCP remain wizard options
+that raise a deferred-feature error.
 
 ### 3 — Worker, population and claims
 
@@ -117,6 +136,18 @@ consent. Owner dashboard — enough to see leads and edit the listing.
 **Done when** several hundred listings import cleanly on the worker and an
 owner claims one and receives a lead.
 
+**Status: built; browser pass not recorded.** Worker: outbox drain #174,
+`run_worker` and the tick loop #181. CSV import: upload and column mapping #186,
+the row loop on the worker #190, batch rollback #203. Mail: queue, drain and the
+bundled SMTP sender #216; the settings page and skippable wizard step #229.
+Claims: submission and public form #211, `domain_email` verification #222,
+review, approval, disputes and the moderation queue #233, operator notification
+#235, rate limits and the trusted-proxy client IP #236, the link from the
+listing page #230. Owner sign-in, dashboard and listing editing #240. Lead
+capture with consent, notices and the owner inbox #243. No merged change records
+the criterion itself (several hundred rows imported, then claimed, then a lead
+received) being walked in a browser.
+
 ### 4 — Money
 
 Tier configuration per tenant. Entitlement records with status and period end.
@@ -130,6 +161,14 @@ Every state transition in the table gets a test.
 runs the full dunning and grace path, and the listing lands on rank 0 still
 published.
 
+**Status: built; real-Stripe pass outstanding.** Tiers, the entitlement state
+machine, comps and the clock-driven transitions #242; the payment seam,
+checkout, reports and the owner's billing pages #244; the Stripe adapter #245.
+The automated tests fake Stripe's responses, so the criterion is not met until a
+maintainer has run `docs/stripe-test-mode-checklist.md` against test mode and
+recorded the date and API version in release notes. Payments need a verified
+domain over HTTPS (decisions.md §4.11).
+
 ### 5 — Integration and release
 
 The full SMTP adapter, replacing the block-3 sender, and the webhook adapter. Scheduled tick jobs registered — payload nulling at
@@ -138,6 +177,55 @@ log and access log wired to the service layer. Adapter documentation. README,
 compose file, release tag.
 
 The drain and the tick loop themselves moved to block 3 (#171).
+
+**Status: built except the release itself.**
+
+- Tick jobs (payload nulling at 90 days, sitemap regeneration, the
+  `SearchReindexJob` drain, retention sweeps, entitlement transitions) #232 and
+  #242.
+- Webhook adapter, envelope redaction and adapter logging #249. The bundled SMTP
+  sender moved onto `AdapterContext` in the same PR; it is still the stdlib
+  sender, not a separate adapter package that replaces it. The generic adapter
+  settings page was made to enforce `SettingField.pattern` in #250.
+- Command log: operator settings saves #256; claimant and lead PII kept out of
+  it #255; validation errors never echo the submitted value #258; claim and lead
+  submissions are type-checked before normalising #262. Access log: written for
+  the admin lead views only (decisions.md §4.10).
+- Adapter documentation: `docs/webhook.md` (#249) and
+  `docs/stripe-test-mode-checklist.md` (#245).
+- Deployment: compose install #227; `X-Forwarded-Proto` believed only from
+  trusted proxies and the TLS `ask` endpoint #251; the opt-in Caddy recipe #253.
+- Operator invitation links #261, plus `manage.py issue_operator_invite`.
+- Operator install guide: `docs/install.md`.
+- **Not done:** the release tag.
+
+---
+
+## Deferred past the alpha
+
+Planned, specified, and designed not to be designed out (see "Out, and
+planned" above). Nothing here is in the alpha.
+
+- **Object storage.** S3, Azure and GCP raise a deferred-feature error. Each
+  needs a human-gated SDK (#150); a `minio` service joins the compose file in
+  the same PR as the S3 backend.
+- **Featured slots** — the first post-launch addition. A tier with `uses_slot`
+  is refused today.
+- **Native reviews** and the moderation queue beyond claim disputes; external
+  review display.
+- **Phone OTP, postcard and Google Business Profile** claim verification. The
+  alpha verifies by `domain_email` and `manual` review.
+- **AI agents** and their scope model.
+- **Postgres row-level security** as defence in depth; app-level tenancy is the
+  only isolation until then.
+- **Devcontainer.**
+- **Several webhook endpoints per tenant**, overlapping secret rotation, and
+  `Retry-After` as an HTTP date (decisions.md §4.12, "Known edges").
+- **Acceptance of an invitation by an operator who already exists.** A new
+  operator sets a password from the link (§4.14); an existing one has no view.
+- **In-app ACME / TLS.** HTTPS is the opt-in Caddy overlay (#253).
+- **Access-log coverage beyond lead views**, and pruning expired operator
+  invites and operator sessions (#88).
 
 ---
 
