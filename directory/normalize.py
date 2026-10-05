@@ -19,6 +19,23 @@ _PHONE_STRIP = re.compile(r"[^\d+]")
 _LEADING_PLUSES = re.compile(r"^\++")
 
 
+def require_text(value, field: str):
+    """``value`` if it is ``None`` or a string, else ``ValueError`` naming
+    ``field``. The message never carries the value: it reaches the permanent
+    command log (#219)."""
+    if value is not None and not isinstance(value, str):
+        raise ValueError(f"{field} must be text")
+    return value
+
+
+def require_mapping(value, field: str) -> dict:
+    """``value`` if it is a dict, else ``ValueError`` naming ``field`` (no
+    value echoed, as ``require_text``)."""
+    if not isinstance(value, dict):
+        raise ValueError(f"{field} must be an object")
+    return value
+
+
 def text(value):
     """Trim a string; empty -> None. Non-strings pass through."""
     if value is None:

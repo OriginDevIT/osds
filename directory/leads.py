@@ -172,6 +172,14 @@ def create_lead(
     require_autocommit()
 
     try:
+        # Types first: a non-string would otherwise raise AttributeError below
+        # and leave the received row unconcluded (#257).
+        normalize.require_mapping(contact, "contact")
+        normalize.require_mapping(consent, "consent")
+        for key, field in (
+            ("email", "email"), ("name", "name"), ("phone_e164", "phone"),
+        ):
+            normalize.require_text(contact.get(key), field)
         email = normalize.email(contact.get("email")) or ""
         if not email:
             raise ValueError("email is required")
