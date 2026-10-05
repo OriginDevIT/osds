@@ -26,7 +26,8 @@ COPY . .
 RUN DJANGO_SECRET_KEY=build-only OSDS_SECRET_KEY=build-only \
     DATABASE_URL=postgresql://build@localhost/build \
     python manage.py collectstatic --noinput \
- && chmod 755 docker/entrypoint.sh \
+ && chmod 755 docker/entrypoint.sh docker/osds-manage \
+ && ln -s /app/docker/osds-manage /usr/local/bin/osds-manage \
  && mkdir -p "$OSDS_MEDIA_ROOT" \
  && chown osds:osds "$OSDS_MEDIA_ROOT"
 
