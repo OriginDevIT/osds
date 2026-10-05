@@ -171,7 +171,9 @@ class SubmitClaimHappyPathTests(_Base):
         row = CommandLog.objects.get(command="claim.submit")
         self.assertEqual(row.outcome, "applied")
         self.assertTrue(row.result_event_id)
-        self.assertEqual(row.payload["claimant"]["email"], "dana@hoffmanplumbing.example")
+        claim = Claim.all_tenants.get(tenant=self.tenant)
+        self.assertEqual(row.payload["claim_id"], claim.public_id)
+        self.assertNotIn("claimant", row.payload)
 
 
 class SubmitClaimConsentTests(_Base):

@@ -80,7 +80,7 @@ class CreateLeadTests(LeadBase):
         row = log().get()
         self.assertEqual(row.outcome, "applied")
         self.assertEqual(row.actor, {"type": "visitor", "id": ""})
-        self.assertEqual(row.payload["lead"]["message"], lead.message)
+        self.assertNotIn("lead", row.payload)
         self.assertEqual(row.payload["listing_id"], self.listing.public_id)
         self.assertEqual(
             row.result_event_id, OutboxEvent.all_tenants.get(type="lead.captured").event_id

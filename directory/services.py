@@ -69,6 +69,7 @@ from directory.models import (
 )
 from directory.patch import diff, project
 from directory.search import recompute_search_vector
+from osds.ids import claim_id
 from tenants.claim_verification import CLAIM_VERIFICATION_BOUNDS
 
 logger = logging.getLogger("osds.claims")
@@ -1187,7 +1188,10 @@ def submit_claim(
 
     Public and visitor-originated, unlike every other orchestrator in this
     module -- there is no operator to log in as, so ``actor`` is
-    ``{"type": "visitor", "id": ...}`` throughout. No idempotency key: a
+    ``{"type": "visitor", "id": ...}`` throughout. The command-log actor is
+    ``claimant:<claim public id>``, minted before the transaction: the user
+    row does not exist yet, and the log never carries the claimant's email,
+    name or phone (#219). No idempotency key: a
     double form submission is a UI concern (disable-on-submit), not a
     command-log replay, since there is no caller-supplied key to replay on.
     """
@@ -1199,7 +1203,12 @@ def submit_claim(
             raise ValueError("claimant email is required")
         phone = claimant.get("phone_e164") or ""
         if phone:
-            phone = normalize.phone_e164(phone)
+            try:
+                phone = normalize.phone_e164(phone)
+            except ValueError:
+                # The command log is permanent: the message must not echo
+                # the number back (#219).
+                raise ValueError("phone is not a valid E.164 number") from None
         name = (claimant.get("name") or "").strip()
         role_claimed = (claimant.get("role_claimed") or "owner").strip() or "owner"
         normalized_claimant = {
@@ -1208,11 +1217,17 @@ def submit_claim(
             "phone_e164": phone,
             "role_claimed": role_claimed,
         }
+        # The id is minted here, before the transaction, so the received row
+        # can name the claim without naming the claimant (#219). The claimant's
+        # details stay on the claim, the user and the event, never in the log.
+        claim_public_id = claim_id()
         payload = normalize.jsonable(
             {
                 "listing_id": listing.public_id,
-                "method": method,
-                "claimant": normalized_claimant,
+                # Validated later, inside the transaction: an unknown value is
+                # visitor-supplied text and stays out of the log.
+                "method": method if method in Claim.Method.values else None,
+                "claim_id": claim_public_id,
                 "consent": consent,
             }
         )
@@ -1235,7 +1250,7 @@ def submit_claim(
     # Rate limit (spec §9.4, #210): after normalisation, because the account
     # key is the normalised email, and before the received row, so a flood
     # writes one ``blocked`` log row per window rather than one per request.
-    actor = {"type": "visitor", "id": email}
+    actor = {"type": "visitor", "id": f"claimant:{claim_public_id}"}
     verdict = claim_limits.check_submit(
         tenant, ip=ip, email=email, now=timezone.now()
     )
@@ -1272,6 +1287,7 @@ def submit_claim(
             claimant=normalized_claimant,
             consent=consent,
             ip=ip,
+            claim_public_id=claim_public_id,
         )
     except ConsentRequired as exc:
         log_conclude(row, outcome="rejected", problem={"missing_consent": exc.channel})
@@ -1295,9 +1311,12 @@ def _apply_submit_claim(
     claimant: dict,
     consent: dict,
     ip: "str | None",
+    claim_public_id: str,
 ) -> "tuple[Claim, str]":
     if method not in Claim.Method.values:
-        raise SchemaError([f"unknown verification method {method!r}"])
+        raise SchemaError(
+            [f"method is not one of {', '.join(sorted(Claim.Method.values))}"]
+        )
     if method not in enabled_claim_methods(tenant):
         raise SchemaError(
             [f"verification method {method!r} is not enabled for this tenant"]
@@ -1370,6 +1389,7 @@ def _apply_submit_claim(
 
     claim = Claim.objects.create(
         tenant=tenant,
+        public_id=claim_public_id,
         listing=listing,
         claimant=user,
         method=effective_method,
