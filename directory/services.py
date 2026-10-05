@@ -24,6 +24,7 @@ from django.utils import timezone
 
 from audit import events
 from audit.command_log import (
+    settings_command,
     MustNotBeInTransaction,
     log_conclude,
     log_received,
@@ -93,6 +94,11 @@ RESERVED_SLUGS = frozenset(
 )
 
 
+# What the configuration writes below raise to refuse a submission: SchemaError and
+# the delete-in-use ValueError. They conclude the command-log row ``rejected``.
+_CONFIG_REFUSED = (ValueError,)
+
+
 def _actor(operator) -> dict:
     return {"type": "admin", "id": operator.public_id}
 
@@ -118,6 +124,16 @@ def _type_value(listing_type: ListingType) -> dict:
     }
 
 
+def _category_fields(category: Category) -> dict:
+    """What a category save can change, for the command log's field names."""
+    return {
+        "name": category.name,
+        "slug": category.slug,
+        "parent": category.parent_id,
+        "order": category.order,
+    }
+
+
 def _category_value(category: Category) -> dict:
     return {
         "name": category.name,
@@ -129,8 +145,20 @@ def _category_value(category: Category) -> dict:
 # --- listing types -----------------------------------------------------------
 
 
+def create_listing_type(tenant, *, actor, **kwargs) -> ListingType:
+    """An operator command: each listing-type, schema and category write is one
+    ``settings.update`` row naming the fields it set and never their values
+    (decisions.md §4), so it runs in autocommit."""
+    with settings_command(
+        tenant, actor, page="listing_types", op="add", refused=_CONFIG_REFUSED
+    ) as cmd:
+        listing_type = _create_listing_type(tenant, actor=actor, **kwargs)
+        cmd.named(*_type_value(listing_type))
+    return listing_type
+
+
 @transaction.atomic
-def create_listing_type(
+def _create_listing_type(
     tenant,
     *,
     key: str,
@@ -179,8 +207,20 @@ def create_listing_type(
     return listing_type
 
 
-@transaction.atomic
 def update_listing_type(listing_type: ListingType, *, actor, **changes) -> ListingType:
+    if "key" in changes:
+        raise ValueError("a listing type's key is frozen after creation")
+    with settings_command(
+        listing_type.tenant, actor, page="listing_types", refused=_CONFIG_REFUSED
+    ) as cmd:
+        before = _type_value(listing_type)
+        _update_listing_type(listing_type, actor=actor, **changes)
+        cmd.changed(before, _type_value(listing_type))
+    return listing_type
+
+
+@transaction.atomic
+def _update_listing_type(listing_type: ListingType, *, actor, **changes) -> ListingType:
     if "key" in changes:
         raise ValueError("a listing type's key is frozen after creation")
 
@@ -243,8 +283,15 @@ def update_listing_type(listing_type: ListingType, *, actor, **changes) -> Listi
     return listing_type
 
 
-@transaction.atomic
 def delete_listing_type(listing_type: ListingType, *, actor) -> None:
+    with settings_command(
+        listing_type.tenant, actor, page="listing_types", op="remove", refused=_CONFIG_REFUSED
+    ):
+        _delete_listing_type(listing_type, actor=actor)
+
+
+@transaction.atomic
+def _delete_listing_type(listing_type: ListingType, *, actor) -> None:
     tenant = listing_type.tenant
     key = listing_type.key
     try:
@@ -263,8 +310,21 @@ def delete_listing_type(listing_type: ListingType, *, actor) -> None:
 # --- categories ------------------------------------------------------------
 
 
-@transaction.atomic
 def create_category(
+    listing_type: ListingType, *, name: str, slug: str, parent, order: int, actor
+) -> Category:
+    with settings_command(
+        listing_type.tenant, actor, page="categories", op="add", refused=_CONFIG_REFUSED
+    ) as cmd:
+        category = _create_category(
+            listing_type, name=name, slug=slug, parent=parent, order=order, actor=actor
+        )
+        cmd.named(*_category_fields(category))
+    return category
+
+
+@transaction.atomic
+def _create_category(
     listing_type: ListingType, *, name: str, slug: str, parent, order: int, actor
 ) -> Category:
     if slug in RESERVED_SLUGS:
@@ -301,8 +361,18 @@ def _category_url_prefix(listing_type: ListingType) -> str:
     return f"/{listing_type.path_segment}" if multi else ""
 
 
-@transaction.atomic
 def update_category(category: Category, *, actor, **changes) -> Category:
+    with settings_command(
+        category.tenant, actor, page="categories", refused=_CONFIG_REFUSED
+    ) as cmd:
+        before = _category_fields(category)
+        _update_category(category, actor=actor, **changes)
+        cmd.changed(before, _category_fields(category))
+    return category
+
+
+@transaction.atomic
+def _update_category(category: Category, *, actor, **changes) -> Category:
     if changes.get("slug") in RESERVED_SLUGS:
         raise SchemaError([f"'{changes['slug']}' is a reserved slug"])
     tenant = category.tenant
@@ -347,8 +417,15 @@ def update_category(category: Category, *, actor, **changes) -> Category:
     return category
 
 
-@transaction.atomic
 def delete_category(category: Category, *, actor) -> None:
+    with settings_command(
+        category.tenant, actor, page="categories", op="remove", refused=_CONFIG_REFUSED
+    ):
+        _delete_category(category, actor=actor)
+
+
+@transaction.atomic
+def _delete_category(category: Category, *, actor) -> None:
     tenant = category.tenant
     type_key = category.listing_type.key
     slug = category.slug

@@ -15,6 +15,7 @@ import re
 from django.db import IntegrityError, transaction
 
 from audit import events
+from audit.command_log import settings_command
 from audit.outbox import emit
 from billing.models import Entitlement, Tier
 from directory.models import Listing
@@ -87,10 +88,25 @@ def _emit(tenant, *, actor, op: str, tier: Tier) -> None:
     )
 
 
-@transaction.atomic
 def create_tier(tenant, *, key, name, rank, purchasable=False, uses_slot=False,
                 price_minor=None, currency="", interval="", trial_days=None,
                 badge_label="", perks=None, actor) -> Tier:
+    """An operator command: each tier write is one ``settings.update`` row naming
+    the fields it set, never their values (decisions.md §4), so it runs in
+    autocommit."""
+    with settings_command(tenant, actor, page="tiers", op="add", refused=(TierError,)) as cmd:
+        tier = _create_tier(
+            tenant, key=key, name=name, rank=rank, purchasable=purchasable, uses_slot=uses_slot,
+            price_minor=price_minor, currency=currency, interval=interval,
+            trial_days=trial_days, badge_label=badge_label, perks=perks, actor=actor,
+        )
+        cmd.named(*tier_value(tier))
+    return tier
+
+
+@transaction.atomic
+def _create_tier(tenant, *, key, name, rank, purchasable, uses_slot, price_minor, currency,
+                 interval, trial_days, badge_label, perks, actor) -> Tier:
     perks = {} if perks is None else perks
     currency = (currency or "").upper()
     _validate(key=key, name=name, rank=rank, purchasable=purchasable, uses_slot=uses_slot,
@@ -110,9 +126,18 @@ def create_tier(tenant, *, key, name, rank, purchasable=False, uses_slot=False,
     return tier
 
 
-@transaction.atomic
 def update_tier(tier: Tier, *, actor, **changes) -> Tier:
-    """Change a tier. ``key`` is the tier's identity and cannot change."""
+    """Change a tier. ``key`` is the tier's identity and cannot change. Logged like
+    ``create_tier``; a save that changes nothing writes a row naming nothing."""
+    with settings_command(tier.tenant, actor, page="tiers", refused=(TierError,)) as cmd:
+        before = tier_value(tier)
+        _update_tier(tier, actor=actor, **changes)
+        cmd.changed(before, tier_value(tier))
+    return tier
+
+
+@transaction.atomic
+def _update_tier(tier: Tier, *, actor, **changes) -> Tier:
     if "key" in changes and changes["key"] != tier.key:
         raise TierError("A tier's key cannot be changed.")
     changes.pop("key", None)
@@ -143,10 +168,16 @@ def update_tier(tier: Tier, *, actor, **changes) -> Tier:
     return tier
 
 
-@transaction.atomic
 def delete_tier(tier: Tier, *, actor) -> None:
     """Refused while anything points at the tier: an entitlement, or a listing
-    currently showing it (deleting would silently blank its badge)."""
+    currently showing it (deleting would silently blank its badge). Logged like
+    ``create_tier``, naming no fields."""
+    with settings_command(tier.tenant, actor, page="tiers", op="remove", refused=(TierError,)):
+        _delete_tier(tier, actor=actor)
+
+
+@transaction.atomic
+def _delete_tier(tier: Tier, *, actor) -> None:
     if Entitlement.objects.filter(tier=tier).exists():
         raise TierError("Listings hold entitlements on this tier; it cannot be deleted.")
     if Listing.objects.filter(current_tier=tier).exists():

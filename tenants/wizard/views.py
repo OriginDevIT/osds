@@ -22,7 +22,6 @@ from tenants import services
 from tenants.dns_check import CHALLENGE_PATH, check_domain_http
 from tenants.models import InstallSetup, Operator, Tenant
 from tenants.mail_forms import MailSettingsForm
-from tenants.secrets import set_secret
 from tenants.setup_state import next_step
 from tenants.wizard import forms
 
@@ -180,10 +179,13 @@ def storage(request):
             "endpoint": form.cleaned_data["endpoint"],
             "access_key": form.cleaned_data["access_key"],
         }
-        if form.cleaned_data["secret_key"]:
-            set_secret("storage_secret_key", form.cleaned_data["secret_key"], tenant=tenant)
-        services.update_tenant_settings(
-            tenant=tenant, changes={"storage": cfg}, changed_by=operator
+        secrets = (
+            {"secret_key": form.cleaned_data["secret_key"]}
+            if form.cleaned_data["secret_key"] else {}
+        )
+        services.save_settings_page(
+            tenant, page="storage", block="storage", value=cfg, changed_by=operator,
+            secrets=secrets,
         )
         return redirect("setup-index")
     return render(request, "setup/form.html", {"form": form, "step": "storage",
@@ -234,8 +236,8 @@ def claims(request):
             "enabled_methods": form.cleaned_data["methods"],
             "ttl": {"domain_email_minutes": form.cleaned_data["domain_email_ttl_minutes"]},
         }
-        services.update_tenant_settings(
-            tenant=tenant, changes={"claim_verification": cfg}, changed_by=operator
+        services.save_settings_page(
+            tenant, page="claims", block="claim_verification", value=cfg, changed_by=operator
         )
         return redirect("setup-index")
     return render(request, "setup/form.html", {"form": form, "step": "claims",

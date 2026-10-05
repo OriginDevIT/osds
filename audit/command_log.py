@@ -19,6 +19,7 @@ sibling event-log writer.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any
 
 from django.db import transaction
@@ -83,12 +84,16 @@ def log_received(
     )
 
 
+_KEEP = object()
+
+
 def log_conclude(
     row: CommandLog,
     *,
     outcome: str,
     result_event_id: "str | None" = None,
     problem: "dict | None" = None,
+    payload: Any = _KEEP,
 ) -> None:
     """Write the outcome of a command onto its received row.
 
@@ -100,13 +105,71 @@ def log_conclude(
     happens *after* the command committed; a ``Decimal`` or ``date`` in
     ``problem`` raising here would leave the row unconcluded and read as a
     mid-apply crash on a write that actually succeeded.
+
+    ``payload``, when given, replaces the received payload in the same write that
+    concludes the row -- for a command whose payload is only known once it has
+    run (``settings_command``: the names of the fields that changed).
     """
     row.outcome = outcome
     row.result_event_id = result_event_id or ""
     row.problem = None if problem is None else jsonable(problem)
     row.concluded_at = timezone.now()
-    row.save(
-        update_fields=["outcome", "result_event_id", "problem", "concluded_at"]
+    fields = ["outcome", "result_event_id", "problem", "concluded_at"]
+    if payload is not _KEEP:
+        row.payload = jsonable(payload)
+        fields.append("payload")
+    row.save(update_fields=fields)
+
+
+SETTINGS_UPDATE = "settings.update"
+
+
+class SettingsSave:
+    """The field *names* a settings save changed -- never a value (decisions.md
+    §4). Secrets are named like any other field and are never read here."""
+
+    def __init__(self) -> None:
+        self._names: set[str] = set()
+
+    def changed(self, before: "dict | None", after: "dict | None") -> None:
+        """Name every top-level key whose value differs between two blocks."""
+        before, after = before or {}, after or {}
+        self._names.update(k for k in before.keys() | after.keys() if before.get(k) != after.get(k))
+
+    def named(self, *names: str) -> None:
+        self._names.update(names)
+
+    @property
+    def fields(self) -> "list[str]":
+        return sorted(self._names)
+
+
+@contextmanager
+def settings_command(tenant, operator, *, page: str, op: str = "replace", refused: tuple = ()):
+    """One ``settings.update`` command-log row around an operator's settings save.
+
+    Same shape as every other command (spec §11.2): received before the save's
+    transaction opens, concluded after it settles, each committed on its own, so
+    the caller must be in autocommit. The payload names the ``page`` and the
+    ``fields`` that changed, and nothing else. An exception in ``refused``
+    concludes the row ``rejected`` with a fixed reason -- never the message, which
+    may quote a submitted value -- and is re-raised; any other exception leaves the
+    row unconcluded, the "threw mid-apply" record.
+    """
+    require_autocommit()
+    save = SettingsSave()
+    row = log_received(
+        command=SETTINGS_UPDATE, tenant=tenant, idempotency_key=None,
+        actor={"type": "admin", "id": operator.public_id},
+        trace_id=None, origin="", payload={"page": page, "op": op, "fields": []},
+    )
+    try:
+        yield save
+    except refused:
+        log_conclude(row, outcome="rejected", problem={"reason": "invalid"})
+        raise
+    log_conclude(
+        row, outcome="applied", payload={"page": page, "op": op, "fields": save.fields}
     )
 
 

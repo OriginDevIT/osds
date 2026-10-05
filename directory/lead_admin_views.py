@@ -127,10 +127,9 @@ def lead_settings(request):
     )
     if request.method == "POST" and form.is_valid():
         try:
-            tenant_services.update_tenant_settings(
-                tenant=tenant,
-                changes={"leads": {"enabled": form.cleaned_data["enabled"]}},
-                changed_by=request.user,
+            tenant_services.save_settings_page(
+                tenant, page="leads", block="leads",
+                value={"enabled": form.cleaned_data["enabled"]}, changed_by=request.user,
             )
         except tenant_services.InvalidTenantSettings as exc:
             form.add_error(None, str(exc))

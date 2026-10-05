@@ -10,7 +10,7 @@ from __future__ import annotations
 import http.client
 from unittest import SkipTest
 
-from django.test import Client, LiveServerTestCase, TestCase, override_settings
+from django.test import Client, LiveServerTestCase, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
 from directory.services import RESERVED_SLUGS
@@ -42,7 +42,7 @@ def _ask(domain, remote=PROXY, host=INTERNAL_HOST, path=PATH, **extra):
     DEBUG=False,
     OSDS_DEV_TENANT_SLUG="",
 )
-class AskTests(TestCase):
+class AskTests(TransactionTestCase):
     def setUp(self):
         _setup_complete()
         self.tenant = Tenant.objects.create(

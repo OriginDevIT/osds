@@ -10,12 +10,12 @@ from django.utils import timezone
 from audit.models import OutboxEvent
 from billing import machine, tiers
 from billing.models import Entitlement, Tier
-from billing.tests.base import T0, BillingTestCase, BillingTransactionTestCase, Role
+from billing.tests.base import T0, BillingTransactionTestCase, Role
 from osds.tenancy import tenant_context
 from tenants.models import InstallSetup
 
 
-class TierServiceTests(BillingTestCase):
+class TierServiceTests(BillingTransactionTestCase):
     def setUp(self):
         super().setUp()
         self.admin = self.operator(Role.ADMIN)

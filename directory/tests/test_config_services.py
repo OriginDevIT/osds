@@ -4,7 +4,7 @@ layer, emitting tenant.settings_changed.
 
 from __future__ import annotations
 
-from django.test import TestCase
+from django.test import TransactionTestCase
 
 from audit.models import OutboxEvent
 from directory import services
@@ -14,11 +14,10 @@ from osds.tenancy import tenant_context
 from tenants.models import Operator, Tenant
 
 
-class ConfigServiceTests(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        cls.tenant = Tenant.objects.create(slug="acme", name="Acme")
-        cls.actor = Operator.objects.create_user(
+class ConfigServiceTests(TransactionTestCase):
+    def setUp(self):
+        self.tenant = Tenant.objects.create(slug="acme", name="Acme")
+        self.actor = Operator.objects.create_user(
             email="admin@acme.test", password="x"
         )
 
