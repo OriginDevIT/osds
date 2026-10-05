@@ -180,21 +180,28 @@ def create_lead(
             raise ValueError("name is required")
         phone = contact.get("phone_e164") or ""
         if phone:
-            phone = normalize.phone_e164(phone)
+            try:
+                phone = normalize.phone_e164(phone)
+            except ValueError:
+                # The command log is permanent: the message must not echo
+                # the number back (#219).
+                raise ValueError("phone is not a valid E.164 number") from None
         text = clean_message(message)
         if not MESSAGE_MIN <= len(text) <= MESSAGE_MAX:
             raise ValueError(
                 f"the message must be {MESSAGE_MIN} to {MESSAGE_MAX} characters"
             )
         if kind not in Lead.Kind.values:
-            raise ValueError(f"unknown lead kind {kind!r}")
+            raise ValueError(
+                f"kind is not one of {', '.join(sorted(Lead.Kind.values))}"
+            )
         source_page = (source_page or "")[:500]
+        # Ids and the consent flags only: the contact details and the message
+        # live on the lead row and its event, never in the permanent log (#219).
         payload = normalize.jsonable(
             {
                 "listing_id": listing.public_id,
                 "kind": kind,
-                "lead": {"name": name, "email": email, "phone_e164": phone, "message": text},
-                "source_page": source_page,
                 "consent": consent,
             }
         )
