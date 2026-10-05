@@ -1275,6 +1275,17 @@ def submit_claim(
     require_autocommit()
 
     try:
+        # Types first: a non-string would otherwise raise AttributeError below
+        # and leave the received row unconcluded (#257).
+        normalize.require_mapping(claimant, "claimant")
+        normalize.require_mapping(consent, "consent")
+        if not all(isinstance(entry, dict) for entry in consent.values()):
+            raise ValueError("consent entries must be objects")
+        for key, field in (
+            ("email", "email"), ("name", "name"),
+            ("phone_e164", "phone"), ("role_claimed", "role"),
+        ):
+            normalize.require_text(claimant.get(key), field)
         email = normalize.email(claimant.get("email")) or ""
         if not email:
             raise ValueError("claimant email is required")
