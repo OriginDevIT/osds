@@ -30,6 +30,7 @@ from audit.command_log import (
     settings_command,
 )
 from audit.outbox import emit
+from tenants import operator_invites
 from tenants.claim_verification import CLAIM_METHODS, CLAIM_VERIFICATION_BOUNDS
 from tenants.mail_settings import (
     HOST_CHANGE_MESSAGE,
@@ -217,8 +218,9 @@ def create_operator(
     command-log-only, with a null tenant (spec §4.4, #146); the command log is
     the whole audit trail for it.
 
-    No password is set (``set_unusable_password``); the operator has no usable
-    credential until a set-password flow exists. ``is_superadmin`` is not a
+    No password is set (``set_unusable_password``) and no invite is minted: the
+    operator has no usable credential until ``manage.py issue_operator_invite``
+    prints them a set-password link (decisions.md §4.14). ``is_superadmin`` is not a
     parameter -- elevation is installation-scoped authorization and is out of
     scope here (#165).
     """
@@ -254,6 +256,12 @@ def invite_staff(
     write to an existing operator row (spec §4.4). The outcome is the same
     whether or not the email already had an account.
 
+    An operator minted by this call also gets a set-password invite (decisions.md
+    §4.14), mailed through ``tenant``'s SMTP; the membership activates when they
+    spend it. When ``tenant`` cannot send that mail no invite is minted and the
+    row says so (``problem.invite_mail``). The payload names the role and, once
+    applied, the operator's id -- never the email (#219).
+
     A duplicate ``(operator, tenant)`` membership is concluded ``rejected``.
     The ``IntegrityError`` is caught here, *outside* ``_apply_invite_staff`` --
     caught inside its own ``atomic`` block it would leave the connection
@@ -269,10 +277,10 @@ def invite_staff(
         actor=actor,
         trace_id=None,
         origin="",
-        payload={"email": email, "role": int(role)},
+        payload={"role": int(role)},
     )
     try:
-        membership, event_id = _apply_invite_staff(
+        membership, event_id, invite_mail = _apply_invite_staff(
             tenant=tenant,
             email=email,
             role=role,
@@ -284,14 +292,20 @@ def invite_staff(
             row, outcome="rejected", problem={"error": "duplicate_membership"}
         )
         raise
-    log_conclude(row, outcome="applied", result_event_id=event_id)
+    log_conclude(
+        row,
+        outcome="applied",
+        result_event_id=event_id,
+        problem={"invite_mail": invite_mail} if invite_mail else None,
+        payload={"operator_id": membership.operator.public_id, "role": int(role)},
+    )
     return membership
 
 
 @transaction.atomic
 def _apply_invite_staff(
     *, tenant: Tenant, email: str, role: int, invited_by: Operator, actor: dict
-) -> "tuple[StaffMembership, str]":
+) -> "tuple[StaffMembership, str, str]":
     operator, created = Operator.objects.get_or_create(email=email)
     if created:
         operator.set_unusable_password()
@@ -303,6 +317,18 @@ def _apply_invite_staff(
         status=StaffMembership.Status.PENDING,
         invited_by=invited_by,
     )
+    invite_mail = ""
+    if created:
+        if operator_invites.mail_available(tenant):
+            operator_invites.mint_invite(
+                operator=operator,
+                invited_by=invited_by,
+                membership=membership,
+                mail_tenant=tenant,
+                throttle=True,
+            )
+        else:
+            invite_mail = "unavailable"
     member = {
         "operator_id": operator.public_id,
         "role": _role_key(role),
@@ -319,7 +345,7 @@ def _apply_invite_staff(
             "granted_by": invited_by.public_id,
         },
     )
-    return membership, event.event_id
+    return membership, event.event_id, invite_mail
 
 
 @transaction.atomic

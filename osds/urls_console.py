@@ -19,5 +19,6 @@ urlpatterns = [
     path("", console_views.index, name="console-index"),
     path("login/", console_views.login_view, name="console-login"),
     path("logout/", console_views.logout_view, name="console-logout"),
+    path("invite/<str:token>/", console_views.invite_view, name="console-invite"),
     path("admin/", admin.site.urls),
 ]

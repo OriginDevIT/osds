@@ -2,6 +2,7 @@
 {% block title %}Sign in &middot; OSDS console{% endblock %}
 {% block heading %}Sign in{% endblock %}
 {% block content %}
+{% for message in messages %}<p class="muted">{{ message }}</p>{% endfor %}
 {% if form.non_field_errors %}
   <ul class="errors">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>
 {% endif %}

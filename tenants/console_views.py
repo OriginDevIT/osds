@@ -9,12 +9,16 @@ operators; this is the operator-facing surface alongside it.
 
 from __future__ import annotations
 
+from django import forms
+from django.contrib import messages
 from django.contrib.auth import login as auth_login, logout as auth_logout
+from django.contrib.auth.password_validation import password_validators_help_texts
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
+from tenants import operator_invites
 from tenants.login import OperatorAuthenticationForm, safe_redirect_target
 from tenants.models import StaffMembership
 
@@ -60,4 +64,61 @@ def index(request):
     pending = [m for m in memberships if m.status == StaffMembership.Status.PENDING]
     return render(
         request, "console/index.html", {"active": active, "pending": pending}
+    )
+
+
+class SetPasswordForm(forms.Form):
+    password1 = forms.CharField(label="Password", widget=forms.PasswordInput)
+    password2 = forms.CharField(label="Confirm password", widget=forms.PasswordInput)
+
+    def clean(self):
+        cleaned = super().clean()
+        p1, p2 = cleaned.get("password1"), cleaned.get("password2")
+        if p1 and p2 and p1 != p2:
+            self.add_error("password2", "The passwords do not match.")
+        return cleaned
+
+
+def _private(response):
+    """No cross-origin referrer and no caching on a page whose URL is a
+    credential. ``same-origin``, not ``no-referrer``, for the reason in
+    ``directory.owner_views._private``: ``no-referrer`` makes a browser send
+    ``Origin: null`` on the page's own form POST and CSRF refuses it."""
+    response["Referrer-Policy"] = "same-origin"
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@never_cache
+@require_http_methods(["GET", "POST"])
+def invite_view(request, token):
+    """The operator's set-password page (decisions.md section 4.14). GET shows
+    the form and spends nothing, so a mail scanner that follows the link leaves
+    it live; POST spends it. Unknown, expired, used and no-longer-needed links
+    are the same page, 400. No session is opened: the operator signs in."""
+    if request.method == "POST":
+        form = SetPasswordForm(request.POST)
+        if form.is_valid():
+            try:
+                operator_invites.set_password(
+                    secret=token, password=form.cleaned_data["password1"]
+                )
+            except operator_invites.InviteRefused:
+                return _private(render(request, "console/invite_invalid.html", status=400))
+            except operator_invites.PasswordRejected as exc:
+                for message in exc.messages:
+                    form.add_error("password1", message)
+            else:
+                messages.success(request, "Password set. Sign in to continue.")
+                return _private(redirect("console-login"))
+    else:
+        if operator_invites.peek_invite(token) is None:
+            return _private(render(request, "console/invite_invalid.html", status=400))
+        form = SetPasswordForm()
+    return _private(
+        render(
+            request,
+            "console/invite.html",
+            {"form": form, "hints": password_validators_help_texts()},
+        )
     )

@@ -4,13 +4,16 @@ logger's scrubbing, and the project LOGGING configuration.
 
 from __future__ import annotations
 
+import io
 import logging
 from types import SimpleNamespace
+from unittest import mock
 
 from django.conf import settings
 from unittest import skipUnless
 
-from django.test import SimpleTestCase
+from django.test import Client, SimpleTestCase, TestCase, override_settings
+from django.utils import timezone
 
 from osds.adapter_logging import REDACTED, ScrubbingLogger, make_adapter_logger
 from osds.logging_filters import MASK, MaskSecretPaths, mask_secret_paths
@@ -29,8 +32,16 @@ class MaskTests(SimpleTestCase):
         self.assertNotIn(TOKEN, mask_secret_paths(f"/owner/signin/{TOKEN}?next=/x"))
         self.assertNotIn(TOKEN, mask_secret_paths(f"https://acme.test/owner/signin/{TOKEN}/"))
 
+    def test_an_operator_invitation_token_is_masked(self):
+        self.assertEqual(
+            mask_secret_paths(f"GET /invite/{TOKEN}/ HTTP/1.1"),
+            f"GET /invite/{MASK}/ HTTP/1.1",
+        )
+        self.assertNotIn(TOKEN, mask_secret_paths(f"https://console.test/invite/{TOKEN}/"))
+        self.assertNotIn(TOKEN, mask_secret_paths(f"/invite/{TOKEN}?x=1"))
+
     def test_the_sign_in_pages_themselves_are_left_alone(self):
-        for path in ("/owner/signin/", "/owner/signin/sent/", "/owner/leads/", "/owner/"):
+        for path in ("/owner/signin/", "/owner/signin/sent/", "/owner/leads/", "/owner/", "/invite/", "/login/"):
             self.assertEqual(mask_secret_paths(path), path)
 
     def test_several_tokens_in_one_line(self):
@@ -164,3 +175,48 @@ class ScrubbingLoggerTests(SimpleTestCase):
         with self.assertLogs("osds.adapters.hook", "INFO") as logs:
             make_adapter_logger("hook", set()).info("hi")
         self.assertEqual(logs.records[0].name, "osds.adapters.hook")
+
+
+TOKEN_PATHS = (f"/owner/signin/{TOKEN}/", f"/invite/{TOKEN}/")
+
+
+class AccessLogLineTests(SimpleTestCase):
+    """The gunicorn access line is built from masked atoms. Importing gunicorn's
+    logger needs a Unix-only module, so this formats the same default access
+    format from the same mask the logger applies to every string atom."""
+
+    def test_a_logged_request_line_for_each_token_path_has_no_token(self):
+        for path in TOKEN_PATHS:
+            atoms = {
+                key: mask_secret_paths(value)
+                for key, value in {"h": "127.0.0.1", "r": f"GET {path} HTTP/1.1",
+                                   "U": path, "f": f"https://x.test{path}", "s": "400"}.items()
+            }
+            line = '%(h)s "%(r)s" %(s)s "%(f)s"' % atoms
+            self.assertNotIn(TOKEN, line, path)
+            self.assertIn(MASK, line)
+
+
+@override_settings(ALLOWED_HOSTS=["*"], OSDS_CONSOLE_HOST="console.test")
+class RequestLoggingTests(TestCase):
+    """Django's own request log, through the project's real console handler:
+    a dead link is a 400 and logs ``Bad Request: <path>``."""
+
+    def test_a_logged_request_for_each_token_path_has_no_token(self):
+        from tenants.models import InstallSetup, Tenant
+
+        InstallSetup.objects.create(token_hash="x" * 64, completed_at=timezone.now())
+        Tenant.objects.create(slug="acme", name="Acme", primary_domain="acme.test")
+        handler = next(
+            h for h in logging.getLogger().handlers
+            if any(isinstance(f, MaskSecretPaths) for f in h.filters)
+        )
+        buffer = io.StringIO()
+        with mock.patch.object(handler, "stream", buffer):
+            for host, path in (("acme.test", TOKEN_PATHS[0]), ("console.test", TOKEN_PATHS[1])):
+                resp = Client().get(path, HTTP_HOST=host, secure=True)
+                self.assertEqual(resp.status_code, 400, path)
+        output = buffer.getvalue()
+        self.assertNotIn(TOKEN, output)
+        self.assertEqual(output.count("Bad Request:"), 2, output)
+        self.assertEqual(output.count(MASK), 2, output)
