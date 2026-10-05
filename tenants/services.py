@@ -27,6 +27,7 @@ from audit.command_log import (
     log_conclude,
     log_received,
     require_autocommit,
+    settings_command,
 )
 from audit.outbox import emit
 from tenants.claim_verification import CLAIM_METHODS, CLAIM_VERIFICATION_BOUNDS
@@ -36,7 +37,7 @@ from tenants.mail_settings import (
     host_change_needs_password,
 )
 from tenants.models import InstallSetup, Operator, StaffMembership, Tenant
-from tenants.secrets import delete_secret, set_secret
+from tenants.secrets import delete_secret, has_secret, set_secret
 
 
 class InvalidTenantSettings(ValueError):
@@ -359,9 +360,19 @@ def add_bootstrap_membership(
     return membership
 
 
-@transaction.atomic
 def set_tenant_domain(*, tenant: Tenant, domain: str, changed_by: Operator) -> Tenant:
+    """The wizard's domain step. An operator command: one ``settings.update`` row
+    (spec §11.2, decisions.md §4), so it runs in autocommit."""
     domain = domain.strip().rstrip(".").lower()
+    with settings_command(tenant, changed_by, page="domain") as cmd:
+        if domain != (tenant.primary_domain or ""):
+            cmd.named("domain")
+        _apply_tenant_domain(tenant=tenant, domain=domain, changed_by=changed_by)
+    return tenant
+
+
+@transaction.atomic
+def _apply_tenant_domain(*, tenant: Tenant, domain: str, changed_by: Operator) -> Tenant:
     had_domain = bool(tenant.primary_domain)
     tenant.primary_domain = domain
     tenant.domain_verified_at = None
@@ -418,7 +429,6 @@ def update_tenant_settings(
     return tenant
 
 
-@transaction.atomic
 def update_mail_settings(
     *,
     tenant: Tenant,
@@ -437,7 +447,27 @@ def update_mail_settings(
     username set and no password supplied is refused. Checked here, not in
     ``_validate_smtp``, because it needs the stored block and whether a
     password arrived -- neither of which a value-only validator sees.
+
+    An operator command: one ``settings.update`` row naming the fields that
+    changed (decisions.md §4), so it runs in autocommit.
     """
+    before = dict((tenant.settings or {}).get("smtp") or {})
+    had_password = has_secret("smtp_password", tenant=tenant)
+    with settings_command(tenant, changed_by, page="mail", refused=(InvalidTenantSettings,)) as cmd:
+        _apply_mail_settings(
+            tenant=tenant, config=config, password=password,
+            clear_password=clear_password, changed_by=changed_by,
+        )
+        cmd.changed(before, (tenant.settings or {}).get("smtp"))
+        if password or (had_password and not has_secret("smtp_password", tenant=tenant)):
+            cmd.named("password")
+    return tenant
+
+
+@transaction.atomic
+def _apply_mail_settings(
+    *, tenant: Tenant, config: dict, password: str, clear_password: bool, changed_by: Operator
+) -> None:
     username = (config.get("username") or "").strip()
     if (
         not password
@@ -454,17 +484,54 @@ def update_mail_settings(
         set_secret("smtp_password", password, tenant=tenant)
     elif clear_password or not username:
         delete_secret("smtp_password", tenant=tenant)
+
+
+def skip_mail_setup(*, tenant: Tenant, changed_by: Operator) -> Tenant:
+    """The wizard's Skip: an empty ``smtp`` block. The wizard counts the step
+    done once the key exists, and the sender reads an empty host as
+    unconfigured (decisions.md §4.5). Logged like any other mail save."""
+    before = dict((tenant.settings or {}).get("smtp") or {})
+    had_password = has_secret("smtp_password", tenant=tenant)
+    with settings_command(tenant, changed_by, page="mail") as cmd:
+        _apply_skip_mail_setup(tenant=tenant, changed_by=changed_by)
+        cmd.changed(before, {})
+        if had_password:
+            cmd.named("password")
     return tenant
 
 
 @transaction.atomic
-def skip_mail_setup(*, tenant: Tenant, changed_by: Operator) -> Tenant:
-    """The wizard's Skip: an empty ``smtp`` block. The wizard counts the step
-    done once the key exists, and the sender reads an empty host as
-    unconfigured (decisions.md §4.5)."""
+def _apply_skip_mail_setup(*, tenant: Tenant, changed_by: Operator) -> None:
     update_tenant_settings(tenant=tenant, changes={"smtp": {}}, changed_by=changed_by)
     delete_secret("smtp_password", tenant=tenant)
+
+
+def save_settings_page(
+    tenant: Tenant, *, page: str, block: str, value: dict, changed_by: Operator,
+    secrets: "dict[str, str] | None" = None,
+) -> Tenant:
+    """Save one settings block from an operator page: the lead form, and the
+    wizard's storage and claims steps. ``secrets`` maps a form field name to a
+    value stored as ``"<block>_<name>"``; the command-log row names the field and
+    never the value. An operator command, so it runs in autocommit
+    (decisions.md §4)."""
+    before = dict((tenant.settings or {}).get(block) or {})
+    with settings_command(tenant, changed_by, page=page, refused=(InvalidTenantSettings,)) as cmd:
+        _apply_settings_page(
+            tenant=tenant, block=block, value=value, changed_by=changed_by, secrets=secrets or {},
+        )
+        cmd.changed(before, (tenant.settings or {}).get(block))
+        cmd.named(*(secrets or {}))
     return tenant
+
+
+@transaction.atomic
+def _apply_settings_page(
+    *, tenant: Tenant, block: str, value: dict, changed_by: Operator, secrets: dict
+) -> None:
+    update_tenant_settings(tenant=tenant, changes={block: value}, changed_by=changed_by)
+    for name, secret in secrets.items():
+        set_secret(f"{block}_{name}", secret, tenant=tenant)
 
 
 @transaction.atomic

@@ -8,7 +8,7 @@ from unittest import mock
 
 from django.contrib.postgres.search import SearchQuery
 from django.core.management import call_command
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 
 from directory import services
@@ -20,18 +20,17 @@ from tenants.models import Operator, Tenant
 ACTOR_OP = None
 
 
-class MarkerTests(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        cls.tenant = Tenant.objects.create(slug="acme", name="Acme")
-        cls.op = Operator.objects.create_user(email="a@a.test", password="x")
-        cls.lt = ListingType.all_tenants.create(
-            tenant=cls.tenant, key="business", label_singular="B",
+class MarkerTests(TransactionTestCase):
+    def setUp(self):
+        self.tenant = Tenant.objects.create(slug="acme", name="Acme")
+        self.op = Operator.objects.create_user(email="a@a.test", password="x")
+        self.lt = ListingType.all_tenants.create(
+            tenant=self.tenant, key="business", label_singular="B",
             label_plural="Bs", path_segment="businesses",
             fields=[{"key": "trade", "label": "Trade", "type": "text"}],
         )
-        cls.cat = Category.all_tenants.create(
-            tenant=cls.tenant, listing_type=cls.lt, slug="plumbers", name="Plumbers"
+        self.cat = Category.all_tenants.create(
+            tenant=self.tenant, listing_type=self.lt, slug="plumbers", name="Plumbers"
         )
 
     def _jobs(self):

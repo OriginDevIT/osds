@@ -4,7 +4,7 @@ sitemaps, .well-known are rejected by create_category and upsert_listing.
 
 from __future__ import annotations
 
-from django.test import TestCase, TransactionTestCase
+from django.test import TransactionTestCase
 
 from directory import services
 from directory.field_schema import SchemaError
@@ -18,13 +18,12 @@ RESERVED = [
 ]
 
 
-class ReservedCategorySlugTests(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        cls.tenant = Tenant.objects.create(slug="acme", name="Acme")
-        cls.op = Operator.objects.create_user(email="a@a.test", password="x")
-        cls.lt = ListingType.all_tenants.create(
-            tenant=cls.tenant, key="business", label_singular="B",
+class ReservedCategorySlugTests(TransactionTestCase):
+    def setUp(self):
+        self.tenant = Tenant.objects.create(slug="acme", name="Acme")
+        self.op = Operator.objects.create_user(email="a@a.test", password="x")
+        self.lt = ListingType.all_tenants.create(
+            tenant=self.tenant, key="business", label_singular="B",
             label_plural="Bs", path_segment="businesses",
         )
 

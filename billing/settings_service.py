@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from django.db import transaction
 
+from audit.command_log import settings_command
 from osds.adapter_context import adapter_config, secret_name
 from osds.setting_pattern import pattern_error
 from tenants import services as tenant_services
@@ -31,9 +32,22 @@ def stored_secrets(tenant, provider) -> "set[str]":
     }
 
 
-@transaction.atomic
 def update_adapter_settings(tenant, *, provider, values: dict, clear: "set[str]" = frozenset(),
                             changed_by) -> None:
+    """An operator command: one ``settings.update`` row naming the fields that
+    changed, secrets by name and never by value (decisions.md §4), so it runs
+    in autocommit."""
+    with settings_command(
+        tenant, changed_by, page="payments",
+        refused=(AdapterSettingsError, tenant_services.InvalidTenantSettings),
+    ) as cmd:
+        _apply_adapter_settings(
+            tenant, provider=provider, values=values, clear=clear, changed_by=changed_by, cmd=cmd
+        )
+
+
+@transaction.atomic
+def _apply_adapter_settings(tenant, *, provider, values, clear, changed_by, cmd) -> None:
     fields = list(provider.settings_fields())
     known = {f.key for f in fields}
     stray = (set(values) | set(clear)) - known
@@ -41,6 +55,7 @@ def update_adapter_settings(tenant, *, provider, values: dict, clear: "set[str]"
         raise AdapterSettingsError(f"Unknown setting(s): {', '.join(sorted(stray))}")
 
     config = adapter_config(tenant, provider.adapter_id)
+    before = dict(config)
     errors = []
     new_secrets: dict = {}
     drop: list = []
@@ -71,6 +86,9 @@ def update_adapter_settings(tenant, *, provider, values: dict, clear: "set[str]"
     if errors:
         raise AdapterSettingsError(" ".join(errors))
 
+    prefix = f"{provider.adapter_id}_"
+    cmd.changed(before, config)
+    cmd.named(*(n.removeprefix(prefix) for n in [*new_secrets, *drop]))
     adapters = dict((tenant.settings or {}).get("adapters") or {})
     adapters[provider.adapter_id] = config
     tenant_services.update_tenant_settings(

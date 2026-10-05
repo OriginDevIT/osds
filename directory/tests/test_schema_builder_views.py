@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import functools
 
-from django.test import Client, TestCase, override_settings
+from django.test import Client, TransactionTestCase, override_settings
 from django.urls import reverse as _reverse
 from django.utils import timezone
 
@@ -23,21 +23,20 @@ HOST = "acme.test"
 
 
 @override_settings(ALLOWED_HOSTS=["*"], OSDS_CONSOLE_HOST="console.test")
-class SchemaBuilderViewTests(TestCase):
-    @classmethod
-    def setUpTestData(cls):
+class SchemaBuilderViewTests(TransactionTestCase):
+    def setUp(self):
         InstallSetup.objects.create(token_hash="x" * 64, completed_at=timezone.now())
-        cls.tenant = Tenant.objects.create(
+        self.tenant = Tenant.objects.create(
             slug="acme", name="Acme", primary_domain=HOST
         )
-        cls.admin = Operator.objects.create_user(email="admin@acme.test", password="x")
-        cls.editor = Operator.objects.create_user(email="editor@acme.test", password="x")
+        self.admin = Operator.objects.create_user(email="admin@acme.test", password="x")
+        self.editor = Operator.objects.create_user(email="editor@acme.test", password="x")
         StaffMembership.objects.create(
-            operator=cls.admin, tenant=cls.tenant,
+            operator=self.admin, tenant=self.tenant,
             role=StaffMembership.Role.ADMIN, status=StaffMembership.Status.ACTIVE,
         )
         StaffMembership.objects.create(
-            operator=cls.editor, tenant=cls.tenant,
+            operator=self.editor, tenant=self.tenant,
             role=StaffMembership.Role.EDITOR, status=StaffMembership.Status.ACTIVE,
         )
 

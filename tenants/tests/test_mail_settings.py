@@ -12,7 +12,7 @@ from io import StringIO
 from contextlib import redirect_stdout
 
 from django.apps import apps
-from django.test import Client, TestCase, override_settings
+from django.test import Client, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse as _reverse
 from django.utils import timezone
 
@@ -90,7 +90,7 @@ class SmtpValidatorTests(TestCase):
         self.put({**GOOD, "security": "none", "username": ""})
 
 
-class UpdateMailSettingsTests(TestCase):
+class UpdateMailSettingsTests(TransactionTestCase):
     def setUp(self):
         self.tenant = _tenant()
         self.op = Operator.objects.create_user(email="a@acme.test", password="x")
@@ -258,7 +258,7 @@ class MailFormTests(TestCase):
 @override_settings(
     ALLOWED_HOSTS=["*"], OSDS_CONSOLE_HOST="console.test", PASSWORD_HASHERS=_FAST_HASH
 )
-class MailSettingsViewTests(TestCase):
+class MailSettingsViewTests(TransactionTestCase):
     def setUp(self):
         self.enterContext(email_send_stub(available=False))
         InstallSetup.objects.create(token_hash="x" * 64, completed_at=timezone.now())
@@ -507,7 +507,7 @@ class SmtpSecurityMigrationTests(TestCase):
         )
 
 
-class SkipAdvancesSetupTests(TestCase):
+class SkipAdvancesSetupTests(TransactionTestCase):
     def test_an_empty_block_counts_the_step_done(self):
         op = Operator.objects.create_user(email="a@acme.test", password="x")
         tenant = _tenant(settings={"storage": {"backend": "local"}})
