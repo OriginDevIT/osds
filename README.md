@@ -29,6 +29,19 @@ a named volume (`osds-secrets`). A `.env` (see `.env.example`) is optional
 overrides only, such as `OSDS_CONSOLE_HOST`, which must be the hostname you
 browse to, without a port.
 
+### Running management commands
+Run `manage.py` commands inside the stack with `osds-manage`, not
+`python manage.py`:
+
+    docker compose exec osds-app osds-manage issue_operator_invite --help
+    docker compose exec osds-app osds-manage ensure_setup_token
+
+`docker compose exec` does not see the secrets the container generated at boot,
+so a bare `python manage.py` fails with `KeyError: 'DJANGO_SECRET_KEY'`.
+`osds-manage` builds the same environment the entrypoint does, as the app
+database role, and then runs `manage.py` with your arguments. It works in
+`osds-app` and `osds-worker`. Anything you set in `.env` still takes precedence.
+
 Four containers: `osds-app`, `osds-worker`, `postgres`, and storage. Storage is
 local disk at launch, the `osds-media` volume shared by app and worker.
 

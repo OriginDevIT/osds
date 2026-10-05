@@ -92,12 +92,16 @@ jobs:
           echo "::add-mask::$token"
           echo "setup token printed at boot (${#token} chars)"
 
-          # exec does not see what the entrypoint exported, so DATABASE_URL is
-          # rebuilt from the generated app-role password, as the entrypoint does.
-          out="$(docker compose exec -T osds-app bash -c \
-            'export DATABASE_URL="postgresql://osds_app:$(cat /run/osds-secrets/db_app_password)@postgres:5432/osds"; python manage.py ensure_setup_token')"
+          # exec does not see what the entrypoint exported; osds-manage builds
+          # the same environment from the same script, so this is the command an
+          # operator runs. The stack's .env sets the two keys and leaves
+          # DATABASE_URL to be generated, covering the mixed path.
+          out="$(docker compose exec -T osds-app osds-manage ensure_setup_token)"
           echo "$out"
           echo "$out" | grep -q 'Setup token already present'
+
+          # The worker image is the same; osds-manage must work there too.
+          docker compose exec -T osds-worker osds-manage check
 
       - name: Worker is running and has ticked
         run: |

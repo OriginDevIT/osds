@@ -274,5 +274,5 @@ class StaffMembershipAdmin(PrincipalAdmin):
         return [
             "Mail is not set up for this directory, so no email will be sent. "
             "Whoever is invited without an account can be given a link with "
-            "manage.py issue_operator_invite."
+            "osds-manage issue_operator_invite."
         ]
