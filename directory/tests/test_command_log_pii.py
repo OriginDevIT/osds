@@ -36,6 +36,8 @@ EMAIL = "dana.hoffman@hoffmanplumbing.example"
 NAME = "Dana Hoffman"
 PHONE = "+17735550142"
 BAD_PHONE = "773-555-01"  # fails E.164 validation
+HOSTILE_ADDRESS = "dana.hoffman@hoffmanplumbing.example"
+HOSTILE = f"call {HOSTILE_ADDRESS} now"
 MESSAGE = "Burst pipe under the sink, call Dana on her mobile."
 
 
@@ -148,6 +150,48 @@ class ClaimSubmitLogTests(PiiAssertions, TransactionTestCase):
         self.assertIn("method is not one of", row.problem["errors"][0])
         self.assertNoPii(row, hostile, EMAIL, "mail dana")
 
+    # One test per submitted field (#254). A value carrying an email is put in
+    # the field under test and the submit is rejected, then the whole row is
+    # flattened. Fields with no validator of their own are paired with a bad
+    # phone so the rejection happens and the row is real.
+
+    def reject(self, claimant, consent=GRANTED_ALL):
+        with self.assertRaises(SchemaError):
+            with tenant_context(self.tenant):
+                services.submit_claim(
+                    self.tenant, listing=self.listing, method="manual",
+                    claimant=claimant, consent=consent, ip="203.0.113.44",
+                )
+        row = CommandLog.objects.get(command="claim.submit")
+        self.assertEqual(row.outcome, "rejected")
+        return row
+
+    def test_a_rejected_email_field_is_not_echoed(self):
+        row = self.reject({"name": NAME, "email": HOSTILE, "phone_e164": BAD_PHONE})
+        self.assertNoPii(row, HOSTILE, HOSTILE_ADDRESS)
+
+    def test_a_rejected_name_field_is_not_echoed(self):
+        row = self.reject({"name": HOSTILE, "email": EMAIL, "phone_e164": BAD_PHONE})
+        self.assertNoPii(row, HOSTILE, HOSTILE_ADDRESS, EMAIL)
+
+    def test_a_rejected_role_field_is_not_echoed(self):
+        row = self.reject({
+            "name": NAME, "email": EMAIL, "phone_e164": BAD_PHONE,
+            "role_claimed": HOSTILE,
+        })
+        self.assertNoPii(row, HOSTILE, HOSTILE_ADDRESS, EMAIL)
+
+    def test_a_rejected_phone_field_is_not_echoed(self):
+        row = self.reject({"name": NAME, "email": EMAIL, "phone_e164": HOSTILE})
+        self.assertNoPii(row, HOSTILE, HOSTILE_ADDRESS, EMAIL)
+
+    def test_a_malformed_consent_shape_is_not_echoed(self):
+        row = self.reject(
+            {"name": NAME, "email": EMAIL, "phone_e164": PHONE},
+            consent={(HOSTILE_ADDRESS,): {"granted": True}},
+        )
+        self.assertNoPii(row, HOSTILE_ADDRESS, EMAIL)
+
 
 class LeadCreateLogTests(PiiAssertions, LeadBase):
     def contact(self, phone=PHONE):
@@ -188,3 +232,74 @@ class LeadCreateLogTests(PiiAssertions, LeadBase):
         self.assertEqual(row.outcome, "rejected")
         self.assertIn("kind is not one of", row.problem["payload"])
         self.assertNoPii(row, hostile, EMAIL, "mail dana")
+
+    # One test per submitted field (#254); see ClaimSubmitLogTests.
+
+    def reject(self, **over):
+        with self.assertRaises(SchemaError):
+            self.create(**over)
+        row = CommandLog.objects.get(command="lead.create")
+        self.assertEqual(row.outcome, "rejected")
+        return row
+
+    def test_a_rejected_email_field_is_not_echoed(self):
+        contact = {"name": NAME, "email": HOSTILE, "phone_e164": BAD_PHONE}
+        row = self.reject(contact=contact)
+        self.assertNoPii(row, HOSTILE, HOSTILE_ADDRESS)
+
+    def test_a_rejected_name_field_is_not_echoed(self):
+        contact = {"name": HOSTILE, "email": EMAIL, "phone_e164": BAD_PHONE}
+        row = self.reject(contact=contact)
+        self.assertNoPii(row, HOSTILE, HOSTILE_ADDRESS, EMAIL)
+
+    def test_a_rejected_phone_field_is_not_echoed(self):
+        row = self.reject(contact=self.contact(phone=HOSTILE))
+        self.assertNoPii(row, HOSTILE, HOSTILE_ADDRESS, EMAIL)
+
+    def test_a_rejected_message_field_is_not_echoed(self):
+        row = self.reject(
+            contact=self.contact(phone=BAD_PHONE), message=HOSTILE + " " + MESSAGE
+        )
+        self.assertNoPii(row, HOSTILE, HOSTILE_ADDRESS, MESSAGE)
+
+    def test_a_rejected_source_page_field_is_not_echoed(self):
+        row = self.reject(
+            contact=self.contact(phone=BAD_PHONE),
+            source_page=f"/contact?ref={HOSTILE_ADDRESS}",
+        )
+        self.assertNoPii(row, HOSTILE_ADDRESS, EMAIL)
+
+    def test_a_malformed_consent_shape_is_not_echoed(self):
+        row = self.reject(
+            contact=self.contact(), consent={(HOSTILE_ADDRESS,): {"granted": True}}
+        )
+        self.assertNoPii(row, HOSTILE_ADDRESS, EMAIL)
+
+
+class ListingUpsertLogTests(PiiAssertions, TransactionTestCase):
+    """``directory.normalize`` is shared with ``listing.upsert``; its messages
+    reach the same log."""
+
+    def test_a_rejected_phone_is_not_echoed(self):
+        tenant = Tenant.objects.create(slug="acme", name="Acme")
+        lt = ListingType.all_tenants.create(
+            tenant=tenant, key="business", label_singular="B",
+            label_plural="Bs", path_segment="businesses",
+        )
+        with self.assertRaises(SchemaError):
+            with tenant_context(tenant):
+                services.upsert_listing(
+                    tenant, listing_type=lt, source="api",
+                    actor={"type": "operator", "id": "op_1"},
+                    payload={
+                        "slug": "hoffman", "name": "Hoffman",
+                        "contact": {"phone_e164": HOSTILE},
+                    },
+                )
+        row = CommandLog.objects.get(command="listing.upsert")
+        self.assertEqual(row.outcome, "rejected")
+        # A listing's own payload is logged by design; the rejection message
+        # is what must not repeat it.
+        problem = json.dumps(row.problem).lower()
+        self.assertNotIn(HOSTILE_ADDRESS, problem)
+        self.assertIn("phone", problem)
