@@ -55,7 +55,7 @@ def phone_e164(value):
     cleaned = _PHONE_STRIP.sub("", value)
     cleaned = "+" + _LEADING_PLUSES.sub("", cleaned) if cleaned.startswith("+") else cleaned
     if not re.match(r"^\+\d{8,15}$", cleaned):
-        raise ValueError(f"{value!r} is not a valid E.164 phone number")
+        raise ValueError("phone is not a valid E.164 number")
     return cleaned
 
 
@@ -102,7 +102,7 @@ def jsonable(value):
         out = {}
         for key, item in value.items():
             if not isinstance(key, str):
-                raise ValueError(f"object key {key!r} is not a string")
+                raise ValueError("an object key is not a string")
             out[key] = jsonable(item)
         return out
     if isinstance(value, (list, tuple)):
@@ -117,7 +117,7 @@ def decimal6(value):
     try:
         d = Decimal(str(value)).quantize(Decimal("0.000001"))
     except (InvalidOperation, ValueError) as exc:
-        raise ValueError(f"{value!r} is not a valid coordinate") from exc
+        raise ValueError("coordinate is not a valid number") from exc
     if d == 0:
         d = Decimal("0.000000")
     return d
