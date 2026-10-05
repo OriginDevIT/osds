@@ -1,0 +1,147 @@
+name: Compose smoke
+
+# Builds the images, boots the real four-container stack and checks it comes up.
+# Complements ci.yml, which runs the Django tests against a bare Postgres and so
+# never exercises the Dockerfile, the entrypoint, or the compose files.
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - docker/**
+      - docker-compose*.yml
+      - Caddyfile
+      - infra/postgres/**
+      - requirements*
+      - .github/workflows/compose-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # A scratch project name, so nothing here can collide with another stack.
+      COMPOSE_PROJECT_NAME: osds-cismoke
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Generate .env
+        run: |
+          # Generated per run, never committed. The stack would mint its own on
+          # first boot; setting them here exercises the .env override path.
+          umask 077
+          django_key="$(openssl rand -hex 32)"
+          osds_key="$(openssl rand -hex 32)"
+          echo "::add-mask::$django_key"
+          echo "::add-mask::$osds_key"
+          {
+            echo "DJANGO_SECRET_KEY=$django_key"
+            echo "OSDS_SECRET_KEY=$osds_key"
+          } > .env
+
+      - name: Build images
+        run: docker compose build
+
+      - name: Start the stack
+        run: timeout 420 docker compose up -d
+
+      - name: Wait for osds-app to be healthy
+        run: |
+          cid="$(docker compose ps -q osds-app)"
+          deadline=$((SECONDS + 240))
+          while true; do
+            status="$(docker inspect -f '{{.State.Health.Status}}' "$cid")"
+            echo "osds-app health: $status"
+            [ "$status" = healthy ] && break
+            if [ "$status" = unhealthy ] || [ "$(docker inspect -f '{{.State.Running}}' "$cid")" != true ]; then
+              echo "::error::osds-app is $status and not running"
+              exit 1
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::osds-app not healthy within 240s"
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: App answers on port 8000
+        run: |
+          code="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' http://localhost:8000/)"
+          echo "GET / -> $code"
+          case "$code" in
+            2??|3??|404) ;;
+            *) echo "::error::unexpected status $code"; exit 1 ;;
+          esac
+
+      - name: First-run setup token
+        run: |
+          # The entrypoint mints the token and prints it to the app log on boot.
+          # A second ensure_setup_token is idempotent and prints nothing new, so
+          # the token is asserted from the boot log and the command from its
+          # own exit status.
+          token="$(docker compose logs --no-color osds-app \
+            | sed -n 's/.*OSDS first-run setup token: *//p' | head -n1 | tr -d '[:space:]')"
+          if [ -z "$token" ]; then
+            echo "::error::no setup token in the osds-app boot log"
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          echo "setup token printed at boot (${#token} chars)"
+
+          # exec does not see what the entrypoint exported; osds-manage builds
+          # the same environment from the same script, so this is the command an
+          # operator runs. The stack's .env sets the two keys and leaves
+          # DATABASE_URL to be generated, covering the mixed path.
+          out="$(docker compose exec -T osds-app osds-manage ensure_setup_token)"
+          echo "$out"
+          echo "$out" | grep -q 'Setup token already present'
+
+          # The worker image is the same; osds-manage must work there too.
+          docker compose exec -T osds-worker osds-manage check
+
+      - name: Worker is running and has ticked
+        run: |
+          if [ -z "$(docker compose ps -q --status running osds-worker)" ]; then
+            echo "::error::osds-worker is not running"
+            exit 1
+          fi
+          deadline=$((SECONDS + 90))
+          until docker compose logs --no-color osds-worker | grep -q 'osds-worker: heartbeat'; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::no worker heartbeat within 90s"
+              exit 1
+            fi
+            sleep 3
+          done
+          docker compose logs --no-color osds-worker | grep 'osds-worker: heartbeat' | head -n1
+
+      - name: TLS overlay config resolves
+        env:
+          OSDS_CONSOLE_HOST: directory.example.com
+        run: docker compose -f docker-compose.yml -f docker-compose.tls.yml config --quiet
+
+      - name: Caddyfile validates
+        env:
+          OSDS_CONSOLE_HOST: directory.example.com
+        run: |
+          # The image is read from the overlay so there is one pin, not two.
+          image="$(docker compose -f docker-compose.yml -f docker-compose.tls.yml config --images | grep '^caddy:')"
+          echo "validating with $image"
+          docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" "$image" \
+            caddy validate --config /etc/caddy/Caddyfile
+
+      - name: Dump logs
+        if: failure()
+        run: |
+          docker compose ps -a
+          # The first-run token is on a throwaway install, but logs are public.
+          docker compose logs --no-color --timestamps \
+            | sed -E 's/(first-run setup token: *)[^ ]+/\1[redacted]/'
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v --remove-orphans

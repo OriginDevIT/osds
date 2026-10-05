@@ -1,0 +1,14 @@
+#!/bin/bash
+# `docker compose exec osds-app osds-manage <command>` -- manage.py with the
+# environment the entrypoint would have given it (docker/osds-env.sh).
+# Works in osds-app and osds-worker alike. Runs as the app role, never the owner.
+set -euo pipefail
+
+# Resolved through the symlink in /usr/local/bin so it finds its sibling.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/osds-env.sh"
+
+load_app_env
+require_app_env
+
+cd /app
+exec python manage.py "$@"
