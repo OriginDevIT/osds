@@ -4,6 +4,8 @@ from a single installation. Deploy with Docker.
 
 **Status:** pre-alpha. The specification is ahead of the implementation.
 
+**Installing it on a server? Start with the [install guide](docs/install.md).**
+
 ## What it does
 - Business listings with categories, geography, media, and search
 - Owner claim and verification flows
@@ -92,6 +94,8 @@ uses the address range `172.28.77.0/24`; if that clashes with a network on your
 host, see decisions.md §4.13.
 
 ## Documentation
+- [Install guide](docs/install.md)
+- [What is built and what is deferred](docs/mvp-plan.md)
 - [Specification](docs/spec/events-and-adapters.md)
 - [Receiving webhooks](docs/webhook.md)
 - [Contributing](CONTRIBUTING.md)
