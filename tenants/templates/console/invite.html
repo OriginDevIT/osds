@@ -1,0 +1,15 @@
+{% extends "console/base.html" %}
+{% block title %}Set your password &middot; OSDS console{% endblock %}
+{% block heading %}Set your password{% endblock %}
+{% block content %}
+<p class="muted">Choose a password to accept your invitation. You will sign in with it afterwards.</p>
+<form method="post">
+  {% csrf_token %}
+  {% if form.password1.errors %}<ul class="errors">{% for e in form.password1.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+  {{ form.password1.label_tag }}{{ form.password1 }}
+  {% if form.password2.errors %}<ul class="errors">{% for e in form.password2.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+  {{ form.password2.label_tag }}{{ form.password2 }}
+  <ul class="muted">{% for h in hints %}<li>{{ h }}</li>{% endfor %}</ul>
+  <button type="submit">Set password</button>
+</form>
+{% endblock %}

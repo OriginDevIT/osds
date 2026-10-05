@@ -29,7 +29,7 @@ from django.template.response import TemplateResponse
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect
 
-from tenants import services
+from tenants import operator_invites, services
 from tenants.admin_forms import OperatorAddForm, StaffInviteForm, TenantAddForm
 from tenants.models import Operator, StaffMembership, Tenant
 
@@ -90,6 +90,8 @@ class PrincipalAdmin(admin.ModelAdmin):
                     self.added_message(form.cleaned_data),
                     messages.SUCCESS,
                 )
+                for warning in self.warnings(form.cleaned_data):
+                    self.message_user(request, warning, messages.WARNING)
                 return redirect(
                     "admin:%s_%s_changelist"
                     % (self.opts.app_label, self.opts.model_name)
@@ -112,6 +114,9 @@ class PrincipalAdmin(admin.ModelAdmin):
 
     def added_message(self, data):  # pragma: no cover - overridden
         raise NotImplementedError
+
+    def warnings(self, data) -> "list[str]":
+        return []
 
 
 @admin.register(Tenant)
@@ -258,4 +263,16 @@ class StaffMembershipAdmin(PrincipalAdmin):
         # Identical whether or not the email already had an account (spec
         # section 4.4): the acting operator only ever sees the address they
         # typed.
-        return "Invitation sent to '%s'." % data["email"].strip().lower()
+        return "Invitation recorded for '%s'." % data["email"].strip().lower()
+
+    def warnings(self, data):
+        # Keyed to the directory, never the address: the same text whether or
+        # not the email already had an account (spec section 4.4), so it is not
+        # an oracle for who administers other directories.
+        if operator_invites.mail_available(data["tenant"]):
+            return []
+        return [
+            "Mail is not set up for this directory, so no email will be sent. "
+            "Whoever is invited without an account can be given a link with "
+            "manage.py issue_operator_invite."
+        ]

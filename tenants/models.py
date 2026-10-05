@@ -193,10 +193,29 @@ class StaffMembership(models.Model):
 
 class OperatorInvite(models.Model):
     """A set-password invitation for an operator with no credential yet
-    (spec §4.4). Only the token hash is stored."""
+    (spec §4.4, decisions.md §4.14). Only the token hash is stored.
+
+    ``membership`` is the one minted together with the operator; it becomes
+    active when the password is set. ``message`` is the mail that carries the
+    link, so a newer link can kill an older one's pending mail. Both are null
+    for an invite issued from the command line to an operator who has none."""
 
     operator = models.ForeignKey(
         Operator, on_delete=models.CASCADE, related_name="invites"
+    )
+    membership = models.ForeignKey(
+        "StaffMembership",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="invites",
+    )
+    message = models.ForeignKey(
+        "audit.OutboundMessage",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="operator_invites",
     )
     token_hash = models.CharField(max_length=64, unique=True)
     expires_at = models.DateTimeField()
