@@ -14,9 +14,21 @@ class ListingTypeForm(forms.Form):
     label_singular = forms.CharField(max_length=100)
     label_plural = forms.CharField(max_length=100)
     path_segment = forms.SlugField(
-        max_length=50, help_text="URL segment, used once a tenant has more than one type."
+        max_length=50,
+        help_text=(
+            "URL segment, used once a tenant has more than one type. Letters, numbers, "
+            "hyphens and underscores only, with no leading slash (write shops, not /shops). "
+            "Usually the same as the key."
+        ),
     )
     claimable = forms.BooleanField(required=False, initial=True)
+
+    def clean(self):
+        cleaned = super().clean()
+        if "key" in self.fields and not cleaned.get("path_segment") and not self.has_error("path_segment"):
+            if cleaned.get("key"):
+                cleaned["path_segment"] = cleaned["key"]
+        return cleaned
 
     def __init__(self, *args, is_create: bool = True, needs_url_confirm: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
@@ -25,6 +37,9 @@ class ListingTypeForm(forms.Form):
                 max_length=50, help_text="Internal identifier. Cannot be changed later."
             )
             self.order_fields(["key", "label_singular", "label_plural", "path_segment", "claimable"])
+            # Left blank, the segment defaults to the key (see clean()).
+            self.fields["path_segment"].required = False
+            self.fields["path_segment"].widget.attrs["data-follows"] = "id_key"
         if needs_url_confirm:
             self.fields["confirm_url_change"] = forms.BooleanField(
                 required=True,

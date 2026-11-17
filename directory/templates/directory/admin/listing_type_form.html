@@ -10,8 +10,16 @@
 {% if form.non_field_errors %}<ul class="errors">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
 <form method="post">
   {% csrf_token %}
-  {{ form.as_p }}
+  {% for field in form %}
+  <p class="field-wrap">
+    {{ field.label_tag }}
+    {{ field }}
+    {% if field.help_text %}<span class="helptext">{{ field.help_text }}</span>{% endif %}
+    {% if field.errors %}<span class="errors" role="alert">{% for e in field.errors %}{{ e }}{% if not forloop.last %} {% endif %}{% endfor %}</span>{% endif %}
+  </p>
+  {% endfor %}
   <button type="submit">Save</button>
 </form>
 <p><a href="{% url 'directory_admin:type-list' %}">Back</a></p>
+{% if mode == "create" %}{% load static %}<script src="{% static 'directory/listing-type-form.js' %}" defer></script>{% endif %}
 {% endblock %}
