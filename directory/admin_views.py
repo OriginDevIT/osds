@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from django.contrib import messages
 from django.core.files.base import ContentFile
-from django.http import HttpResponse
+from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.crypto import get_random_string
 
@@ -557,6 +557,33 @@ def listing_media_add(request, key, public_id):
     return redirect(
         "directory_admin:listing-edit", key=key, public_id=public_id
     )
+
+
+@_EDITOR
+def listing_media_thumbnail(request, key, public_id, asset_public_id):
+    """Stream one ready asset of a listing to a signed-in editor.
+
+    The public ``/media/<id>`` view only serves published listings, so the edit
+    page cannot use it for a draft. This path is gated by the same role as the
+    edit page, is scoped to the tenant and to the listing in the URL, and is
+    not visibility-gated. It is marked ``private`` so shared caches never keep
+    a copy.
+    """
+    listing = _get_listing(request, key, public_id)
+    asset = get_object_or_404(
+        MediaAsset,
+        tenant=request.tenant,
+        listing=listing,
+        public_id=asset_public_id,
+        status=MediaAsset.Status.READY,
+    )
+    try:
+        handle = get_tenant_storage(request.tenant).open(asset.storage_key)
+    except FileNotFoundError as exc:
+        raise Http404 from exc
+    response = FileResponse(handle, content_type=asset.content_type or None)
+    response["Cache-Control"] = "private, max-age=300"
+    return response
 
 
 @_EDITOR

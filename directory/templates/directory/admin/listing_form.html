@@ -25,7 +25,7 @@
     <ul class="media-list">
       {% for asset in media_assets %}
         <li>
-          <img src="/media/{{ asset.public_id }}" alt="{{ asset.alt_text }}" width="120">
+          <img src="{% url 'directory_admin:listing-media-thumbnail' key=listing_type.key public_id=listing.public_id asset_public_id=asset.public_id %}" alt="{{ asset.alt_text }}" width="120">
           <span>{{ asset.get_role_display }} — {{ asset.width }}×{{ asset.height }}</span>
           <form method="post"
                 action="{% url 'directory_admin:listing-media-remove' key=listing_type.key public_id=listing.public_id asset_public_id=asset.public_id %}"
