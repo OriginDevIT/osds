@@ -819,6 +819,57 @@ class AdminRollbackViewTests(_Base):
         )
         self.assertIn("90-day rollback window", body)
 
+    def test_editor_on_finished_batch_is_told_it_is_a_role_matter(self):
+        # The batch is finished and rollbackable; only the role is short. The
+        # page must not tell the operator to wait for the import to finish.
+        batch = self._completed_batch()
+        body = self._client(self.editor).get(
+            self._url("import-detail", public_id=batch.public_id),
+            HTTP_HOST=HOST,
+        ).content.decode()
+        self.assertNotIn("once the import has finished", body)
+        self.assertIn("requires the manager role", body)
+
+    def test_unfinished_batch_still_says_wait_for_finish(self):
+        batch = self._completed_batch()
+        ImportBatch.all_tenants.filter(pk=batch.pk).update(
+            status=ImportBatch.Status.PROCESSING
+        )
+        for who in (self.editor, self.manager):
+            body = self._client(who).get(
+                self._url("import-detail", public_id=batch.public_id),
+                HTTP_HOST=HOST,
+            ).content.decode()
+            self.assertIn("once the import has finished", body)
+            self.assertNotIn("requires the manager role", body)
+
+    def test_four_rollback_states_read_differently(self):
+        batch = self._completed_batch()
+        detail = self._url("import-detail", public_id=batch.public_id)
+
+        def page(who):
+            return self._client(who).get(
+                detail, HTTP_HOST=HOST
+            ).content.decode()
+
+        # insufficient role (batch otherwise rollbackable)
+        self.assertIn("requires the manager role", page(self.editor))
+        # window passed beats role: the batch cannot be rolled back by anyone
+        ImportBatchListing.all_tenants.filter(batch=batch).update(
+            pre_image_nulled_at=timezone.now()
+        )
+        body = page(self.editor)
+        self.assertIn("90-day rollback window", body)
+        self.assertNotIn("requires the manager role", body)
+        # already rolled back
+        ImportBatch.all_tenants.filter(pk=batch.pk).update(
+            status=ImportBatch.Status.ROLLED_BACK
+        )
+        body = page(self.editor)
+        self.assertIn("Rolled back", body)
+        self.assertNotIn("once the import has finished", body)
+        self.assertNotIn("requires the manager role", body)
+
     def test_refused_rollback_surfaces_the_message(self):
         batch = self._completed_batch()
         fresh = Listing.all_tenants.get(slug="fresh")
