@@ -9,6 +9,7 @@ nothing on its own: every real admin view is still gated by an active
 
 from __future__ import annotations
 
+from django.conf import settings
 from django.contrib.auth.forms import AuthenticationForm
 from django.utils.http import url_has_allowed_host_and_scheme
 
@@ -39,3 +40,27 @@ def safe_redirect_target(request, fallback: str) -> str:
     ):
         return candidate
     return fallback
+
+
+INSECURE_COOKIE_WARNING = (
+    "This page was reached over plain HTTP, but the session cookies are marked "
+    "Secure. A browser discards a Secure cookie set from an HTTP page, so "
+    "signing in cannot stick and you will be sent back here. Serve this site "
+    "over HTTPS, or, for an HTTP-only install, set OSDS_SECURE_COOKIES=false "
+    "and restart."
+)
+
+
+def insecure_cookie_warning(request) -> str:
+    """The diagnostic for a Secure-cookie install reached over plain http.
+
+    Empty when the request is https (directly or via a trusted proxy header,
+    which ``request.is_secure()`` already honours) or when neither cookie is
+    marked Secure. Shown on every render of a login form, so an operator whose
+    correct credentials bounce back to the form is told why (#139).
+    """
+    if request.is_secure():
+        return ""
+    if settings.SESSION_COOKIE_SECURE or settings.CSRF_COOKIE_SECURE:
+        return INSECURE_COOKIE_WARNING
+    return ""

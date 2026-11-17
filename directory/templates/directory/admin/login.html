@@ -2,6 +2,9 @@
 {% block title %}Sign in{% endblock %}
 {% block content %}
 <h1>Sign in</h1>
+{% if insecure_cookie_warning %}
+  <ul class="errors"><li>{{ insecure_cookie_warning }}</li></ul>
+{% endif %}
 {% if form.non_field_errors %}
   <ul class="errors">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>
 {% endif %}
