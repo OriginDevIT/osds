@@ -36,6 +36,12 @@ class ConsoleAuthTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(resp["Location"], "/login/?next=/")
 
+    def test_login_form_fields_are_full_width_and_button_sits_below(self):
+        html = self._client().get("/login/", HTTP_HOST=CONSOLE).content.decode()
+        self.assertIn('<form method="post" class="login-form"', html)
+        self.assertRegex(html, r"\.login-form input\s*\{[^}]*width:\s*100%")
+        self.assertRegex(html, r"\.login-form button\s*\{[^}]*display:\s*block")
+
     def test_login_form_renders(self):
         resp = self._client().get("/login/", HTTP_HOST=CONSOLE)
         self.assertEqual(resp.status_code, 200)

@@ -5,7 +5,7 @@
 {% if form.non_field_errors %}
   <ul class="errors">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>
 {% endif %}
-<form method="post" action="{% url 'directory_admin:login' %}">
+<form method="post" class="login-form" action="{% url 'directory_admin:login' %}">
   {% csrf_token %}
   <input type="hidden" name="next" value="{{ next }}">
   {{ form.username.label_tag }}{{ form.username }}

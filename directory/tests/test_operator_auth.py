@@ -93,6 +93,14 @@ class TenantLoginTests(TestCase):
         self.assertContains(resp, "Sign in")
         self.assertContains(resp, 'name="password"')
 
+    def test_login_form_fields_are_full_width_and_button_sits_below(self):
+        html = self._client().get(
+            reverse("directory_admin:login"), HTTP_HOST=HOST
+        ).content.decode()
+        self.assertIn('<form method="post" class="login-form"', html)
+        self.assertRegex(html, r"\.login-form input\s*\{[^}]*width:\s*100%")
+        self.assertRegex(html, r"\.login-form button\s*\{[^}]*display:\s*block")
+
     def test_valid_credentials_sign_in_and_follow_next(self):
         c = Client()
         resp = c.post(
