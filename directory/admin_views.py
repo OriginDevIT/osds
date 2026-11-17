@@ -696,9 +696,23 @@ def _get_batch(request, public_id) -> ImportBatch:
 def import_detail(request, public_id):
     batch = _get_batch(request, public_id)
     mapping = batch.column_mapping or {}
+    headers = batch.detected_headers or []
+    can_map = batch.status == ImportBatch.Status.MAPPING
+    # Suggestions only pre-select an unsaved form; a saved mapping is the
+    # operator's own and is shown as-is.
+    suggestions = (
+        csv_import.suggest_mapping(headers, batch.listing_type)
+        if can_map and not mapping
+        else {}
+    )
     rows = [
-        {"index": i, "header": h, "selected": mapping.get(h, "")}
-        for i, h in enumerate(batch.detected_headers or [])
+        {
+            "index": i,
+            "header": h,
+            "selected": mapping.get(h) or suggestions.get(h, ""),
+            "suggested": h in suggestions,
+        }
+        for i, h in enumerate(headers)
     ]
     terminal = batch.status in (
         ImportBatch.Status.COMPLETED,
@@ -721,7 +735,7 @@ def import_detail(request, public_id):
             "batch": batch,
             "rows": rows,
             "targets": csv_import.allowed_targets(batch.listing_type),
-            "can_map": batch.status == ImportBatch.Status.MAPPING,
+            "can_map": can_map,
             "can_rollback": can_rollback,
             "rollback_window_passed": window_passed,
         },
