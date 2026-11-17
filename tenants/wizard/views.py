@@ -126,18 +126,29 @@ def domain(request):
     if tenant is None or operator is None:
         return redirect("setup-index")
 
+    saved_port = tenant.settings.get("domain_port")
     form = forms.DomainForm(
-        request.POST or None, initial={"domain": tenant.primary_domain or ""}
+        request.POST or None,
+        initial={
+            "domain": f"{tenant.primary_domain}:{saved_port}"
+            if tenant.primary_domain and saved_port
+            else tenant.primary_domain or ""
+        },
     )
     dns_detail = None
     if request.method == "POST" and form.is_valid():
         services.set_tenant_domain(
-            tenant=tenant, domain=form.cleaned_data["domain"], changed_by=operator
+            tenant=tenant,
+            domain=form.cleaned_data["domain"],
+            changed_by=operator,
+            port=form.port,
         )
         tenant.refresh_from_db()
         if request.POST.get("action") == "verify":
             ok, dns_detail = check_domain_http(
-                tenant.primary_domain, tenant.settings.get("domain_challenge", "")
+                tenant.primary_domain,
+                tenant.settings.get("domain_challenge", ""),
+                port=tenant.settings.get("domain_port"),
             )
             if ok:
                 services.mark_domain_verified(

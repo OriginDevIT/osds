@@ -221,3 +221,62 @@ class ResumeAfterAbandonmentTests(WizardBase):
         self.assertEqual(
             OutboxEvent.all_tenants.filter(type="tenant.created").count(), 1
         )
+
+
+class DomainHostPortTests(WizardBase):
+    def _to_domain_step(self) -> Client:
+        client = Client()
+        self.unlock(client)
+        self.do_account(client)
+        self.do_directory(client)
+        return client
+
+    def test_domain_step_accepts_host_port(self):
+        client = self._to_domain_step()
+        response = client.post(
+            "/setup/domain/",
+            {"domain": "directory.example.test:8000", "action": "skip"},
+        )
+        self.assertEqual(response.status_code, 302)
+        tenant = Tenant.objects.get()
+        # routing keys on the bare host; the port is kept for the HTTP check
+        self.assertEqual(tenant.primary_domain, "directory.example.test")
+        self.assertEqual(tenant.settings.get("domain_port"), 8000)
+
+    def test_domain_step_redisplays_the_saved_port(self):
+        client = self._to_domain_step()
+        client.post(
+            "/setup/domain/",
+            {"domain": "directory.example.test:8000", "action": "skip"},
+        )
+        response = client.get("/setup/domain/")
+        self.assertContains(response, "directory.example.test:8000")
+
+    def test_domain_without_port_clears_a_saved_port(self):
+        client = self._to_domain_step()
+        client.post("/setup/domain/", {"domain": "directory.example.test:8000", "action": "skip"})
+        client.post("/setup/domain/", {"domain": "directory.example.test", "action": "skip"})
+        self.assertNotIn("domain_port", Tenant.objects.get().settings)
+
+    def test_domain_step_rejects_a_bad_port(self):
+        client = self._to_domain_step()
+        for bad in ("directory.example.test:0", "directory.example.test:70000",
+                    "directory.example.test:abc", "directory.example.test:"):
+            response = client.post("/setup/domain/", {"domain": bad, "action": "skip"})
+            self.assertEqual(response.status_code, 200, bad)
+            self.assertContains(response, "valid port", msg_prefix=bad)
+        self.assertIsNone(Tenant.objects.get().primary_domain)
+
+    def test_http_verify_checks_the_port(self):
+        from unittest import mock
+
+        client = self._to_domain_step()
+        with mock.patch(
+            "tenants.wizard.views.check_domain_http", return_value=(False, "x")
+        ) as check:
+            client.post(
+                "/setup/domain/",
+                {"domain": "directory.example.test:8000", "action": "verify"},
+            )
+        self.assertEqual(check.call_args.args[0], "directory.example.test")
+        self.assertEqual(check.call_args.kwargs["port"], 8000)
