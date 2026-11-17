@@ -2,6 +2,9 @@
 {% block title %}{{ mode|title }} listing — {{ listing_type.key }}{% endblock %}
 {% block content %}
 <h1>{{ mode|title }} {{ listing_type.label_singular }}</h1>
+{% if listing %}
+<p class="muted">Created: <strong>{{ listing.created_at|date:"Y-m-d H:i" }}</strong> · Updated: <strong>{{ listing.updated_at|date:"Y-m-d H:i" }}</strong></p>
+{% endif %}
 
 {% if conflict %}
   <p class="errors">

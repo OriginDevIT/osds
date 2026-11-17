@@ -5,6 +5,7 @@ explicit-null clearing on edit, and the publish/unpublish buttons.
 from __future__ import annotations
 
 import functools
+from datetime import datetime, timezone as dt_timezone
 from decimal import Decimal
 
 from django.test import (
@@ -199,3 +200,45 @@ class ListingAdminWriteTests(_Setup, TransactionTestCase):
         listing.refresh_from_db()
         self.assertEqual(listing.visibility, "draft")
         self.assertIn("listing.unpublished", self._events(listing.public_id))
+
+
+@override_settings(
+    ALLOWED_HOSTS=["*"], OSDS_CONSOLE_HOST="console.test", PASSWORD_HASHERS=_FAST_HASH
+)
+class ListingAdminTimestampTests(_Setup, TransactionTestCase):
+    """The list and edit pages show each listing's created and updated dates."""
+
+    CREATED = "2024-03-05 09:15"
+    UPDATED = "2024-07-21 16:40"
+
+    def _stamped_listing(self):
+        listing = self._make_listing()
+        # QuerySet.update bypasses auto_now, so the stamps stay fixed.
+        Listing.all_tenants.filter(pk=listing.pk).update(
+            created_at=datetime(2024, 3, 5, 9, 15, tzinfo=dt_timezone.utc),
+            updated_at=datetime(2024, 7, 21, 16, 40, tzinfo=dt_timezone.utc),
+        )
+        return listing
+
+    def test_list_page_shows_created_and_updated(self):
+        self._stamped_listing()
+        resp = self._client(self.editor).get(
+            self._url("listing-list", key="business"), HTTP_HOST=HOST
+        )
+        self.assertContains(resp, self.CREATED)
+        self.assertContains(resp, self.UPDATED)
+
+    def test_edit_page_shows_created_and_updated(self):
+        listing = self._stamped_listing()
+        resp = self._client(self.editor).get(
+            self._url("listing-edit", key="business", public_id=listing.public_id),
+            HTTP_HOST=HOST,
+        )
+        self.assertContains(resp, self.CREATED)
+        self.assertContains(resp, self.UPDATED)
+
+    def test_create_page_has_no_timestamps(self):
+        resp = self._client(self.editor).get(
+            self._url("listing-create", key="business"), HTTP_HOST=HOST
+        )
+        self.assertNotContains(resp, "Created:")
