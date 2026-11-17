@@ -126,6 +126,7 @@ def domain(request):
     if tenant is None or operator is None:
         return redirect("setup-index")
 
+    services.ensure_domain_challenge(tenant)
     form = forms.DomainForm(
         request.POST or None, initial={"domain": tenant.primary_domain or ""}
     )
