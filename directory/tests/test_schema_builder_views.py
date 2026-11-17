@@ -8,6 +8,7 @@ import functools
 
 from django.test import Client, TransactionTestCase, override_settings
 from django.urls import reverse as _reverse
+from django.utils.html import escape
 from django.utils import timezone
 
 # The tenant admin is mounted on the per-host tenant URLconf, not ROOT_URLCONF.
@@ -149,6 +150,59 @@ class SchemaBuilderViewTests(TransactionTestCase):
         self.assertEqual([f["key"] for f in lt.fields], ["years", "notes"])
         self.assertEqual(lt.fields[1]["searchable"], True)
         self.assertEqual(lt.fields[0]["searchable"], False)
+
+    def test_builder_lists_the_common_core_above_the_custom_rows(self):
+        self._make_type(fields=[{"key": "years", "label": "Years", "type": "integer"}])
+        resp = self._get(self._client(self.admin), "type-fields", key="business")
+        html = resp.content.decode()
+        self.assertContains(resp, 'id="core-fields"')
+        for path in ("name", "description", "location.address_line1"):
+            self.assertContains(resp, f"<code>{path}</code>", html=False)
+        self.assertLess(html.index('id="core-fields"'), html.index('id="field-rows"'))
+        # read-only: no inputs inside the core section
+        core = html[html.index('id="core-fields"'):html.index("</section>")]
+        self.assertNotIn("<input", core)
+        self.assertNotContains(resp, "looks like a duplicate")
+
+    def test_builder_warns_on_a_near_duplicate_key_but_saves(self):
+        self._make_type()
+        client = self._client(self.admin)
+        resp = self._post(
+            client, "type-fields",
+            {
+                "field_key": ["business_name"],
+                "field_label": ["Business name"],
+                "field_type": ["text"],
+                "field_required": ["0"],
+                "field_public": ["1"],
+                "field_searchable": ["0"],
+                "field_options": [""],
+            },
+            key="business",
+        )
+        self.assertEqual(resp.status_code, 302)
+        page = self._get(client, "type-fields", key="business")
+        self.assertContains(
+            page, escape("looks like a duplicate of the core field 'name'")
+        )
+
+    def test_builder_warns_on_a_near_duplicate_key_when_rejected(self):
+        self._make_type()
+        resp = self._post(
+            self._client(self.admin), "type-fields",
+            {
+                "field_key": ["street_address", "status"],
+                "field_label": ["Street", "Status"],
+                "field_type": ["text", "text"],
+                "field_required": ["0", "0"],
+                "field_public": ["1", "1"],
+                "field_searchable": ["0", "0"],
+                "field_options": ["", ""],
+            },
+            key="business",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, escape("'location.address_line1'"))
 
     def test_builder_rejects_reserved_key_without_writing(self):
         self._make_type()

@@ -3,14 +3,27 @@
 {% block content %}
 <h1>Fields for “{{ listing_type.label_plural }}”</h1>
 <p class="muted">
-  The common core (name, description, location, contact, categories, media,
-  provenance) is always present and not listed here. Field types are fixed;
+  The common core below is always present on every listing and cannot be
+  changed or re-created as a custom field. Field types are fixed;
   a field's type is frozen once saved — add a new key to change it.
 </p>
 
 {% if errors %}
   <ul class="errors">{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
 {% endif %}
+
+{% if warnings %}
+  <ul class="warnings" role="alert">{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+{% endif %}
+
+<section id="core-fields" aria-label="Common core fields (read-only)">
+  <h2>Common core (read-only)</h2>
+  <ul>
+    {% for core in core_fields %}
+      <li><code>{{ core.path }}</code> — {{ core.label }}</li>
+    {% endfor %}
+  </ul>
+</section>
 
 <form method="post">
   {% csrf_token %}
