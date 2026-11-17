@@ -130,7 +130,13 @@ class TenantResolutionMiddleware:
     def _host(request) -> str:
         # request.get_host() raises DisallowedHost on a malformed header even
         # with ALLOWED_HOSTS=['*']; Django turns that into a 400 around us.
-        return request.get_host().split(":", 1)[0].strip().rstrip(".").lower()
+        return TenantResolutionMiddleware._normalise_host(request.get_host())
+
+    @staticmethod
+    def _normalise_host(value: str) -> str:
+        # Shared by the request Host and OSDS_CONSOLE_HOST so both sides of the
+        # comparison are port-less, trimmed, dot-less and lowercase (#142).
+        return (value or "").split(":", 1)[0].strip().rstrip(".").lower()
 
     def _resolve(self, request, host: str):
         """Return ``(kind, tenant, early_response)``.
@@ -147,7 +153,9 @@ class TenantResolutionMiddleware:
                     return "tenant", tenant, None
             return "setup", None, None
 
-        console_host = (getattr(settings, "OSDS_CONSOLE_HOST", "") or "").lower()
+        console_host = self._normalise_host(
+            getattr(settings, "OSDS_CONSOLE_HOST", "")
+        )
         if console_host and host == console_host:
             # Console wins over a tenant that somehow claims the same name.
             return "console", None, None
