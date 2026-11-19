@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import re
+
 from django import forms
 
+from directory.field_schema import _KEY_ERROR, _KEY_RE
 from directory.csv_import import MAX_UPLOAD_BYTES
 from directory.models import Category, Listing, ListingType
 
@@ -29,11 +32,18 @@ class ListingTypeForm(forms.Form):
             if cleaned.get("key"):
                 cleaned["path_segment"] = cleaned["key"]
         return cleaned
+    def clean_key(self):
+        # Spaces and hyphens become underscores; case is never folded, so a
+        # mixed-case key is rejected rather than silently rewritten.
+        key = re.sub(r"[\s-]+", "_", self.cleaned_data["key"].strip())
+        if not _KEY_RE.match(key):
+            raise forms.ValidationError(_KEY_ERROR[0].upper() + _KEY_ERROR[1:] + ".")
+        return key
 
     def __init__(self, *args, is_create: bool = True, needs_url_confirm: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
         if is_create:
-            self.fields["key"] = forms.SlugField(
+            self.fields["key"] = forms.CharField(
                 max_length=50, help_text="Internal identifier. Cannot be changed later."
             )
             self.order_fields(["key", "label_singular", "label_plural", "path_segment", "claimable"])

@@ -58,3 +58,16 @@ class CheckDomainHttpTests(SimpleTestCase):
     def test_empty_inputs_fail_fast(self):
         self.assertFalse(check_domain_http("", "tok")[0])
         self.assertFalse(check_domain_http("acme.example", "")[0])
+
+
+class CheckDomainHttpPortTests(SimpleTestCase):
+    def test_url_includes_the_port(self):
+        from unittest import mock
+
+        from tenants.dns_check import check_domain_http
+
+        with mock.patch("tenants.dns_check.urllib.request.urlopen") as opened:
+            opened.side_effect = OSError("boom")
+            ok, detail = check_domain_http("directory.example.test", "tok", port=8000)
+        self.assertFalse(ok)
+        self.assertIn("http://directory.example.test:8000/", detail)

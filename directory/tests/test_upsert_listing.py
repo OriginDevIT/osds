@@ -130,6 +130,24 @@ class RejectedFieldTests(_Base):
         with self.assertRaises(SchemaError):
             self.upsert({"slug": "x", "name": "X", "categories": ["ghost"]})
 
+    def test_category_of_another_listing_type_is_rejected(self):
+        Category.all_tenants.create(
+            tenant=self.tenant, listing_type=self.lt2, slug="editors", name="Editors"
+        )
+        with self.assertRaises(SchemaError):
+            self.upsert({"slug": "x", "name": "X", "categories": ["editors"]})
+        self.assertFalse(Listing.all_tenants.filter(slug="x").exists())
+
+    def test_same_slug_in_another_type_never_attaches_the_foreign_category(self):
+        foreign = Category.all_tenants.create(
+            tenant=self.tenant, listing_type=self.lt2, slug="plumbers", name="P2"
+        )
+        result = self.upsert({"slug": "x", "name": "X", "categories": ["plumbers"]})
+        with tenant_context(self.tenant):
+            cats = list(result.listing.categories.all())
+        self.assertEqual([c.listing_type_id for c in cats], [self.lt.id])
+        self.assertNotIn(foreign.id, [c.id for c in cats])
+
     def test_unknown_custom_field_is_rejected(self):
         with self.assertRaises(SchemaError):
             self.upsert(
@@ -332,3 +350,89 @@ class TransactionGuardTests(TestCase):
                     payload={"slug": "x", "name": "X"},
                     actor=ACTOR, source="manual",
                 )
+
+
+class UncategorisedDefaultTests(_Base):
+    """A listing written with no categories is attached to the type's
+    ``uncategorised`` default so it keeps a canonical path (decisions §4.1)."""
+
+    def _cats(self, listing):
+        with tenant_context(self.tenant):
+            return sorted(c.slug for c in listing.categories.all())
+
+    def test_create_without_categories_gets_default_with_path(self):
+        from directory import routing
+
+        listing = self.upsert({"slug": "acme-co", "name": "Acme Co"}).listing
+        self.assertEqual(self._cats(listing), ["uncategorised"])
+        with tenant_context(self.tenant):
+            category = routing.canonical_category(listing)
+        self.assertIsNotNone(category)
+        self.assertEqual(category.name, "Uncategorised")
+        self.assertEqual(category.listing_type_id, self.lt.id)
+        self.assertEqual(
+            routing.listing_url(self.lt, category, listing, multi=True),
+            "/businesses/uncategorised/acme-co",
+        )
+
+    def test_create_with_empty_categories_gets_default(self):
+        listing = self.upsert(
+            {"slug": "acme-co", "name": "Acme Co", "categories": []}
+        ).listing
+        self.assertEqual(self._cats(listing), ["uncategorised"])
+
+    def test_explicit_categories_do_not_get_default(self):
+        listing = self.upsert(
+            {"slug": "acme-co", "name": "Acme Co", "categories": ["plumbers"]}
+        ).listing
+        self.assertEqual(self._cats(listing), ["plumbers"])
+
+    def test_owner_edit_clearing_categories_gets_default(self):
+        self.upsert({"slug": "acme-co", "name": "Acme Co", "categories": ["plumbers"]})
+        listing = self.upsert(
+            {"slug": "acme-co", "name": "Acme Co", "categories": []}
+        ).listing
+        self.assertEqual(self._cats(listing), ["uncategorised"])
+
+    def test_default_is_per_type_never_cross_type(self):
+        a = self.upsert({"slug": "a", "name": "A"}).listing
+        with tenant_context(self.tenant):
+            b = services.upsert_listing(
+                self.tenant, listing_type=self.lt2,
+                payload={"slug": "b", "name": "B"}, actor=ACTOR, source="manual",
+            ).listing
+        with tenant_context(self.tenant):
+            cat_a = a.categories.get()
+            cat_b = b.categories.get()
+        self.assertNotEqual(cat_a.pk, cat_b.pk)
+        self.assertEqual(cat_a.listing_type_id, self.lt.id)
+        self.assertEqual(cat_b.listing_type_id, self.lt2.id)
+
+    def test_default_is_reused_not_duplicated(self):
+        self.upsert({"slug": "a", "name": "A"})
+        self.upsert({"slug": "b", "name": "B"})
+        self.assertEqual(
+            Category.all_tenants.filter(
+                tenant=self.tenant, listing_type=self.lt, slug="uncategorised"
+            ).count(),
+            1,
+        )
+
+    def test_default_sorts_after_real_categories(self):
+        from directory import routing
+
+        listing = self.upsert({"slug": "a", "name": "A"}).listing
+        with tenant_context(self.tenant):
+            listing.categories.add(
+                Category.all_tenants.get(
+                    tenant=self.tenant, listing_type=self.lt, slug="roofers"
+                )
+            )
+            self.assertEqual(routing.canonical_category(listing).slug, "roofers")
+
+    def test_foreign_type_category_is_still_rejected(self):
+        Category.all_tenants.create(
+            tenant=self.tenant, listing_type=self.lt2, slug="editors", name="Editors"
+        )
+        with self.assertRaises(SchemaError):
+            self.upsert({"slug": "x", "name": "X", "categories": ["editors"]})

@@ -79,6 +79,39 @@ class RoutingTests(WizardBase):
         self.assertEqual(response.status_code, 404)
 
 
+class DomainChallengeTests(WizardBase):
+    def _to_domain_step(self) -> Client:
+        client = Client()
+        self.unlock(client)
+        self.do_account(client)
+        self.do_directory(client)
+        return client
+
+    def test_first_visit_renders_the_expected_token(self):
+        client = self._to_domain_step()
+        response = client.get("/setup/domain/")
+        self.assertEqual(response.status_code, 200)
+        tenant = Tenant.objects.get()
+        token = tenant.settings.get("domain_challenge")
+        self.assertTrue(token)
+        self.assertContains(response, "<code>%s</code>" % token, html=True)
+
+    def test_token_is_stable_across_visits_and_saves(self):
+        client = self._to_domain_step()
+        client.get("/setup/domain/")
+        first = Tenant.objects.get().settings["domain_challenge"]
+        client.get("/setup/domain/")
+        self.do_domain(client)
+        self.assertEqual(Tenant.objects.get().settings["domain_challenge"], first)
+
+    def test_invalid_post_still_renders_the_token(self):
+        client = self._to_domain_step()
+        response = client.post("/setup/domain/", {"domain": "", "action": "verify"})
+        token = Tenant.objects.get().settings.get("domain_challenge")
+        self.assertTrue(token)
+        self.assertContains(response, token)
+
+
 class HappyPathTests(WizardBase):
     def test_full_run_emits_tenant_created_and_completes(self):
         client = Client()
@@ -221,3 +254,62 @@ class ResumeAfterAbandonmentTests(WizardBase):
         self.assertEqual(
             OutboxEvent.all_tenants.filter(type="tenant.created").count(), 1
         )
+
+
+class DomainHostPortTests(WizardBase):
+    def _to_domain_step(self) -> Client:
+        client = Client()
+        self.unlock(client)
+        self.do_account(client)
+        self.do_directory(client)
+        return client
+
+    def test_domain_step_accepts_host_port(self):
+        client = self._to_domain_step()
+        response = client.post(
+            "/setup/domain/",
+            {"domain": "directory.example.test:8000", "action": "skip"},
+        )
+        self.assertEqual(response.status_code, 302)
+        tenant = Tenant.objects.get()
+        # routing keys on the bare host; the port is kept for the HTTP check
+        self.assertEqual(tenant.primary_domain, "directory.example.test")
+        self.assertEqual(tenant.settings.get("domain_port"), 8000)
+
+    def test_domain_step_redisplays_the_saved_port(self):
+        client = self._to_domain_step()
+        client.post(
+            "/setup/domain/",
+            {"domain": "directory.example.test:8000", "action": "skip"},
+        )
+        response = client.get("/setup/domain/")
+        self.assertContains(response, "directory.example.test:8000")
+
+    def test_domain_without_port_clears_a_saved_port(self):
+        client = self._to_domain_step()
+        client.post("/setup/domain/", {"domain": "directory.example.test:8000", "action": "skip"})
+        client.post("/setup/domain/", {"domain": "directory.example.test", "action": "skip"})
+        self.assertNotIn("domain_port", Tenant.objects.get().settings)
+
+    def test_domain_step_rejects_a_bad_port(self):
+        client = self._to_domain_step()
+        for bad in ("directory.example.test:0", "directory.example.test:70000",
+                    "directory.example.test:abc", "directory.example.test:"):
+            response = client.post("/setup/domain/", {"domain": bad, "action": "skip"})
+            self.assertEqual(response.status_code, 200, bad)
+            self.assertContains(response, "valid port", msg_prefix=bad)
+        self.assertIsNone(Tenant.objects.get().primary_domain)
+
+    def test_http_verify_checks_the_port(self):
+        from unittest import mock
+
+        client = self._to_domain_step()
+        with mock.patch(
+            "tenants.wizard.views.check_domain_http", return_value=(False, "x")
+        ) as check:
+            client.post(
+                "/setup/domain/",
+                {"domain": "directory.example.test:8000", "action": "verify"},
+            )
+        self.assertEqual(check.call_args.args[0], "directory.example.test")
+        self.assertEqual(check.call_args.kwargs["port"], 8000)

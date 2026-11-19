@@ -49,6 +49,7 @@ from directory.field_schema import (
     SchemaError,
     normalize_type_schema,
     validate_custom_fields,
+    validate_type_key,
     validate_type_schema,
 )
 from directory.masking import mask_email
@@ -170,7 +171,7 @@ def _create_listing_type(
     fields,
     actor,
 ) -> ListingType:
-    errors = validate_type_schema(fields)
+    errors = validate_type_key(key) + validate_type_schema(fields)
     if errors:
         raise SchemaError(errors)
 
@@ -544,6 +545,27 @@ def _resolve_categories(listing_type: ListingType, slugs) -> list[Category]:
     return found
 
 
+# The default category for a listing written with none. Its order sorts it
+# after every real category, so the (order, slug) canonical rule only picks it
+# for a listing that has nothing else.
+UNCATEGORISED_SLUG = "uncategorised"
+UNCATEGORISED_NAME = "Uncategorised"
+_UNCATEGORISED_ORDER = 2_000_000_000
+
+
+def _uncategorised_category(tenant, listing_type: ListingType) -> Category:
+    """The listing type's ``uncategorised`` default, created on first use.
+    Always of ``listing_type`` itself, so the cross-type guard in
+    ``_resolve_categories`` is never bypassed."""
+    category, _ = Category.all_tenants.get_or_create(
+        tenant=tenant,
+        listing_type=listing_type,
+        slug=UNCATEGORISED_SLUG,
+        defaults={"name": UNCATEGORISED_NAME, "order": _UNCATEGORISED_ORDER},
+    )
+    return category
+
+
 def _apply_geo(listing, loc: dict) -> None:
     # A value that will not normalise is a schema problem, not a crash: the
     # write API and CSV import expect a 422 / row error, and the admin form
@@ -727,6 +749,15 @@ def _apply_upsert(
             listing.categories.set(
                 _resolve_categories(listing_type, payload["categories"])
             )
+
+        # A listing in no category has no canonical path (decisions §4.1), so
+        # one created, or whose categories were just written, with none gets
+        # the type's default. An update that does not touch categories leaves
+        # them alone, so it stays "unchanged".
+        if (creating or "categories" in payload) and not listing.categories.filter(
+            listing_type=listing_type
+        ).exists():
+            listing.categories.add(_uncategorised_category(tenant, listing_type))
 
         # Rebuild the full-text vector on every write (ruling 11).
         recompute_search_vector(listing)

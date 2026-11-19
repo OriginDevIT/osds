@@ -54,7 +54,15 @@ RESERVED_KEYS = frozenset(
 )
 
 _KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+_KEY_ERROR = "key must be lowercase letters, digits and underscores, starting with a letter"
 _BOOL_FLAGS = ("required", "public", "searchable")
+
+
+def validate_type_key(key: str) -> list[str]:
+    """Errors for a listing-type key; the same rule custom field keys follow."""
+    if isinstance(key, str) and _KEY_RE.match(key):
+        return []
+    return [f"type key: {_KEY_ERROR}"]
 
 
 class SchemaError(ValueError):
@@ -101,10 +109,7 @@ def validate_type_schema(fields, *, previous=None) -> list[str]:
         else:
             where = f"field '{key}'"
             if not _KEY_RE.match(key):
-                errors.append(
-                    f"{where}: key must be lowercase letters, digits and "
-                    "underscores, starting with a letter"
-                )
+                errors.append(f"{where}: {_KEY_ERROR}")
             if key in RESERVED_KEYS:
                 errors.append(f"{where}: '{key}' is a reserved field name")
             if key in seen:

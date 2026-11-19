@@ -54,14 +54,30 @@ class DirectoryForm(forms.Form):
 
 class DomainForm(forms.Form):
     domain = forms.CharField(
-        label="Domain", help_text="The hostname the directory will be served on."
+        label="Domain",
+        help_text=(
+            "The hostname the directory will be served on. Add :port if it is "
+            "not served on the default port."
+        ),
     )
 
     def clean_domain(self):
-        domain = self.cleaned_data["domain"].strip().rstrip(".").lower()
-        if not _HOSTNAME_RE.match(domain):
+        raw = self.cleaned_data["domain"].strip().lower()
+        host, sep, port_text = raw.partition(":")
+        host = host.rstrip(".")
+        if not _HOSTNAME_RE.match(host):
             raise ValidationError("Enter a valid domain, e.g. directory.example.com.")
-        return domain
+        port = None
+        if sep:
+            if not (port_text.isascii() and port_text.isdigit()) or not (
+                1 <= int(port_text) <= 65535
+            ):
+                raise ValidationError("Enter a valid port between 1 and 65535.")
+            port = int(port_text)
+        # Tenant routing keys on the bare host (the Host middleware drops the
+        # port), so the port is carried separately.
+        self.port = port
+        return host
 
 
 class StorageForm(forms.Form):
