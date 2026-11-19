@@ -386,21 +386,48 @@ def add_bootstrap_membership(
     return membership
 
 
-def set_tenant_domain(*, tenant: Tenant, domain: str, changed_by: Operator) -> Tenant:
+def set_tenant_domain(
+    *, tenant: Tenant, domain: str, changed_by: Operator, port: int | None = None
+) -> Tenant:
     """The wizard's domain step. An operator command: one ``settings.update`` row
     (spec §11.2, decisions.md §4), so it runs in autocommit."""
     domain = domain.strip().rstrip(".").lower()
     with settings_command(tenant, changed_by, page="domain") as cmd:
         if domain != (tenant.primary_domain or ""):
             cmd.named("domain")
-        _apply_tenant_domain(tenant=tenant, domain=domain, changed_by=changed_by)
+        _apply_tenant_domain(
+            tenant=tenant, domain=domain, changed_by=changed_by, port=port
+        )
     return tenant
 
 
+def ensure_domain_challenge(tenant: Tenant) -> str:
+    """Return the tenant's HTTP-challenge token, minting and saving one if absent.
+
+    The wizard shows the token before any domain has been saved, so it cannot
+    wait for ``set_tenant_domain`` to create it. Generating it is not a
+    settings change an operator made, so it writes no audit row.
+    """
+    token = tenant.settings.get("domain_challenge")
+    if not token:
+        token = pysecrets.token_urlsafe(24)
+        tenant.settings["domain_challenge"] = token
+        tenant.save(update_fields=["settings"])
+    return token
+
+
 @transaction.atomic
-def _apply_tenant_domain(*, tenant: Tenant, domain: str, changed_by: Operator) -> Tenant:
+def _apply_tenant_domain(
+    *, tenant: Tenant, domain: str, changed_by: Operator, port: int | None = None
+) -> Tenant:
     had_domain = bool(tenant.primary_domain)
     tenant.primary_domain = domain
+    # The non-default port the host is served on; used only by the HTTP
+    # domain check (routing keys on the bare host).
+    if port:
+        tenant.settings["domain_port"] = port
+    else:
+        tenant.settings.pop("domain_port", None)
     tenant.domain_verified_at = None
     if not tenant.settings.get("domain_challenge"):
         tenant.settings["domain_challenge"] = pysecrets.token_urlsafe(24)

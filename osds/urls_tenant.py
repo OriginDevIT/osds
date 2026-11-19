@@ -134,5 +134,12 @@ urlpatterns = [
         name="sitemap-child",
     ),
     path("", public_views.home, name="public-home"),
-    re_path(r"^(?P<path>.+)$", public_views.public_dispatch, name="public-dispatch"),
+    # The negative lookahead keeps the catch-all off the admin/ prefix: an
+    # unmatched admin path falls through to handler404 instead of being
+    # treated as a public listing slug.
+    re_path(
+        r"^(?!admin(?:/|$))(?P<path>.+)$",
+        public_views.public_dispatch,
+        name="public-dispatch",
+    ),
 ]

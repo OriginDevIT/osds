@@ -20,7 +20,7 @@ CHALLENGE_PATH = "/.well-known/osds-challenge"
 
 
 def check_domain_http(
-    domain: str, expected_token: str, *, timeout: float = 3.0
+    domain: str, expected_token: str, *, timeout: float = 3.0, port: int | None = None
 ) -> tuple[bool, str]:
     """Return ``(ok, detail)``. ``ok`` is True only when the challenge endpoint
     returns exactly ``expected_token``."""
@@ -29,7 +29,8 @@ def check_domain_http(
     if not domain or not expected:
         return False, "no domain or challenge token to check"
 
-    url = f"http://{domain}{CHALLENGE_PATH}"
+    netloc = f"{domain}:{port}" if port else domain
+    url = f"http://{netloc}{CHALLENGE_PATH}"
     try:
         request = urllib.request.Request(url, headers={"User-Agent": "osds-setup"})
         with urllib.request.urlopen(request, timeout=timeout) as response:

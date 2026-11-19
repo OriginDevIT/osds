@@ -66,7 +66,14 @@ class MiddlewareUnitTests(TestCase):
         self.assertNotIn("csrftoken", resp.cookies)
 
 
-@override_settings(ALLOWED_HOSTS=["*"], OSDS_CONSOLE_HOST="console.test")
+# Pin the Secure flags: settings read them from OSDS_SECURE_COOKIES at import,
+# so without this the result depends on the shell the suite runs in.
+@override_settings(
+    ALLOWED_HOSTS=["*"],
+    OSDS_CONSOLE_HOST="console.test",
+    SESSION_COOKIE_SECURE=True,
+    CSRF_COOKIE_SECURE=True,
+)
 class MiddlewareThroughTheStackTests(TestCase):
     def test_wizard_unlock_response_carries_a_non_secure_csrf_cookie(self):
         InstallSetup.objects.create(
