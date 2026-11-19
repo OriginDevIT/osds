@@ -109,3 +109,40 @@ class ConsoleAuthTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(resp["Location"], "/login/")
         self.assertNotIn("_auth_user_id", c.session)
+
+
+@override_settings(
+    ALLOWED_HOSTS=["*"], OSDS_CONSOLE_HOST=CONSOLE, PASSWORD_HASHERS=_FAST_HASH
+)
+class ConsoleAdminLoginTests(TestCase):
+    """#143 -- the console-host Django admin login lowercases the email, as the
+    OSDS login form does."""
+
+    def setUp(self):
+        InstallSetup.objects.create(token_hash="x" * 64, completed_at=timezone.now())
+        Operator.objects.create_superuser(email="root@example.test", password="pw")
+
+    def test_admin_login_accepts_a_mixed_case_email(self):
+        c = Client()
+        resp = c.post(
+            "/admin/login/?next=/admin/",
+            {
+                "username": "  ROOT@Example.TEST ",
+                "password": "pw",
+                "next": "/admin/",
+            },
+            HTTP_HOST=CONSOLE,
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp["Location"], "/admin/")
+        self.assertIn("_auth_user_id", c.session)
+
+    def test_same_credentials_succeed_at_the_osds_login_form(self):
+        c = Client()
+        resp = c.post(
+            "/login/",
+            {"username": "ROOT@Example.TEST", "password": "pw"},
+            HTTP_HOST=CONSOLE,
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("_auth_user_id", c.session)
