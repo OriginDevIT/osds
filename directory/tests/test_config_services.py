@@ -67,6 +67,19 @@ class ConfigServiceTests(TransactionTestCase):
         self.assertFalse(ListingType.all_tenants.filter(key="bad").exists())
         self.assertFalse(self._events().exists())
 
+    def test_create_rejects_a_key_that_is_not_a_lowercase_slug(self):
+        for bad in ("Restaurant", "food-drink", "9lives", "has space", ""):
+            with self.subTest(key=bad):
+                with tenant_context(self.tenant):
+                    with self.assertRaises(SchemaError):
+                        services.create_listing_type(
+                            self.tenant, key=bad, label_singular="X",
+                            label_plural="Xs", path_segment="xs",
+                            claimable=True, fields=[], actor=self.actor,
+                        )
+        self.assertFalse(ListingType.all_tenants.filter(tenant=self.tenant).exists())
+        self.assertFalse(self._events().exists())
+
     # --- frozen key -------------------------------------------------------
     def test_key_is_frozen_on_update(self):
         lt = self._make_type()

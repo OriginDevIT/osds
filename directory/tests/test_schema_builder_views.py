@@ -107,6 +107,35 @@ class SchemaBuilderViewTests(TransactionTestCase):
         change = self._settings_events().last().data["changes"][0]
         self.assertEqual(change["path"], "/listing_types/business")
 
+    def _create_payload(self, key):
+        return {"key": key, "label_singular": "Restaurant",
+                "label_plural": "Restaurants", "path_segment": "restaurants",
+                "claimable": "on"}
+
+    def test_create_rejects_a_mixed_case_key_without_writing(self):
+        resp = self._post(self._client(self.admin), "type-create",
+                          self._create_payload("Restaurant"))
+        self.assertEqual(resp.status_code, 200)  # form invalid, no redirect
+        self.assertIn("key", resp.context["form"].errors)
+        self.assertFalse(ListingType.all_tenants.filter(tenant=self.tenant).exists())
+        self.assertFalse(self._settings_events().exists())
+
+    def test_create_slugifies_separators_in_the_key(self):
+        resp = self._post(self._client(self.admin), "type-create",
+                          self._create_payload("food-and drink"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(
+            ListingType.all_tenants.filter(key="food_and_drink").exists()
+        )
+        change = self._settings_events().last().data["changes"][0]
+        self.assertEqual(change["path"], "/listing_types/food_and_drink")
+
+    def test_create_rejects_a_key_that_does_not_start_with_a_letter(self):
+        resp = self._post(self._client(self.admin), "type-create",
+                          self._create_payload("9lives"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("key", resp.context["form"].errors)
+
     def test_second_type_requires_url_change_confirmation(self):
         self._make_type()
         client = self._client(self.admin)

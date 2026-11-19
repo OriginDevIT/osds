@@ -49,6 +49,7 @@ from directory.field_schema import (
     SchemaError,
     normalize_type_schema,
     validate_custom_fields,
+    validate_type_key,
     validate_type_schema,
 )
 from directory.masking import mask_email
@@ -170,7 +171,7 @@ def _create_listing_type(
     fields,
     actor,
 ) -> ListingType:
-    errors = validate_type_schema(fields)
+    errors = validate_type_key(key) + validate_type_schema(fields)
     if errors:
         raise SchemaError(errors)
 
