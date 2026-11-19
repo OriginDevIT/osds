@@ -130,6 +130,24 @@ class RejectedFieldTests(_Base):
         with self.assertRaises(SchemaError):
             self.upsert({"slug": "x", "name": "X", "categories": ["ghost"]})
 
+    def test_category_of_another_listing_type_is_rejected(self):
+        Category.all_tenants.create(
+            tenant=self.tenant, listing_type=self.lt2, slug="editors", name="Editors"
+        )
+        with self.assertRaises(SchemaError):
+            self.upsert({"slug": "x", "name": "X", "categories": ["editors"]})
+        self.assertFalse(Listing.all_tenants.filter(slug="x").exists())
+
+    def test_same_slug_in_another_type_never_attaches_the_foreign_category(self):
+        foreign = Category.all_tenants.create(
+            tenant=self.tenant, listing_type=self.lt2, slug="plumbers", name="P2"
+        )
+        result = self.upsert({"slug": "x", "name": "X", "categories": ["plumbers"]})
+        with tenant_context(self.tenant):
+            cats = list(result.listing.categories.all())
+        self.assertEqual([c.listing_type_id for c in cats], [self.lt.id])
+        self.assertNotIn(foreign.id, [c.id for c in cats])
+
     def test_unknown_custom_field_is_rejected(self):
         with self.assertRaises(SchemaError):
             self.upsert(
