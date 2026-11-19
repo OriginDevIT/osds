@@ -709,11 +709,9 @@ def import_detail(request, public_id):
     ).exists()
     # import_rollback is gated at manager (@_MANAGER below) -- the button must
     # not render for a rank the view itself would 403.
-    can_rollback = (
-        terminal
-        and not window_passed
-        and request.membership.role >= StaffMembership.Role.MANAGER
-    )
+    rollbackable = terminal and not window_passed
+    has_role = request.membership.role >= StaffMembership.Role.MANAGER
+    can_rollback = rollbackable and has_role
     return render(
         request,
         "directory/admin/import_detail.html",
@@ -724,6 +722,8 @@ def import_detail(request, public_id):
             "can_map": batch.status == ImportBatch.Status.MAPPING,
             "can_rollback": can_rollback,
             "rollback_window_passed": window_passed,
+            # The batch itself is rollbackable; only the viewer's rank is short.
+            "rollback_needs_role": rollbackable and not has_role,
         },
     )
 
