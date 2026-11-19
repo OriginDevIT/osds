@@ -16,7 +16,11 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
 from directory import claim_review
-from tenants.login import OperatorAuthenticationForm, safe_redirect_target
+from tenants.login import (
+    OperatorAuthenticationForm,
+    insecure_cookie_warning,
+    safe_redirect_target,
+)
 from tenants.models import StaffMembership
 
 
@@ -36,7 +40,11 @@ def login_view(request):
     return render(
         request,
         "directory/admin/login.html",
-        {"form": form, "next": request.POST.get("next") or request.GET.get("next") or ""},
+        {
+            "form": form,
+            "next": request.POST.get("next") or request.GET.get("next") or "",
+            "insecure_cookie_warning": insecure_cookie_warning(request),
+        },
     )
 
 

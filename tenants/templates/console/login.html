@@ -3,6 +3,9 @@
 {% block heading %}Sign in{% endblock %}
 {% block content %}
 {% for message in messages %}<p class="muted">{{ message }}</p>{% endfor %}
+{% if insecure_cookie_warning %}
+  <ul class="errors"><li>{{ insecure_cookie_warning }}</li></ul>
+{% endif %}
 {% if form.non_field_errors %}
   <ul class="errors">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>
 {% endif %}
