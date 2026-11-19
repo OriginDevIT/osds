@@ -14,9 +14,8 @@
       <td>{{ c.parent.slug|default:"—" }}</td>
       <td>
         <a href="{% url 'directory_admin:category-edit' public_id=c.public_id %}">Edit</a>
-        <form method="post" action="{% url 'directory_admin:category-delete' public_id=c.public_id %}" style="display:inline">
-          {% csrf_token %}<button type="submit">Delete</button>
-        </form>
+ &middot;
+        <a href="{% url 'directory_admin:category-delete' public_id=c.public_id %}">Delete</a>
       </td>
     </tr>
   {% empty %}

@@ -1,0 +1,24 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Delete listing type — {{ listing_type.key }}{% endblock %}
+{% block content %}
+<h1>Delete listing type “{{ listing_type.label_singular }}”?</h1>
+<p>
+  Deleting a listing type is permanent. Confirming will remove:
+</p>
+<ul>
+  <li>this will delete the listing type “{{ listing_type.key }}”, including its field schema;</li>
+  <li>{{ category_count }} categor{{ category_count|pluralize:"y,ies" }} of this type (with their sub-categories);</li>
+  <li>{{ association_count }} listing association{{ association_count|pluralize }} to those categories.</li>
+</ul>
+{% if listing_count %}
+<p class="errors">
+  This type still has {{ listing_count }} listing{{ listing_count|pluralize }}.
+  The delete will be refused until they are moved or deleted.
+</p>
+{% endif %}
+<form method="post" action="{% url 'directory_admin:type-delete' key=listing_type.key %}">
+  {% csrf_token %}
+  <button type="submit">Confirm delete</button>
+  <a href="{% url 'directory_admin:type-list' %}">Cancel</a>
+</form>
+{% endblock %}
