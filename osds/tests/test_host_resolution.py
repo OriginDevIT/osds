@@ -59,6 +59,22 @@ class HostResolutionTests(TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(request.osds_host_kind, "unknown")
 
+    @override_settings(OSDS_CONSOLE_HOST=CONSOLE + ":8000")
+    def test_console_host_configured_with_a_port_still_matches(self):
+        # #142: the incoming Host is port-stripped, so the configured value
+        # must be too, or every console request 404s.
+        for host in (CONSOLE, CONSOLE + ":8000"):
+            with self.subTest(host=host):
+                response, request = self._call(host)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(request.osds_host_kind, "console")
+                self.assertEqual(request.urlconf, "osds.urls_console")
+
+    @override_settings(OSDS_CONSOLE_HOST=" Console.Example.Test.:8000 ")
+    def test_console_host_setting_is_normalised_like_the_request_host(self):
+        response, request = self._call(CONSOLE)
+        self.assertEqual(request.osds_host_kind, "console")
+
     # --- tenant ----------------------------------------------------------
     def test_tenant_host_sets_request_tenant_scope_and_urlconf(self):
         tenant = Tenant.objects.create(
