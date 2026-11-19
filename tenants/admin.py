@@ -31,7 +31,11 @@ from django.views.decorators.csrf import csrf_protect
 
 from tenants import operator_invites, services
 from tenants.admin_forms import OperatorAddForm, StaffInviteForm, TenantAddForm
+from tenants.login import OperatorAdminAuthenticationForm
 from tenants.models import Operator, StaffMembership, Tenant
+
+# The admin login form lowercases the email like the OSDS login form (#143).
+admin.site.login_form = OperatorAdminAuthenticationForm
 
 _ADD_TEMPLATE = "admin/tenants/principal_add_form.html"
 

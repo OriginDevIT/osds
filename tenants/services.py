@@ -401,6 +401,21 @@ def set_tenant_domain(
     return tenant
 
 
+def ensure_domain_challenge(tenant: Tenant) -> str:
+    """Return the tenant's HTTP-challenge token, minting and saving one if absent.
+
+    The wizard shows the token before any domain has been saved, so it cannot
+    wait for ``set_tenant_domain`` to create it. Generating it is not a
+    settings change an operator made, so it writes no audit row.
+    """
+    token = tenant.settings.get("domain_challenge")
+    if not token:
+        token = pysecrets.token_urlsafe(24)
+        tenant.settings["domain_challenge"] = token
+        tenant.save(update_fields=["settings"])
+    return token
+
+
 @transaction.atomic
 def _apply_tenant_domain(
     *, tenant: Tenant, domain: str, changed_by: Operator, port: int | None = None

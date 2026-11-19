@@ -127,6 +127,7 @@ def domain(request):
         return redirect("setup-index")
 
     saved_port = tenant.settings.get("domain_port")
+    services.ensure_domain_challenge(tenant)
     form = forms.DomainForm(
         request.POST or None,
         initial={

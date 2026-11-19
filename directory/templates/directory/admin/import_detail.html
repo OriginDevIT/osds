@@ -55,7 +55,7 @@
 
 <h2>Result</h2>
 {% if batch.status == "pending" %}
-  <p class="muted">Queued — the importer will process this. No worker in this build yet.</p>
+  <p class="muted">Queued — the importer will process this.</p>
 {% endif %}
 <table>
   <tr><th>Created</th><td>{{ batch.created_count }}</td></tr>
@@ -88,6 +88,11 @@
 <p class="muted">
   Rolled back {{ batch.rolled_back_at }}{% if batch.rolled_back_by %} by
   {{ batch.rolled_back_by.email }}{% endif %}.
+</p>
+{% elif rollback_needs_role %}
+<p class="muted">
+  This import can be rolled back, but your role is too low to do it.
+  Rolling back an import requires the manager role — ask a manager.
 </p>
 {% else %}
 <p class="muted">A rollback is available once the import has finished.</p>

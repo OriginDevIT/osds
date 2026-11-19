@@ -9,6 +9,7 @@ nothing on its own: every real admin view is still gated by an active
 
 from __future__ import annotations
 
+from django.contrib.admin.forms import AdminAuthenticationForm
 from django.contrib.auth.forms import AuthenticationForm
 from django.utils.http import url_has_allowed_host_and_scheme
 
@@ -19,6 +20,18 @@ class OperatorAuthenticationForm(AuthenticationForm):
     ``Operator.email`` is stored lowercased (tenants.models.OperatorManager)
     and ``ModelBackend`` matches it exactly, so a mixed-case entry would
     otherwise fail to authenticate a valid account.
+    """
+
+    def clean_username(self) -> str:
+        return (self.cleaned_data.get("username") or "").strip().lower()
+
+
+class OperatorAdminAuthenticationForm(AdminAuthenticationForm):
+    """``AdminAuthenticationForm`` that lowercases the submitted email.
+
+    Django's admin login passes the raw input to ``get_by_natural_key``, so a
+    mixed-case entry is rejected at ``/admin/login/`` while the same
+    credentials succeed at ``OperatorAuthenticationForm`` (#143).
     """
 
     def clean_username(self) -> str:

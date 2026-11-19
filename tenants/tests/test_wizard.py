@@ -79,6 +79,39 @@ class RoutingTests(WizardBase):
         self.assertEqual(response.status_code, 404)
 
 
+class DomainChallengeTests(WizardBase):
+    def _to_domain_step(self) -> Client:
+        client = Client()
+        self.unlock(client)
+        self.do_account(client)
+        self.do_directory(client)
+        return client
+
+    def test_first_visit_renders_the_expected_token(self):
+        client = self._to_domain_step()
+        response = client.get("/setup/domain/")
+        self.assertEqual(response.status_code, 200)
+        tenant = Tenant.objects.get()
+        token = tenant.settings.get("domain_challenge")
+        self.assertTrue(token)
+        self.assertContains(response, "<code>%s</code>" % token, html=True)
+
+    def test_token_is_stable_across_visits_and_saves(self):
+        client = self._to_domain_step()
+        client.get("/setup/domain/")
+        first = Tenant.objects.get().settings["domain_challenge"]
+        client.get("/setup/domain/")
+        self.do_domain(client)
+        self.assertEqual(Tenant.objects.get().settings["domain_challenge"], first)
+
+    def test_invalid_post_still_renders_the_token(self):
+        client = self._to_domain_step()
+        response = client.post("/setup/domain/", {"domain": "", "action": "verify"})
+        token = Tenant.objects.get().settings.get("domain_challenge")
+        self.assertTrue(token)
+        self.assertContains(response, token)
+
+
 class HappyPathTests(WizardBase):
     def test_full_run_emits_tenant_created_and_completes(self):
         client = Client()
