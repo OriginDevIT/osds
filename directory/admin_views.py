@@ -34,7 +34,7 @@ from directory.models import (
     ListingType,
     MediaAsset,
 )
-from directory.storage import DeferredFeatureError, get_tenant_storage
+from directory.storage import StorageConfigError, get_tenant_storage
 from tenants.models import StaffMembership
 
 _ADMIN = tenant_admin_required()
@@ -550,7 +550,7 @@ def listing_media_add(request, key, public_id):
                     alt_text=form.cleaned_data["alt_text"],
                     uploaded_by=request.user,
                 )
-            except (media.MediaError, DeferredFeatureError) as exc:
+            except (media.MediaError, StorageConfigError) as exc:
                 messages.error(request, str(exc))
             else:
                 messages.success(request, "Image added.")
@@ -571,7 +571,7 @@ def listing_media_remove(request, key, public_id, asset_public_id):
     if request.method == "POST":
         try:
             media.detach_media(asset, actor=_actor(request))
-        except DeferredFeatureError as exc:
+        except StorageConfigError as exc:
             messages.error(request, str(exc))
         else:
             messages.success(request, "Image removed.")
@@ -620,7 +620,7 @@ def _store_upload(request, *, upload, raw, listing_type, headers, delimiter, enc
     )
     try:
         storage = get_tenant_storage(request.tenant)
-    except DeferredFeatureError as exc:
+    except StorageConfigError as exc:
         log_conclude(row, outcome="rejected", problem={"storage": str(exc)})
         raise
 
@@ -674,7 +674,7 @@ def import_create(request):
                     delimiter=delimiter,
                     encoding=encoding,
                 )
-            except DeferredFeatureError as exc:
+            except StorageConfigError as exc:
                 form.add_error(None, str(exc))
             else:
                 messages.success(

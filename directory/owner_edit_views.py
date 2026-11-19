@@ -27,7 +27,7 @@ from directory.owner_forms import (
     changes_from_form,
     initial_from_listing,
 )
-from directory.storage import DeferredFeatureError
+from directory.storage import StorageConfigError
 from osds.client_ip import client_ip
 
 # Keys the write path refuses outright (spec §7.1) plus identity, which a
@@ -124,7 +124,7 @@ def media_add(request, public_id):
             )
         except owner_edit.OwnerEditRefused as exc:
             messages.error(request, owner_edit.refusal_text(exc))
-        except (media_service.MediaError, DeferredFeatureError) as exc:
+        except (media_service.MediaError, StorageConfigError) as exc:
             messages.error(request, str(exc))
         else:
             messages.success(request, "Image added.")
@@ -144,7 +144,7 @@ def media_remove(request, public_id, asset_public_id):
         )
     except owner_edit.OwnerEditRefused as exc:
         messages.error(request, owner_edit.refusal_text(exc))
-    except DeferredFeatureError as exc:
+    except StorageConfigError as exc:
         messages.error(request, str(exc))
     else:
         messages.success(request, "Image removed.")

@@ -34,7 +34,7 @@ from directory.csv_import import ROWS_PER_PASS, build_payload
 from directory.field_schema import SchemaError
 from directory.models import ImportBatch, ImportBatchListing
 from directory.services import RejectedField, Suppressed, upsert_listing
-from directory.storage import DeferredFeatureError, get_tenant_storage
+from directory.storage import StorageConfigError, get_tenant_storage
 from osds.tenancy import tenant_context
 
 # A pre-image is a second copy of personal data (spec §11.2); it is cleared
@@ -128,7 +128,7 @@ def _read_rows(batch) -> "list[list[str]]":
         storage = get_tenant_storage(batch.tenant)
         with storage.open(batch.stored_path, "rb") as fh:
             raw = fh.read()
-    except (OSError, DeferredFeatureError) as exc:
+    except (OSError, StorageConfigError) as exc:
         raise ImportFileError(f"cannot read the uploaded file: {exc}") from exc
 
     text = raw.decode(batch.encoding, errors="replace")
