@@ -6,7 +6,11 @@ from __future__ import annotations
 
 from django.test import SimpleTestCase
 
-from directory.field_schema import normalize_type_schema, validate_type_schema
+from directory.field_schema import (
+    near_duplicate_warnings,
+    normalize_type_schema,
+    validate_type_schema,
+)
 
 
 def _field(**over):
@@ -166,3 +170,28 @@ class NormalizeTests(SimpleTestCase):
             [{"key": "a", "label": "A", "type": "select", "options": [" x ", "y", ""]}]
         )
         self.assertEqual(out[0]["options"], ["x", "y"])
+
+
+class NearDuplicateWarningTests(SimpleTestCase):
+    def _warn(self, *keys):
+        return near_duplicate_warnings([_field(key=k) for k in keys])
+
+    def test_prefixed_core_names_warn(self):
+        for key, core in (
+            ("business_name", "'name'"),
+            ("business_description", "'description'"),
+            ("street_address", "'location.address_line1'"),
+        ):
+            out = self._warn(key)
+            self.assertEqual(len(out), 1, key)
+            self.assertIn(f"'{key}'", out[0])
+            self.assertIn(core, out[0])
+
+    def test_unrelated_keys_do_not_warn(self):
+        self.assertEqual(self._warn("years_in_business", "licence_number", "names"), [])
+
+    def test_exact_reserved_key_is_left_to_the_validator(self):
+        self.assertEqual(self._warn("name"), [])
+
+    def test_non_list_schema_yields_no_warnings(self):
+        self.assertEqual(near_duplicate_warnings(None), [])

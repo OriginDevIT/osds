@@ -53,6 +53,71 @@ RESERVED_KEYS = frozenset(
     }
 )
 
+# The common core as the builder presents it (spec §4.5, fields of §4.1): the
+# read-only list shown above the custom rows. ``tokens`` are the words that make
+# a custom key a near-duplicate of the core field -- a prefix or suffix on the
+# exact name ("business_name") does not escape the reserved-key check's intent.
+CORE_FIELDS = (
+    {"path": "name", "label": "Name", "tokens": ("name",)},
+    {"path": "description", "label": "Description", "tokens": ("description",)},
+    {"path": "slug", "label": "Slug", "tokens": ("slug",)},
+    {"path": "status", "label": "Status", "tokens": ("status",)},
+    {"path": "visibility", "label": "Visibility", "tokens": ("visibility",)},
+    {"path": "categories", "label": "Categories", "tokens": ("categories", "category")},
+    {"path": "location.address_line1", "label": "Address line 1",
+     "tokens": ("address", "address_line1")},
+    {"path": "location.address_line2", "label": "Address line 2",
+     "tokens": ("address_line2",)},
+    {"path": "location.locality", "label": "Locality (city)",
+     "tokens": ("locality", "city")},
+    {"path": "location.region", "label": "Region (state)",
+     "tokens": ("region", "state")},
+    {"path": "location.postal_code", "label": "Postal code",
+     "tokens": ("postal_code", "postcode", "zip")},
+    {"path": "location.country", "label": "Country", "tokens": ("country",)},
+    {"path": "location.lat / location.lon", "label": "Coordinates",
+     "tokens": ("latitude", "longitude")},
+    {"path": "contact.phone", "label": "Phone", "tokens": ("phone",)},
+    {"path": "contact.email", "label": "Email", "tokens": ("email",)},
+    {"path": "contact.website", "label": "Website", "tokens": ("website",)},
+    {"path": "media", "label": "Media (logo, cover, gallery)",
+     "tokens": ("logo", "media")},
+)
+
+
+def near_duplicate_warnings(fields) -> list[str]:
+    """Warnings for custom keys that shadow a common-core field by another name.
+
+    Advisory, not an error: exact reserved keys are already rejected by
+    ``validate_type_schema``; this catches ``business_name`` against ``name``.
+    """
+    warnings: list[str] = []
+    if not isinstance(fields, list):
+        return warnings
+    for field in fields:
+        key = field.get("key") if isinstance(field, dict) else None
+        if not isinstance(key, str) or not key or key in RESERVED_KEYS:
+            continue
+        parts = key.lower().split("_")
+        joined = "_".join(parts)
+        for core in CORE_FIELDS:
+            hit = False
+            for token in core["tokens"]:
+                n = token.count("_") + 1
+                if any("_".join(parts[i : i + n]) == token for i in range(len(parts) - n + 1)):
+                    hit = True
+                    break
+            if hit or joined == core["path"]:
+                warnings.append(
+                    f"field '{key}' looks like a duplicate of the core field "
+                    f"'{core['path']}'. Core fields are what search, the claim "
+                    "flow and the public page read; a custom copy is invisible "
+                    "to them. Use the core field instead."
+                )
+                break
+    return warnings
+
+
 _KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _KEY_ERROR = "key must be lowercase letters, digits and underscores, starting with a letter"
 _BOOL_FLAGS = ("required", "public", "searchable")

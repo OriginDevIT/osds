@@ -25,7 +25,13 @@ from directory.admin_forms import (
     MediaUploadForm,
     build_listing_form_class,
 )
-from directory.field_schema import FIELD_TYPES, SchemaError, validate_type_schema
+from directory.field_schema import (
+    CORE_FIELDS,
+    FIELD_TYPES,
+    SchemaError,
+    near_duplicate_warnings,
+    validate_type_schema,
+)
 from directory.models import (
     Category,
     ImportBatch,
@@ -197,6 +203,8 @@ def schema_builder(request, key):
             "listing_type": listing_type,
             "fields": fields,
             "errors": errors,
+            "core_fields": CORE_FIELDS,
+            "warnings": near_duplicate_warnings(fields),
             "field_types": sorted(FIELD_TYPES),
         },
     )
