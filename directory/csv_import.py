@@ -74,6 +74,46 @@ def allowed_targets(listing_type) -> "list[tuple[str, str]]":
     return [*IMPORT_TARGETS, *custom_field_targets(listing_type)]
 
 
+# Match keys are never suggested: a wrong guess there updates the wrong
+# listing (spec §7.1). The operator maps these deliberately.
+_NEVER_SUGGESTED = frozenset({"id", "slug"})
+
+
+def suggest_mapping(headers: "list[str]", listing_type) -> "dict[str, str]":
+    """Suggest ``{csv header: target}`` for headers that exactly match a
+    target's key path (full, or its last segment) or label, ignoring case. Nothing fuzzier.
+
+    Never suggests ``id`` or ``slug``. A header matching more than one target,
+    or a target matched by more than one header, gets no suggestion -- a wrong
+    guess would write bad data into every row. Suggestions only pre-select the
+    form; nothing is saved until the operator submits the mapping.
+    """
+    names: "dict[str, set[str]]" = {}
+
+    def add(name: str, target: str) -> None:
+        names.setdefault(name.strip().casefold(), set()).add(target)
+
+    for target, label in allowed_targets(listing_type):
+        if target in _NEVER_SUGGESTED:
+            continue
+        add(target, target)
+        add(target.rsplit(".", 1)[-1], target)  # "locality" for location.locality
+        add(label, target)
+    for f in getattr(listing_type, "fields", None) or []:
+        add(f["label"], f"custom_fields.{f['key']}")
+
+    candidate: "dict[str, str]" = {}
+    for header in headers:
+        targets = names.get(header.strip().casefold(), set())
+        if len(targets) == 1:
+            candidate[header] = next(iter(targets))
+
+    counts: "dict[str, int]" = {}
+    for target in candidate.values():
+        counts[target] = counts.get(target, 0) + 1
+    return {h: t for h, t in candidate.items() if counts[t] == 1}
+
+
 def read_header(raw: bytes) -> "tuple[list[str], str, str]":
     """Return ``(headers, delimiter, encoding)`` from a bounded prefix of the
     uploaded bytes. The header row only -- no data rows are parsed."""

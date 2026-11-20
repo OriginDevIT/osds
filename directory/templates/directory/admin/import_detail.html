@@ -32,6 +32,7 @@
               <option value="{{ value }}"{% if row.selected == value %} selected{% endif %}>{{ label }}</option>
             {% endfor %}
           </select>
+          {% if row.suggested %}<span class="muted">(suggested)</span>{% endif %}
         {% else %}
           {{ row.selected|default:"— ignored —" }}
         {% endif %}

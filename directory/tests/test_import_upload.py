@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import functools
 import inspect
+import re
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import (
@@ -133,6 +134,60 @@ class ValidateMappingTests(SimpleTestCase):
 
     def test_id_alone_is_allowed(self):
         self.assertEqual(self._validate({"URL slug": "id"}), {"URL slug": "id"})
+
+
+class SuggestMappingTests(SimpleTestCase):
+    def _suggest(self, headers):
+        return csv_import.suggest_mapping(headers, _FakeType())
+
+    def test_exact_path_match_is_case_insensitive(self):
+        got = self._suggest(["NAME", "Email", "WEBSITE", "locality"])
+        self.assertEqual(
+            got,
+            {
+                "NAME": "name",
+                "Email": "contact.email",
+                "WEBSITE": "contact.website",
+                "locality": "location.locality",
+            },
+        )
+
+    def test_exact_label_match_is_case_insensitive(self):
+        got = self._suggest(["postal code", "Region / State", "Licence No"])
+        self.assertEqual(
+            got,
+            {
+                "postal code": "location.postal_code",
+                "Region / State": "location.region",
+                "Licence No": "custom_fields.licence",
+            },
+        )
+
+    def test_full_dotted_path_matches(self):
+        self.assertEqual(
+            self._suggest(["contact.email"]), {"contact.email": "contact.email"}
+        )
+
+    def test_never_suggests_id_or_slug(self):
+        self.assertEqual(self._suggest(["id", "ID", "slug", "Slug"]), {})
+
+    def test_never_suggests_for_match_key_label(self):
+        self.assertEqual(
+            self._suggest(["Match: existing listing ID"]), {}
+        )
+
+    def test_fuzzy_headers_get_no_suggestion(self):
+        self.assertEqual(
+            self._suggest(["Business Name", "E-mail", "Web site", "Phone no"]), {}
+        )
+
+    def test_near_misses_get_no_suggestion(self):
+        self.assertEqual(self._suggest(["Names", "Emails"]), {})
+
+    def test_two_columns_for_one_target_get_no_suggestion_for_either(self):
+        self.assertEqual(
+            self._suggest(["Name", "name", "Email"]), {"Email": "contact.email"}
+        )
 
 
 class ReadHeaderTests(SimpleTestCase):
@@ -332,6 +387,71 @@ class ImportMappingViewTests(_Setup, TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, 'name="map__0"')
         self.assertContains(resp, 'name="map__2"')
+
+    def _selected(self, resp, index):
+        html = resp.content.decode()
+        m = re.search(
+            r'<select name="map__%d">(.*?)</select>' % index, html, re.S
+        )
+        self.assertIsNotNone(m)
+        sel = re.findall(r'<option value="([^"]*)"[^>]* selected', m.group(1))
+        return sel[0] if sel else ""
+
+    def _get_detail(self, b):
+        return self._client(self.editor).get(
+            self._url("import-detail", public_id=b.public_id), HTTP_HOST=HOST
+        )
+
+    def test_exact_header_is_preselected_and_marked_suggested(self):
+        b = self._batch(headers=("Name", "Email", "Notes"))
+        resp = self._get_detail(b)
+        self.assertEqual(self._selected(resp, 0), "name")
+        self.assertEqual(self._selected(resp, 1), "contact.email")
+        self.assertEqual(self._selected(resp, 2), "")
+        self.assertContains(resp, "(suggested)", count=2)
+
+    def test_id_and_slug_headers_stay_ignored_on_the_form(self):
+        b = self._batch(headers=("id", "slug", "name"))
+        resp = self._get_detail(b)
+        self.assertEqual(self._selected(resp, 0), "")
+        self.assertEqual(self._selected(resp, 1), "")
+        self.assertEqual(self._selected(resp, 2), "name")
+
+    def test_suggestion_is_not_saved_until_the_operator_submits(self):
+        b = self._batch(headers=("Name", "Email"))
+        self._get_detail(b)
+        b.refresh_from_db()
+        self.assertEqual(b.column_mapping, {})
+        self.assertEqual(b.status, ImportBatch.Status.MAPPING)
+
+    def test_saved_mapping_wins_over_suggestions(self):
+        b = self._batch(headers=("Name", "Email", "Slug"))
+        b.column_mapping = {"Slug": "slug", "Name": "description"}
+        b.save(update_fields=["column_mapping"])
+        resp = self._get_detail(b)
+        self.assertEqual(self._selected(resp, 0), "description")
+        self.assertEqual(self._selected(resp, 1), "")
+        self.assertEqual(self._selected(resp, 2), "slug")
+        self.assertNotContains(resp, "(suggested)")
+
+    def test_locked_batch_shows_no_suggestions(self):
+        b = self._batch(headers=("Name", "Email"))
+        b.status = ImportBatch.Status.PENDING
+        b.save(update_fields=["status"])
+        self.assertNotContains(self._get_detail(b), "(suggested)")
+
+    def test_operator_can_override_a_suggestion(self):
+        b = self._batch(headers=("Name", "Slug", "Email"))
+        self._client(self.editor).post(
+            self._url("import-mapping", public_id=b.public_id),
+            {"map__0": "name", "map__1": "slug", "map__2": "contact.website"},
+            HTTP_HOST=HOST,
+        )
+        b.refresh_from_db()
+        self.assertEqual(
+            b.column_mapping,
+            {"Name": "name", "Slug": "slug", "Email": "contact.website"},
+        )
 
     def test_saving_a_valid_mapping_persists_it(self):
         b = self._batch()
