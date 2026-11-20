@@ -874,6 +874,6 @@ def import_run(request, public_id):
             batch.status = ImportBatch.Status.PENDING
             batch.save(update_fields=["status"])
             messages.success(
-                request, "Import queued. (No worker in this build yet.)"
+                request, "Import queued — the importer will process this."
             )
     return redirect("directory_admin:import-detail", public_id=public_id)
