@@ -134,6 +134,12 @@ urlpatterns = [
     ),
     path(
         "listing-types/<slug:key>/listings/<str:public_id>/media/"
+        "<str:asset_public_id>/thumbnail/",
+        views.listing_media_thumbnail,
+        name="listing-media-thumbnail",
+    ),
+    path(
+        "listing-types/<slug:key>/listings/<str:public_id>/media/"
         "<str:asset_public_id>/remove/",
         views.listing_media_remove,
         name="listing-media-remove",
