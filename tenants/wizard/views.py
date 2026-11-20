@@ -183,25 +183,16 @@ def storage(request):
     if tenant is None or operator is None or not tenant.primary_domain:
         return redirect("setup-index")
 
-    form = forms.StorageForm(request.POST or None, initial={"backend": "local"})
+    form = forms.StorageForm(request.POST or None, tenant=tenant)
     if request.method == "POST" and form.is_valid():
-        cfg = {
-            "backend": form.cleaned_data["backend"],
-            "bucket": form.cleaned_data["bucket"],
-            "endpoint": form.cleaned_data["endpoint"],
-            "access_key": form.cleaned_data["access_key"],
-        }
-        secrets = (
-            {"secret_key": form.cleaned_data["secret_key"]}
-            if form.cleaned_data["secret_key"] else {}
-        )
         services.save_settings_page(
-            tenant, page="storage", block="storage", value=cfg, changed_by=operator,
-            secrets=secrets,
+            tenant, page="storage", block="storage", value=form.config(),
+            changed_by=operator, secrets=form.new_secrets(),
         )
         return redirect("setup-index")
-    return render(request, "setup/form.html", {"form": form, "step": "storage",
-                                               "title": "Media storage"})
+    return render(request, "setup/storage.html", {
+        "form": form, "step": "storage", "title": "Media storage",
+    })
 
 
 def smtp(request):

@@ -32,3 +32,23 @@ def mail_banner(context):
         "show": True,
         "can_edit": membership.role >= StaffMembership.Role.ADMIN,
     }
+
+
+@register.inclusion_tag("directory/admin/_storage_banner.html", takes_context=True)
+def storage_banner(context):
+    """The broken-storage banner. Shown on every admin page while the tenant's
+    configured storage cannot be built (a missing SDK, credential or setting).
+    The reason and the settings link go only to a role that can edit storage."""
+    from directory.storage import storage_problem
+    from tenants.models import StaffMembership
+
+    request = context.get("request")
+    membership = getattr(request, "membership", None)
+    tenant = getattr(request, "tenant", None)
+    if membership is None or tenant is None:
+        return {"show": False}
+    problem = storage_problem(tenant)
+    if not problem:
+        return {"show": False}
+    can_edit = membership.role >= StaffMembership.Role.ADMIN
+    return {"show": True, "can_edit": can_edit, "problem": problem if can_edit else ""}

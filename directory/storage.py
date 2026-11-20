@@ -23,11 +23,13 @@ import hashlib
 import importlib
 import json
 import threading
+import uuid
 from pathlib import Path
 from typing import Callable
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage, Storage
 
 CLOUD_BACKENDS = ("s3", "azure", "gcp")
@@ -294,3 +296,46 @@ def get_tenant_storage(tenant) -> Storage:
 def clear_storage_cache() -> None:
     with _cache_lock:
         _cache.clear()
+
+
+def check_storage(storage: Storage) -> None:
+    """Put, read, list and delete a probe object. Raises
+    :class:`StorageConfigError` naming the step and the provider's error; never
+    lets an SDK exception escape. The probe object is removed even on failure."""
+    key = f".osds-probe/{uuid.uuid4().hex}"
+    body = b"osds storage probe"
+    step = "write"
+    saved = None
+    try:
+        saved = storage.save(key, ContentFile(body))
+        step = "read"
+        with storage.open(saved, "rb") as fh:
+            if fh.read() != body:
+                raise StorageConfigError("storage check failed: the object read back differs")
+        step = "list"
+        _, files = storage.listdir(".osds-probe")
+        if saved.rsplit("/", 1)[-1] not in files:
+            raise StorageConfigError("storage check failed: the probe object is not listed")
+        step = "delete"
+        storage.delete(saved)
+        saved = None
+    except StorageConfigError:
+        raise
+    except Exception as exc:
+        raise StorageConfigError(f"storage check failed at {step}: {exc}") from exc
+    finally:
+        if saved is not None:
+            try:
+                storage.delete(saved)
+            except Exception:  # best effort; the primary error is what matters
+                pass
+
+
+def storage_problem(tenant) -> str:
+    """Why the tenant's configured storage cannot be built, or ``""``. Builds the
+    backend (no network call); it does not run the probe."""
+    try:
+        get_tenant_storage(tenant)
+    except StorageConfigError as exc:
+        return str(exc)
+    return ""

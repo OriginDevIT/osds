@@ -1,0 +1,6 @@
+{% if show %}
+<p class="errors" role="alert"><strong>Storage is misconfigured.</strong>
+{% if problem %}{{ problem }}{% endif %}
+Images and imports will fail until this is fixed.
+{% if can_edit %}<a href="{% url 'directory_admin:storage-settings' %}">Fix storage settings</a>{% else %}Ask an administrator to fix it.{% endif %}</p>
+{% endif %}

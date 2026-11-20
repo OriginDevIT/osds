@@ -1,0 +1,16 @@
+{# Every backend's fieldset renders so the form works without JavaScript; only the chosen backend's fields are validated. #}
+{{ form.non_field_errors }}
+<p>{{ form.backend.errors }}{{ form.backend.label_tag }} {{ form.backend }}</p>
+<p class="muted">Choose <strong>Local disk</strong> to keep media on this server's volume.
+Cloud credentials are stored encrypted and are never shown again; leave a credential
+field blank to keep the stored one.</p>
+{% for backend, legend, fields in form.fieldsets %}
+<fieldset id="storage-{{ backend }}">
+  <legend>{{ legend }}</legend>
+  {% for field in fields %}
+  <p>{{ field.errors }}{{ field.label_tag }} {{ field }}
+    {% if field.name in stored %}<span class="muted">(stored)</span>{% endif %}
+    {% if field.help_text %}<span class="muted">{{ field.help_text }}</span>{% endif %}</p>
+  {% endfor %}
+</fieldset>
+{% endfor %}

@@ -6,6 +6,8 @@ changed field names and never a value."""
 from __future__ import annotations
 
 import functools
+import json
+from unittest import mock
 
 from django.test import Client, TransactionTestCase, override_settings
 from django.urls import reverse as _reverse
@@ -99,18 +101,41 @@ class WizardSettingsTests(WizardBase):
             forbidden=["directory.example.test"],
         )
 
-    def test_storage_step_names_the_secret_key_and_never_its_value(self):
+    def test_storage_step_names_the_secret_fields_and_never_their_values(self):
         self.do_domain(self.client)
         before = len(settings_rows(self.tenant))
-        self.client.post("/setup/storage/", {
-            "backend": "s3", "bucket": "my-bucket", "endpoint": "https://s3.example.test",
-            "access_key": "AKIAEXAMPLE", "secret_key": "s3-SECRET-VALUE",
-        })
+        with mock.patch("tenants.storage_forms.check_storage"), \
+                mock.patch("tenants.storage_forms.build_storage"):
+            r = self.client.post("/setup/storage/", {
+                "backend": "s3", "s3_bucket": "my-bucket", "s3_region": "us-east-1",
+                "s3_endpoint": "https://s3.example.test",
+                "s3_access_key": "AKIAEXAMPLE", "s3_secret_key": "s3-SECRET-VALUE",
+            })
+        self.assertEqual(r.status_code, 302)
         assert_one_save(
             self, self.tenant, self.operator, page="storage", since=before,
-            fields=["backend", "bucket", "endpoint", "access_key", "secret_key"],
-            forbidden=["s3-SECRET-VALUE", "AKIAEXAMPLE", "my-bucket", "s3.example.test"],
+            fields=["backend", "bucket", "region", "endpoint", "access_key", "secret_key"],
+            forbidden=["s3-SECRET-VALUE", "AKIAEXAMPLE", "my-bucket", "s3.example.test", "us-east-1"],
         )
+
+    def test_azure_and_gcp_steps_never_log_credentials(self):
+        self.do_domain(self.client)
+        info = json.dumps({"private_key": "PRIVKEY-VALUE", "client_email": "svc@proj.example.test"})
+        for data, forbidden in (
+            ({"backend": "azure", "azure_container": "cont-x", "azure_account_name": "acctx",
+              "azure_account_key": "AZKEY-VALUE"}, ["AZKEY-VALUE", "cont-x", "acctx"]),
+            ({"backend": "gcp", "gcp_bucket": "gbucket-x", "gcp_service_account_json": info},
+             ["PRIVKEY-VALUE", "gbucket-x", "svc@proj"]),
+        ):
+            before = len(settings_rows(self.tenant))
+            with mock.patch("tenants.storage_forms.check_storage"), \
+                    mock.patch("tenants.storage_forms.build_storage"):
+                self.assertEqual(self.client.post("/setup/storage/", data).status_code, 302)
+            rows = settings_rows(self.tenant)[before:]
+            self.assertEqual(len(rows), 1)
+            blob = json.dumps([rows[0].payload, rows[0].problem])
+            for value in forbidden:
+                self.assertNotIn(value, blob)
 
     def test_skipping_mail(self):
         self.do_domain(self.client)

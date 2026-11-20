@@ -8,6 +8,7 @@ from django.core.exceptions import ValidationError
 
 from tenants.claim_verification import CLAIM_VERIFICATION_BOUNDS
 from tenants.models import Tenant
+from tenants.storage_forms import StorageForm  # noqa: F401  (shared with the admin Storage page)
 
 _HOSTNAME_RE = re.compile(
     r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$"
@@ -78,28 +79,6 @@ class DomainForm(forms.Form):
         # port), so the port is carried separately.
         self.port = port
         return host
-
-
-class StorageForm(forms.Form):
-    BACKENDS = [
-        ("local", "Local disk"),
-        ("s3", "S3-compatible"),
-        ("azure", "Azure Blob Storage"),
-        ("gcp", "Google Cloud Storage"),
-    ]
-    backend = forms.ChoiceField(label="Storage backend", choices=BACKENDS)
-    bucket = forms.CharField(label="Bucket / container", required=False)
-    endpoint = forms.CharField(label="Endpoint URL", required=False)
-    access_key = forms.CharField(label="Access key", required=False)
-    secret_key = forms.CharField(
-        label="Secret key", required=False, widget=forms.PasswordInput(render_value=False)
-    )
-
-    def clean(self):
-        cleaned = super().clean()
-        if cleaned.get("backend") != "local" and not cleaned.get("bucket"):
-            self.add_error("bucket", "Required for a cloud backend.")
-        return cleaned
 
 
 class ClaimsForm(forms.Form):

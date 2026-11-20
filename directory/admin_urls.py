@@ -4,7 +4,7 @@ from directory import admin_views as views
 from directory import auth_views
 from directory import claim_admin_views as claim_views
 from directory import adapter_admin_views, lead_admin_views
-from tenants import mail_views
+from tenants import mail_views, storage_views
 
 app_name = "directory_admin"
 
@@ -41,6 +41,7 @@ urlpatterns = [
         name="moderation-unblock",
     ),
     path("settings/mail/", mail_views.mail_settings, name="mail-settings"),
+    path("settings/storage/", storage_views.storage_settings, name="storage-settings"),
     # lead capture
     path("leads/", lead_admin_views.leads_list, name="leads"),
     path("leads/<str:public_id>/", lead_admin_views.lead_detail, name="lead-detail"),
