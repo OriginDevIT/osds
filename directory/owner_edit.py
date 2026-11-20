@@ -182,7 +182,7 @@ def owner_attach_media(
 ) -> MediaAsset:
     """Attach one image through the media service, as the owner. The service
     validates and strips the bytes, stores them and emits ``listing.updated``.
-    ``MediaError`` and ``DeferredFeatureError`` propagate."""
+    ``MediaError`` and ``StorageConfigError`` propagate."""
     _guard(listing, user)
     return media.attach_media(
         listing, role=role, upload=upload, actor=_actor(user), alt_text=alt_text,

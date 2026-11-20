@@ -449,7 +449,7 @@ class RefreshEdgeTests(_StoredBase):
         self.assertEqual(self.refresh(minutes=6), "rebuilt")
         self.assertIn("https://new.test/", sitemaps.load(self.tenant).get("index.xml"))
 
-    def test_a_cloud_storage_tenant_is_skipped_not_failed(self):
+    def test_a_misconfigured_cloud_tenant_is_skipped_not_failed(self):
         self.tenant.settings = {"storage": {"backend": "s3", "bucket": "b"}}
         self.tenant.save()
         self.assertEqual(self.refresh(), "unavailable")
@@ -544,7 +544,7 @@ class SitemapJobTests(_StoredBase):
         self.assertEqual(result.done, 0)
         self.assertIsNone(sitemaps.load(self.tenant))
 
-    def test_a_cloud_tenant_does_not_fail_the_tick_or_block_others(self):
+    def test_a_misconfigured_cloud_tenant_does_not_fail_the_tick_or_block_others(self):
         self.tenant.settings = {"storage": {"backend": "gcp", "bucket": "b"}}
         self.tenant.save()
         other = self._second_tenant()

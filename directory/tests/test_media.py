@@ -3,7 +3,7 @@
 Covers: validation and EXIF stripping in-request, the asset lifecycle, the
 JSON Patch each operation produces (whole-array replace for the gallery),
 ``listing.updated`` as the only event, the local storage resolver and its
-deferred-feature error for cloud backends, and the tenant-scoped media view.
+config error for a misconfigured cloud backend, and the tenant-scoped media view.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from PIL import Image
 from audit.models import OutboxEvent
 from directory import media
 from directory.models import Listing, ListingType, MediaAsset
-from directory.storage import DeferredFeatureError, get_tenant_storage
+from directory.storage import StorageConfigError, get_tenant_storage
 from osds.tenancy import tenant_context
 from tenants.models import InstallSetup, Tenant
 
@@ -257,11 +257,11 @@ class StorageResolverTests(_Base):
         storage = get_tenant_storage(self.tenant)
         self.assertIn(self.tenant.public_id, storage.location)
 
-    def test_cloud_backends_raise_deferred_feature(self):
+    def test_a_cloud_backend_without_config_raises_storage_config_error(self):
         for backend in ("s3", "azure", "gcp"):
             self.tenant.settings = {"storage": {"backend": backend}}
             with self.subTest(backend=backend):
-                with self.assertRaises(DeferredFeatureError):
+                with self.assertRaises(StorageConfigError):
                     get_tenant_storage(self.tenant)
 
     def test_missing_config_defaults_to_local(self):

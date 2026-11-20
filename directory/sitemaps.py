@@ -220,12 +220,23 @@ def load(tenant) -> "StoredSitemaps | None":
     base than the tenant has now (its ``<loc>`` values would be wrong)."""
     try:
         storage = get_tenant_storage(tenant)
-    except Exception:  # DeferredFeatureError today; never fail a request on it
+    except Exception:  # a misconfigured backend (StorageConfigError); never fail a request on it
         return None
     pointer = _read_pointer(storage)
     if pointer is None or pointer.get("base") != routing.absolute_url(tenant, "/"):
         return None
     return StoredSitemaps(storage, pointer)
+
+
+def _has_stored(storage) -> bool:
+    """Whether anything is stored under the sitemap directory. A listing rather
+    than ``exists``: object stores have no directory objects, so ``exists`` on a
+    prefix is always false there."""
+    try:
+        directories, files = storage.listdir(_DIR)
+    except OSError:
+        return False
+    return bool(directories or files)
 
 
 def _remove_generation(storage, generation: str) -> None:
@@ -281,7 +292,7 @@ def _plan(tenant, storage, *, now) -> "tuple[str, str | None]":
     if not routing.has_absolute_base(tenant):
         # An unverified domain serves no sitemap (decisions.md §4.1); any
         # generation left from before the domain changed must go.
-        return ("clear" if storage.exists(_DIR) else "current"), None
+        return ("clear" if _has_stored(storage) else "current"), None
     digest = fingerprint(tenant)
     pointer = _read_pointer(storage)
     if pointer is not None:
@@ -303,7 +314,7 @@ def needs_rebuild(tenant, *, now) -> bool:
 
 def refresh(tenant, *, now) -> str:
     """Bring ``tenant``'s stored sitemap up to date. Returns what happened:
-    ``"unavailable"`` (storage backend not implemented), ``"cleared"`` (no
+    ``"unavailable"`` (the storage backend is misconfigured or unreachable), ``"cleared"`` (no
     verified domain, so no sitemap exists), ``"current"``, ``"debounced"`` or
     ``"rebuilt"``. Idempotent: an unchanged fingerprint is ``"current"``."""
     try:
