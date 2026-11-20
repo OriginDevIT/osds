@@ -1,0 +1,18 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Delete category — {{ category.slug }}{% endblock %}
+{% block content %}
+<h1>Delete category “{{ category.name }}”?</h1>
+<p>
+  Deleting this category is permanent. Confirming will remove:
+</p>
+<ul>
+  <li>the category “{{ category.name }}” itself;</li>
+  <li>this will delete {{ child_count }} child categor{{ child_count|pluralize:"y,ies" }}{% if child_count %} (and every category beneath them){% endif %};</li>
+  <li>{{ association_count }} listing association{{ association_count|pluralize }} to the deleted categor{{ child_count|add:1|pluralize:"y,ies" }}. The listings themselves are not deleted.</li>
+</ul>
+<form method="post" action="{% url 'directory_admin:category-delete' public_id=category.public_id %}">
+  {% csrf_token %}
+  <button type="submit">Confirm delete</button>
+  <a href="{% url 'directory_admin:category-list' key=listing_type.key %}">Cancel</a>
+</form>
+{% endblock %}

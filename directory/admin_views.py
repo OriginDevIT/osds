@@ -163,6 +163,27 @@ def listing_type_edit(request, key):
     )
 
 
+def _category_descendant_ids(category: Category) -> list[int]:
+    """Ids of every category beneath ``category`` (CASCADE is recursive)."""
+    found: list[int] = []
+    frontier = [category.pk]
+    while frontier:
+        frontier = list(
+            Category.objects.filter(
+                tenant=category.tenant, parent_id__in=frontier
+            ).values_list("pk", flat=True)
+        )
+        found.extend(frontier)
+    return found
+
+
+def _association_count(tenant, category_ids: list[int]) -> int:
+    through = Listing.categories.through
+    return through.objects.filter(
+        category_id__in=category_ids, listing__tenant=tenant
+    ).count()
+
+
 @_ADMIN
 def listing_type_delete(request, key):
     listing_type = _get_type(request, key)
@@ -173,7 +194,24 @@ def listing_type_delete(request, key):
             messages.error(request, str(exc))
         else:
             messages.success(request, f"Deleted “{key}”.")
-    return redirect("directory_admin:type-list")
+        return redirect("directory_admin:type-list")
+    category_ids = list(
+        Category.objects.filter(
+            tenant=request.tenant, listing_type=listing_type
+        ).values_list("pk", flat=True)
+    )
+    return render(
+        request,
+        "directory/admin/listing_type_confirm_delete.html",
+        {
+            "listing_type": listing_type,
+            "category_count": len(category_ids),
+            "association_count": _association_count(request.tenant, category_ids),
+            "listing_count": Listing.objects.filter(
+                tenant=request.tenant, listing_type=listing_type
+            ).count(),
+        },
+    )
 
 
 @_ADMIN
@@ -313,7 +351,20 @@ def category_delete(request, public_id):
     if request.method == "POST":
         services.delete_category(category, actor=request.user)
         messages.success(request, "Category deleted.")
-    return redirect("directory_admin:category-list", key=key)
+        return redirect("directory_admin:category-list", key=key)
+    child_ids = _category_descendant_ids(category)
+    return render(
+        request,
+        "directory/admin/category_confirm_delete.html",
+        {
+            "category": category,
+            "listing_type": category.listing_type,
+            "child_count": len(child_ids),
+            "association_count": _association_count(
+                request.tenant, [category.pk, *child_ids]
+            ),
+        },
+    )
 
 
 # --- listings (editor rank: editing listing content, spec §4.4) ------------

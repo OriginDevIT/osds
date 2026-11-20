@@ -16,7 +16,8 @@
       <td>
         <a href="{% url 'directory_admin:type-edit' key=t.key %}">Edit</a> &middot;
         <a href="{% url 'directory_admin:type-fields' key=t.key %}">Fields</a> &middot;
-        <a href="{% url 'directory_admin:category-list' key=t.key %}">Categories</a>
+        <a href="{% url 'directory_admin:category-list' key=t.key %}">Categories</a> &middot;
+        <a href="{% url 'directory_admin:type-delete' key=t.key %}">Delete</a>
       </td>
     </tr>
   {% empty %}
