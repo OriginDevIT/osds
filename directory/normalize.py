@@ -76,6 +76,66 @@ def phone_e164(value):
     return cleaned
 
 
+# ISO 3166-1 alpha-2 -> (calling code, national numbers carry a leading "0"
+# trunk prefix that is dropped in E.164). Only countries whose rule is
+# unambiguous are listed; a country not listed cannot be chosen as a default.
+# "NANP" countries share +1 and are handled by their own rule below.
+PHONE_COUNTRIES: "dict[str, tuple[str, bool]]" = {
+    "US": ("1", False), "CA": ("1", False),
+    "GB": ("44", True), "IE": ("353", True), "AU": ("61", True),
+    "NZ": ("64", True), "DE": ("49", True), "FR": ("33", True),
+    "NL": ("31", True), "BE": ("32", True), "CH": ("41", True),
+    "AT": ("43", True), "SE": ("46", True), "FI": ("358", True),
+    "ES": ("34", False), "PT": ("351", False), "PL": ("48", False),
+    "NO": ("47", False), "DK": ("45", False), "MX": ("52", False),
+    "BR": ("55", True), "IN": ("91", True), "ZA": ("27", True),
+    "JP": ("81", True), "KR": ("82", True), "SG": ("65", False),
+    "HK": ("852", False),
+}
+_NANP = frozenset({"US", "CA"})
+
+
+def national_phone_to_e164(value, default_country):
+    """Convert a phone number written without a leading ``+`` to E.164 using
+    ``default_country``'s calling code. Never guesses: an unsupported or empty
+    country, a ``+`` anywhere but the start, an ``00`` international prefix,
+    or a digit count outside 8-15 (country code included) raises
+    ``ValueError`` with a message for the row error. A number that does start
+    with ``+`` is not this function's business -- use ``phone_e164``.
+    """
+    value = text(value)
+    if not value:
+        return value
+    if value.startswith("+"):
+        return phone_e164(value)
+    country_code = (default_country or "").strip().upper()
+    if not country_code:
+        raise ValueError(
+            "phone number has no leading + and no default country was chosen"
+        )
+    if country_code not in PHONE_COUNTRIES:
+        raise ValueError(f"default phone country {country_code!r} is not supported")
+    if "+" in value:
+        raise ValueError("phone number has a + that is not at the start")
+    digits = re.sub(r"\D", "", value)
+    if digits.startswith("00"):
+        raise ValueError(
+            "phone number starts with 00; write international numbers with a leading +"
+        )
+    calling, trunk = PHONE_COUNTRIES[country_code]
+    if country_code in _NANP:
+        if len(digits) == 11 and digits.startswith("1"):
+            digits = digits[1:]
+        if len(digits) != 10 or digits[0] in "01":
+            raise ValueError("phone number is not a valid 10-digit number")
+    elif trunk and digits.startswith("0"):
+        digits = digits[1:]
+    full = calling + digits
+    if not 8 <= len(full) <= 15:
+        raise ValueError("phone number must have 8-15 digits including the country code")
+    return "+" + full
+
+
 def country(value):
     value = text(value)
     return value.upper() if value else value

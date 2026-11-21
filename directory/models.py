@@ -280,6 +280,13 @@ class ImportBatch(models.Model):
     encoding = models.CharField(max_length=32, default="utf-8-sig")
     has_header = models.BooleanField(default=True)
     column_mapping = models.JSONField(default=dict, blank=True)
+    # ISO 3166-1 alpha-2 country whose calling code is applied to phone cells
+    # with no leading "+". Blank means no default: such a cell is a row error.
+    phone_default_country = models.CharField(max_length=2, blank=True, default="")
+    # {csv header: separator} for categories / multi_select columns; a column
+    # absent here uses ``csv_import.DEFAULT_SEPARATOR``. Stored on the batch so
+    # a worker restart re-applies the same rule.
+    column_separators = models.JSONField(default=dict, blank=True)
     row_count = models.PositiveIntegerField(default=0)
     # Resume cursor for the chunked worker row loop: data rows consumed so far.
     # A pass processes the next ``ROWS_PER_PASS`` rows and advances this.

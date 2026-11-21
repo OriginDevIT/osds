@@ -16,7 +16,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.crypto import get_random_string
 
 from audit.command_log import log_conclude, log_received, require_autocommit
-from directory import csv_import, media, normalize, services
+from directory import csv_import, importing, media, normalize, services
 from directory.access import tenant_admin_required
 from directory.admin_forms import (
     CategoryForm,
@@ -778,6 +778,46 @@ def _get_batch(request, public_id) -> ImportBatch:
     )
 
 
+def _import_preview(batch) -> "list[dict]":
+    """The first rows after phone and multi-value normalisation, using the
+    saved mapping and the batch's own settings -- the same ``build_payload``
+    the worker runs. A row that would fail shows its error."""
+    headers = batch.detected_headers or []
+    mapping = batch.column_mapping or {}
+    options = {
+        f"custom_fields.{f['key']}": f.get("options", [])
+        for f in batch.listing_type.fields or []
+        if f.get("type") == "multi_select"
+    }
+    out = []
+    for n, cells in enumerate(importing.preview_rows(batch), start=1):
+        try:
+            payload = csv_import.build_payload(
+                cells, headers, mapping,
+                listing_type=batch.listing_type,
+                phone_country=batch.phone_default_country,
+                separators=batch.column_separators,
+            )
+        except SchemaError as exc:
+            out.append({"n": n, "error": "; ".join(exc.errors), "items": []})
+            continue
+        items = []
+        phone = (payload.get("contact") or {}).get("phone_e164")
+        if phone:
+            items.append(("Phone", phone))
+        if "categories" in payload:
+            items.append(("Categories", " · ".join(payload["categories"])))
+        errors = []
+        for key, values in (payload.get("custom_fields") or {}).items():
+            if isinstance(values, list):
+                items.append((key, " · ".join(values)))
+                bad = [v for v in values if v not in options.get(f"custom_fields.{key}", [])]
+                if bad:
+                    errors.append(f"{key}: not an option: {', '.join(bad)}")
+        out.append({"n": n, "items": items, "error": "; ".join(errors)})
+    return out
+
+
 @_EDITOR
 def import_detail(request, public_id):
     batch = _get_batch(request, public_id)
@@ -791,12 +831,15 @@ def import_detail(request, public_id):
         if can_map and not mapping
         else {}
     )
+    multi_targets = csv_import.multi_value_targets(batch.listing_type)
+    separators = batch.column_separators or {}
     rows = [
         {
             "index": i,
             "header": h,
             "selected": mapping.get(h) or suggestions.get(h, ""),
             "suggested": h in suggestions,
+            "separator": separators.get(h, csv_import.DEFAULT_SEPARATOR),
         }
         for i, h in enumerate(headers)
     ]
@@ -819,6 +862,9 @@ def import_detail(request, public_id):
             "batch": batch,
             "rows": rows,
             "targets": csv_import.allowed_targets(batch.listing_type),
+            "multi_targets": sorted(multi_targets),
+            "phone_countries": sorted(normalize.PHONE_COUNTRIES),
+            "preview": _import_preview(batch) if can_map and mapping else [],
             "can_map": can_map,
             "can_rollback": can_rollback,
             "rollback_window_passed": window_passed,
@@ -855,11 +901,28 @@ def import_mapping(request, public_id):
                 headers=batch.detected_headers or [],
                 listing_type=batch.listing_type,
             )
+            separators = csv_import.clean_separators(
+                {
+                    header: request.POST.get(f"sep__{i}", "")
+                    for i, header in enumerate(batch.detected_headers or [])
+                },
+                cleaned,
+                batch.listing_type,
+            )
+            phone_country = csv_import.validate_phone_country(
+                request.POST.get("phone_country", "")
+            )
         except csv_import.MappingError as exc:
             messages.error(request, str(exc))
         else:
             batch.column_mapping = cleaned
-            batch.save(update_fields=["column_mapping"])
+            batch.column_separators = separators
+            batch.phone_default_country = phone_country
+            batch.save(
+                update_fields=[
+                    "column_mapping", "column_separators", "phone_default_country",
+                ]
+            )
             messages.success(request, "Column mapping saved.")
     return redirect("directory_admin:import-detail", public_id=public_id)
 

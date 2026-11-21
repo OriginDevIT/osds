@@ -10,6 +10,9 @@ from __future__ import annotations
 import csv
 import io
 
+from directory import normalize
+from directory.field_schema import SchemaError
+
 # An uploaded file larger than this is refused by the upload form.
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
@@ -26,8 +29,14 @@ _HEADER_SNIFF_BYTES = 64 * 1024
 # one import can hold the worker off the drain.
 ROWS_PER_PASS = 50
 
-# A single "categories" column carries several slugs, e.g. "plumbers|emergency".
-CATEGORY_SPLIT = "|"
+# A multi-value column (``categories`` or a ``multi_select`` custom field)
+# carries several values in one cell, e.g. "plumbers|emergency". This is the
+# separator used unless the operator picks another for that column. It is
+# never auto-detected.
+DEFAULT_SEPARATOR = "|"
+
+# Longest separator the mapping form accepts.
+MAX_SEPARATOR_LENGTH = 5
 
 # The upsert targets a CSV column may be mapped to. Every entry is a key path
 # that ``directory.services._apply_payload`` / ``_apply_upsert`` actually reads
@@ -171,27 +180,96 @@ def validate_mapping(
     return cleaned
 
 
-def build_payload(cells, headers: "list[str]", column_mapping: dict) -> dict:
+def multi_value_targets(listing_type) -> "set[str]":
+    """Targets whose cell holds several values: ``categories`` and every
+    ``multi_select`` custom field on the type."""
+    targets = {"categories"}
+    for f in getattr(listing_type, "fields", None) or []:
+        if f.get("type") == "multi_select":
+            targets.add(f"custom_fields.{f['key']}")
+    return targets
+
+
+def clean_separators(submitted: dict, mapping: dict, listing_type=None) -> dict:
+    """Keep ``{csv header: separator}`` only for columns mapped to a
+    multi-value target and set to something other than the default. A column
+    mapped elsewhere, or left blank, is dropped; a separator longer than
+    ``MAX_SEPARATOR_LENGTH`` raises ``MappingError``."""
+    multi = (
+        multi_value_targets(listing_type)
+        if listing_type is not None
+        else {"categories"} | {t for t in mapping.values() if t.startswith("custom_fields.")}
+    )
+    cleaned: "dict[str, str]" = {}
+    for header, sep in submitted.items():
+        if mapping.get(header) not in multi or not sep or sep == DEFAULT_SEPARATOR:
+            continue
+        if len(sep) > MAX_SEPARATOR_LENGTH:
+            raise MappingError(
+                f"separator for {header!r} must be at most "
+                f"{MAX_SEPARATOR_LENGTH} characters"
+            )
+        cleaned[header] = sep
+    return cleaned
+
+
+def validate_phone_country(code: str) -> str:
+    """Return the upper-cased default country, ``""`` for none, or raise
+    ``MappingError`` for a country with no calling-code rule."""
+    code = (code or "").strip().upper()
+    if code and code not in normalize.PHONE_COUNTRIES:
+        raise MappingError(f"{code!r} is not a supported phone country")
+    return code
+
+
+def split_cell(value: str, separator: str = DEFAULT_SEPARATOR) -> "list[str]":
+    """Split a multi-value cell into trimmed parts, empty parts dropped."""
+    return [p.strip() for p in value.split(separator or DEFAULT_SEPARATOR) if p.strip()]
+
+
+def build_payload(
+    cells,
+    headers: "list[str]",
+    column_mapping: dict,
+    *,
+    listing_type=None,
+    phone_country: str = "",
+    separators: "dict | None" = None,
+) -> dict:
     """Turn one CSV data row into a ``listing.upsert`` payload.
 
     Cells are matched to headers by position. Dotted targets (``location.*``,
-    ``contact.*``, ``custom_fields.*``) nest; ``categories`` splits on
-    ``CATEGORY_SPLIT``. An unmapped column and an empty cell are both left out
-    -- an omitted field is untouched on update (spec §7.1), which is what an
-    absent CSV value should mean.
+    ``contact.*``, ``custom_fields.*``) nest. ``categories`` and
+    ``multi_select`` custom fields split into a list on the column's separator
+    (``separators``, default ``DEFAULT_SEPARATOR``). A phone without a leading
+    ``+`` is converted with ``phone_country``; with none chosen it is a
+    ``SchemaError``, as is an unparseable number. An unmapped column and an
+    empty cell are both left out -- an omitted field is untouched on update
+    (spec §7.1), which is what an absent CSV value should mean.
     """
+    separators = separators or {}
+    multi = multi_value_targets(listing_type)
     row = dict(zip(headers, cells))
     payload: dict = {}
     for header, target in column_mapping.items():
         value = (row.get(header) or "").strip()
         if not value:
             continue
-        if target == "categories":
-            payload["categories"] = [
-                part.strip()
-                for part in value.split(CATEGORY_SPLIT)
-                if part.strip()
-            ]
+        if target in multi:
+            parts = split_cell(value, separators.get(header, DEFAULT_SEPARATOR))
+            if not parts:
+                continue
+            if target == "categories":
+                payload["categories"] = parts
+            else:
+                payload.setdefault("custom_fields", {})[target.split(".", 1)[1]] = parts
+        elif target == "contact.phone_e164":
+            if not value.startswith("+"):
+                try:
+                    value = normalize.national_phone_to_e164(value, phone_country)
+                except ValueError as exc:
+                    raise SchemaError([str(exc)]) from exc
+            payload.setdefault("contact", {})["phone_e164"] = value
         elif "." in target:
             head, leaf = target.split(".", 1)
             payload.setdefault(head, {})[leaf] = value
