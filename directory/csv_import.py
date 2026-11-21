@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import csv
 import io
+import re
+
+from directory.field_schema import CHOICE_TYPES, FIELD_TYPES, validate_type_schema
 
 # An uploaded file larger than this is refused by the upload form.
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -198,3 +201,76 @@ def build_payload(cells, headers: "list[str]", column_mapping: dict) -> dict:
         else:
             payload[target] = value
     return payload
+
+
+# --- inferring a custom-field schema from the file --------------------------
+#
+# When the upload creates its listing type, every column that maps to no fixed
+# target is proposed as one custom field. Nothing about a column's contents is
+# sampled: the type is ``text`` and the flags are off until the operator says
+# otherwise. ``select`` and ``multi_select`` are not offered -- their option
+# list would be a guess; they stay available in the schema builder.
+PROPOSAL_TYPES = sorted(FIELD_TYPES - CHOICE_TYPES)
+
+
+def derive_key(text: str) -> str:
+    """Lowercase ``text`` and turn every run of other characters into one
+    underscore. The result may still be an invalid key (empty, leading digit);
+    that is reported, never repaired."""
+    return re.sub(r"[^a-z0-9]+", "_", text.casefold()).strip("_")
+
+
+def propose_schema(headers: "list[str]") -> "list[dict]":
+    """One proposed ``text`` field per column that suggests no fixed target."""
+    mapped = suggest_mapping(headers, None)
+    # id and slug are never auto-suggested, but a column named for one is
+    # still a column for that fixed target, not a custom field.
+    match_names = {
+        n.casefold()
+        for t, label in IMPORT_TARGETS
+        if t in _NEVER_SUGGESTED
+        for n in (t, label)
+    }
+    return [
+        {
+            "index": i,
+            "header": h,
+            "key": derive_key(h),
+            "label": h,
+            "type": "text",
+        }
+        for i, h in enumerate(headers)
+        if h not in mapped and h.casefold() not in match_names
+    ]
+
+
+def _descriptor(row: dict) -> dict:
+    return {
+        "key": row["key"],
+        "label": row["label"],
+        "type": row["type"],
+        "required": False,
+        "public": False,
+        "searchable": False,
+    }
+
+
+def check_proposal(rows: "list[dict]") -> "list[list[str]]":
+    """Per-row error lists for the proposal, in row order. Uses the same
+    schema validator ``create_listing_type`` does, so a row that passes here
+    cannot be rejected for its key, label or type at creation."""
+    errors: "list[list[str]]" = []
+    seen: "set[str]" = set()
+    for row in rows:
+        found = list(validate_type_schema([_descriptor(row)]))
+        if row["type"] not in PROPOSAL_TYPES and row["type"] in FIELD_TYPES:
+            found.append("choose a type other than select / multi_select here")
+        if row["key"] in seen:
+            found.append(f"duplicate key '{row['key']}'")
+        seen.add(row["key"])
+        errors.append(found)
+    return errors
+
+
+def schema_from_proposal(rows: "list[dict]") -> "list[dict]":
+    return [_descriptor(r) for r in rows]

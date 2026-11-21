@@ -76,19 +76,42 @@ class MediaUploadForm(forms.Form):
 
 
 class ImportUploadForm(forms.Form):
-    """The CSV upload: a listing type and the file. The header row is read in
-    the view; this form only bounds the size and scopes the type choice to the
-    tenant."""
+    """The CSV upload: an existing listing type or a new one, and the file.
 
-    listing_type = forms.ModelChoiceField(
-        queryset=ListingType.all_tenants.none(), empty_label=None
+    The header row is read in the view; this form bounds the size, scopes the
+    type choice to the tenant and validates the new type's labels, key and
+    path segment. ``new_key`` and ``new_path_segment`` are never adjusted after
+    a collision -- a taken value is an error for the operator to fix."""
+
+    TYPE_MODES = [("existing", "Use an existing type"), ("new", "Create a new listing type from this file")]
+
+    type_mode = forms.ChoiceField(
+        choices=TYPE_MODES, required=False, widget=forms.RadioSelect
     )
+    listing_type = forms.ModelChoiceField(
+        queryset=ListingType.all_tenants.none(), required=False, empty_label=None
+    )
+    new_label_singular = forms.CharField(max_length=100, required=False, label="Singular label")
+    new_label_plural = forms.CharField(max_length=100, required=False, label="Plural label")
+    new_key = forms.CharField(
+        max_length=50, required=False, label="Key",
+        help_text="Internal identifier. Cannot be changed later.",
+    )
+    new_path_segment = forms.SlugField(
+        max_length=50, required=False, label="URL segment",
+        help_text="Letters, numbers, hyphens and underscores; no leading slash.",
+    )
+    new_claimable = forms.BooleanField(required=False, initial=True, label="Claimable")
     file = forms.FileField(label="CSV file")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Tenant in ambient scope (this is a request); ``objects`` is scoped.
         self.fields["listing_type"].queryset = ListingType.objects.order_by("key")
+
+    @property
+    def creates_type(self) -> bool:
+        return self.cleaned_data.get("type_mode") == "new"
 
     def clean_file(self):
         upload = self.cleaned_data["file"]
@@ -97,6 +120,35 @@ class ImportUploadForm(forms.Form):
                 f"File is {upload.size} bytes; the limit is {MAX_UPLOAD_BYTES}."
             )
         return upload
+
+    def clean_new_key(self):
+        # Same rule as the listing-type form: spaces and hyphens become
+        # underscores, case is never folded.
+        key = re.sub(r"[\s-]+", "_", self.cleaned_data["new_key"].strip())
+        if key and not _KEY_RE.match(key):
+            raise forms.ValidationError(_KEY_ERROR[0].upper() + _KEY_ERROR[1:] + ".")
+        return key
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("type_mode") != "new":
+            cleaned["type_mode"] = "existing"
+            if not cleaned.get("listing_type") and not self.has_error("listing_type"):
+                self.add_error("listing_type", "This field is required.")
+            return cleaned
+        for name in ("new_label_singular", "new_label_plural", "new_key"):
+            if not cleaned.get(name) and not self.has_error(name):
+                self.add_error(name, "This field is required.")
+        if not cleaned.get("new_path_segment") and not self.has_error("new_path_segment"):
+            cleaned["new_path_segment"] = cleaned.get("new_key", "")
+        key, segment = cleaned.get("new_key"), cleaned.get("new_path_segment")
+        if key and not self.has_error("new_key") and ListingType.objects.filter(key=key).exists():
+            self.add_error("new_key", f"A listing type with key '{key}' already exists.")
+        if segment and not self.has_error("new_path_segment") and ListingType.objects.filter(path_segment=segment).exists():
+            self.add_error(
+                "new_path_segment", f"The URL segment '{segment}' is already in use."
+            )
+        return cleaned
 
 
 class CategoryForm(forms.Form):
