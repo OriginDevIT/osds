@@ -44,12 +44,13 @@ Everything else is a later release.
 - Categories per type, listing CRUD, publish and unpublish
 - Public site: home, category browse, listing detail, search
 - Postgres full-text plus trigram search; `lat`/`lon` radius search
-- Media upload with per-tenant storage — local disk by default; S3 is implemented
-  (django-storages over boto3); Azure and GCP are not yet implemented. All
-  go through a backend registry (`directory/storage.py`) with stored-key
+- Media upload with per-tenant storage — local disk by default; S3 and Azure are
+  implemented (django-storages over boto3 and azure-storage-blob); GCP is not yet
+  implemented. All go through a backend registry (`directory/storage.py`) with stored-key
   credentials. The wizard and the Storage settings page probe before saving and
   refuse a failing config; the backend cannot be switched once media exists.
-  Each cloud SDK is a human-gated dependency added with its backend PR (#150)
+  Each cloud SDK is a human-gated dependency added with its backend PR (#150);
+  the Azure backend is implemented, with `azure-storage-blob` pinned
 - CSV import, worker-processed, with batch rollback
 - Claims: manual review and email OTP, consent capture, anti-hijack
   notification, dispute queue
@@ -118,8 +119,8 @@ closing with the sitemap index and `robots.txt`.
 **Status: complete.** Listing types and categories #124; listing CRUD through
 the service layer #126; search vectors and reindex plumbing #134; the public
 site #135; media upload #152; sitemap index and `robots.txt` #160; closed in
-#161. Media defaults to local disk; S3 is implemented through the storage
-registry (#150). Azure and GCP are configurable but not yet implemented.
+#161. Media defaults to local disk; S3 and Azure are implemented through the
+storage registry (#150). GCP is configurable but not yet implemented.
 
 ### 3 — Worker, population and claims
 
@@ -210,9 +211,9 @@ Planned, specified, and designed not to be designed out (see "Out, and
 planned" above). Nothing here is in the alpha.
 
 - **Object storage, remaining.** The registry, probe, settings page and the S3
-  backend (with its `boto3` pin and an opt-in `minio` compose service) exist.
-  Azure and GCP are not yet implemented; each backend's SDK pin lands in its
-  own PR (#150). The backend-copy/migration tool is a
+  and Azure backends (with their `boto3` and `azure-storage-blob` pins and an
+  opt-in `minio` compose service) exist. GCP is not yet implemented; its SDK
+  pin lands in its own PR (#150). The backend-copy/migration tool is a
   separate post-alpha issue; until then a switch is blocked once media exists.
 - **Featured slots** — the first post-launch addition. A tier with `uses_slot`
   is refused today.

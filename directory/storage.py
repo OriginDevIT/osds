@@ -167,10 +167,49 @@ def _s3(cfg: dict, secrets: dict) -> Storage:
     )
 
 
+_ONE_LEVEL: "dict[type, type]" = {}
+
+
+def _one_level(base: type) -> type:
+    """``base`` with ``listdir`` returning one directory level under the
+    tenant prefix, as names relative to the listed directory.
+
+    django-storages' Azure ``listdir`` returns every blob below the path as a
+    full container-relative name and, for an empty path, lists the whole
+    container -- other tenants' blobs included."""
+    cls = _ONE_LEVEL.get(base)
+    if cls is None:
+
+        class OneLevel(base):  # type: ignore[valid-type, misc]
+            def listdir(self, path=""):
+                root = self._get_valid_path(path) if path.strip("./") else self.location.strip("/")
+                prefix = f"{root}/" if root else ""
+                dirs: "list[str]" = []
+                files: "list[str]" = []
+                for blob in self.client.list_blobs(name_starts_with=prefix, timeout=self.timeout):
+                    rel = blob.name[len(prefix):]
+                    head, sep, _ = rel.partition("/")
+                    if not head:
+                        continue
+                    if sep:
+                        if head not in dirs:
+                            dirs.append(head)
+                    else:
+                        files.append(head)
+                return dirs, files
+
+        OneLevel.__name__ = base.__name__
+        OneLevel.__qualname__ = base.__qualname__
+        _ONE_LEVEL[base] = cls = OneLevel
+    return cls
+
+
 def _azure(cfg: dict, secrets: dict) -> Storage:
     container, account = _require(cfg, "azure", "bucket", "account_name")
     (account_key,) = _require_secrets(secrets, "azure")
-    cls = _normalized(_import_class("storages.backends.azure_storage.AzureStorage", "azure"))
+    cls = _normalized(
+        _one_level(_import_class("storages.backends.azure_storage.AzureStorage", "azure"))
+    )
     cls._probe_before_read = True
     return cls(
         account_name=account,
