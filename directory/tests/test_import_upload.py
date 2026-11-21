@@ -486,11 +486,15 @@ class ImportMappingViewTests(_Setup, TestCase):
 
         b.column_mapping = {"Name": "name", "Slug": "slug"}
         b.save(update_fields=["column_mapping"])
-        self._client(self.editor).post(
-            self._url("import-run", public_id=b.public_id), HTTP_HOST=HOST
+        resp = self._client(self.editor).post(
+            self._url("import-run", public_id=b.public_id),
+            HTTP_HOST=HOST,
+            follow=True,
         )
         b.refresh_from_db()
         self.assertEqual(b.status, ImportBatch.Status.PENDING)
+        self.assertContains(resp, "Import queued")
+        self.assertNotContains(resp, "No worker")
 
     def test_pending_detail_does_not_claim_there_is_no_worker(self):
         b = self._batch()
