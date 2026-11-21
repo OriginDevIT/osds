@@ -65,8 +65,9 @@ logs `database unreachable after 30 attempts`, check `.env` first.
     docker compose up -d --build
 
 Four things run: `postgres`, `osds-app`, `osds-worker`, and the `osds-media`
-volume that is the default media store (local disk). S3-compatible, Azure and
-GCP object storage are optional per-tenant backends (see "Storage"). The app migrates the database as the Postgres owner,
+volume that is the default media store (local disk). S3-compatible object
+storage is an optional per-tenant backend (see "Storage"); Azure and GCP are
+not yet implemented. The app migrates the database as the Postgres owner,
 then serves as the least-privilege `osds_app` role; the worker starts after the
 app reports healthy.
 
@@ -314,14 +315,29 @@ is no stable upgrade promise between releases.
 
 - Switching a tenant's storage backend once it has media or imports is
   blocked: files live in the current backend and the copy/migration tool is a
-  post-alpha item. Choose the backend before uploading anything. The SDK
-  packages for the cloud backends (`boto3`, `azure-storage-blob`,
-  `google-cloud-storage`) are not in the default image; a tenant that selects
-  one without its SDK is shown a misconfiguration banner and the save is
-  refused by the probe.
+  post-alpha item. Choose the backend before uploading anything. The S3
+  SDK (`boto3`) is in the image. The Azure and GCP SDKs
+  (`azure-storage-blob`, `google-cloud-storage`) are not yet: those two
+  backends are not implemented, and a tenant that selects one is shown a
+  misconfiguration banner and the save is refused by the probe.
 - Featured slots, native reviews, phone OTP / postcard / Google Business Profile
   claim verification, AI agents, and Postgres row-level security.
 - Any data-source connector, now or later (CLAUDE.md invariant 4).
 
 See [mvp-plan.md](mvp-plan.md) for what shipped and what is deferred, and
 [decisions.md](decisions.md) for why.
+
+## Trying the S3 backend locally
+
+An optional `minio` service gives you an S3-compatible endpoint with no AWS
+account. It is behind a compose profile, so a plain `docker compose up` does not
+start it:
+
+    docker compose --profile minio up -d
+
+This starts MinIO and creates a private `osds-media` bucket. In the wizard's
+Storage step (or the Storage settings page) choose S3-compatible and enter:
+endpoint `http://minio:9000`, bucket `osds-media`, region `us-east-1`, and the
+MinIO credentials (`OSDS_MINIO_USER` / `OSDS_MINIO_PASSWORD` in `.env`, or the
+throwaway development defaults in `docker-compose.yml`). The ports bind to
+loopback only; set your own credentials before using this on a shared host.

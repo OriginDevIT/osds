@@ -118,6 +118,25 @@ class WizardSettingsTests(WizardBase):
             forbidden=["s3-SECRET-VALUE", "AKIAEXAMPLE", "my-bucket", "s3.example.test", "us-east-1"],
         )
 
+    def test_s3_step_with_the_real_factory_never_logs_bucket_or_credentials(self):
+        """The factory is not stubbed (only the network probe is), so the real
+        ``S3Storage`` is built from the submitted values on the save path."""
+        self.do_domain(self.client)
+        before = len(settings_rows(self.tenant))
+        with mock.patch("tenants.storage_forms.check_storage"):
+            r = self.client.post("/setup/storage/", {
+                "backend": "s3", "s3_bucket": "factory-bucket", "s3_region": "eu-west-2",
+                "s3_endpoint": "https://s3.factory.example.test",
+                "s3_access_key": "AKIAFACTORYKEY", "s3_secret_key": "factory-SECRET-VALUE",
+            })
+        self.assertEqual(r.status_code, 302)
+        assert_one_save(
+            self, self.tenant, self.operator, page="storage", since=before,
+            fields=["backend", "bucket", "region", "endpoint", "access_key", "secret_key"],
+            forbidden=["factory-SECRET-VALUE", "AKIAFACTORYKEY", "factory-bucket", "eu-west-2",
+                       "s3.factory.example.test"],
+        )
+
     def test_azure_and_gcp_steps_never_log_credentials(self):
         self.do_domain(self.client)
         info = json.dumps({"private_key": "PRIVKEY-VALUE", "client_email": "svc@proj.example.test"})

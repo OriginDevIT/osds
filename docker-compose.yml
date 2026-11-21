@@ -1,7 +1,10 @@
 # Four containers (decisions.md section 3): osds-app, osds-worker, postgres,
-# and object storage. At launch the last is the osds-media named volume --
-# storage is local disk only (#150), so a MinIO container would have nothing
-# to serve. Postgres and media are both replaceable through configuration.
+# and object storage. By default the last is the osds-media named volume
+# (local disk). A `minio` service (S3-compatible) is defined behind the `minio`
+# profile so a plain `docker compose up` still runs four containers; start it
+# with `docker compose --profile minio up -d` to exercise the S3 backend
+# without an AWS account (docs/install.md, "Trying the S3 backend locally").
+# Postgres and media are both replaceable through configuration.
 #
 # `docker compose up` needs no .env. Secrets are generated on first boot into
 # the osds-secrets volume; a .env file is optional overrides only.
@@ -80,8 +83,45 @@ services:
       osds-app:
         condition: service_healthy
 
+  # S3-compatible object storage for trying the S3 backend locally. Opt in with
+  # `--profile minio`. The default credentials are throwaway development
+  # values and the ports bind to loopback only; override them in .env for any
+  # shared host. In the wizard use endpoint http://minio:9000, bucket
+  # `osds-media`, any region (us-east-1), and these credentials.
+  minio:
+    profiles: ["minio"]
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${OSDS_MINIO_USER:-osds-minio-dev}
+      MINIO_ROOT_PASSWORD: ${OSDS_MINIO_PASSWORD:-osds-minio-dev-secret}
+    ports:
+      - "127.0.0.1:${OSDS_MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${OSDS_MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - osds-minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # One-shot: creates the private `osds-media` bucket, then exits.
+  minio-init:
+    profiles: ["minio"]
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MC_HOST_local: http://${OSDS_MINIO_USER:-osds-minio-dev}:${OSDS_MINIO_PASSWORD:-osds-minio-dev-secret}@minio:9000
+    entrypoint: ["mc", "mb", "--ignore-existing", "local/osds-media"]
+    restart: "no"
+
 volumes:
   osds-pgdata:
   osds-media:
+  osds-minio:
   # Holds the generated secrets. Losing it makes stored credentials unrecoverable.
   osds-secrets:
