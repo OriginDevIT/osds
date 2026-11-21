@@ -9,8 +9,11 @@ parallel arrays.
 
 from __future__ import annotations
 
+import json
+
 from django.contrib import messages
 from django.core.files.base import ContentFile
+from django.db import IntegrityError
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.crypto import get_random_string
@@ -39,6 +42,7 @@ from directory.models import (
     Listing,
     ListingType,
     MediaAsset,
+    PathRedirect,
 )
 from directory.storage import StorageConfigError, get_tenant_storage
 from tenants.models import StaffMembership
@@ -733,12 +737,78 @@ def _store_upload(request, *, upload, raw, listing_type, headers, delimiter, enc
     return batch
 
 
+def _upload_data(request):
+    """POST data for the upload form. Before confirmation a blank key (and
+    then a blank segment) is filled with the proposed default so the operator
+    sees it and confirms it; at confirmation nothing is filled in."""
+    if request.method != "POST":
+        return None
+    data = request.POST.copy()
+    if data.get("type_mode") == "new" and data.get("action") != "confirm":
+        if not data.get("new_key", "").strip():
+            data["new_key"] = csv_import.derive_key(data.get("new_label_singular", ""))
+        if not data.get("new_path_segment", "").strip():
+            data["new_path_segment"] = data["new_key"]
+    return data
+
+
+def _posted_proposal(post, headers):
+    """The operator's edited proposal rows (included ones only, plus every row
+    for redisplay) from the confirmation POST."""
+    rows = []
+    for raw in post.getlist("col"):
+        if not raw.isdigit() or int(raw) >= len(headers):
+            continue
+        i = int(raw)
+        ftype = post.get(f"type__{i}", "text")
+        rows.append(
+            {
+                "index": i,
+                "header": headers[i],
+                "key": post.get(f"key__{i}", "").strip(),
+                "label": post.get(f"label__{i}", "").strip(),
+                "type": ftype,
+                "include": post.get(f"inc__{i}") == "1",
+            }
+        )
+    return rows
+
+
+def _create_type_and_store(request, form, fields, **upload_kwargs):
+    """Create the new type through the service, then the batch against it.
+
+    ``create_listing_type`` and ``_store_upload`` each need autocommit, so the
+    pair cannot share a transaction. Storage is resolved first so the common
+    failure leaves nothing behind; a failure after the type exists removes it
+    (and the redirect that creating it recorded) again."""
+    get_tenant_storage(request.tenant)  # StorageConfigError before any write
+    cd = form.cleaned_data
+    had_redirect = PathRedirect.objects.filter(old_prefix="").exists()
+    listing_type = services.create_listing_type(
+        request.tenant,
+        key=cd["new_key"],
+        label_singular=cd["new_label_singular"],
+        label_plural=cd["new_label_plural"],
+        path_segment=cd["new_path_segment"],
+        claimable=cd["new_claimable"],
+        fields=fields,
+        actor=request.user,
+    )
+    try:
+        return _store_upload(request, listing_type=listing_type, **upload_kwargs)
+    except BaseException:
+        services.delete_listing_type(listing_type, actor=request.user)
+        if not had_redirect:
+            PathRedirect.objects.filter(old_prefix="").delete()
+        raise
+
+
 @_EDITOR
 def import_create(request):
-    form = ImportUploadForm(request.POST or None, request.FILES or None)
+    form = ImportUploadForm(_upload_data(request), request.FILES or None)
+    context = {"form": form}
     if request.method == "POST" and form.is_valid():
         upload = form.cleaned_data["file"]
-        listing_type = form.cleaned_data["listing_type"]
         raw = upload.read()
         headers, delimiter, encoding = csv_import.read_header(raw)
         if not headers:
@@ -749,13 +819,19 @@ def import_create(request):
                 f"{len(headers)} columns detected; the limit is "
                 f"{csv_import.HEADER_LIMIT}.",
             )
+        elif form.creates_type:
+            return _import_new_type(
+                request, form, context,
+                upload=upload, raw=raw, headers=headers,
+                delimiter=delimiter, encoding=encoding,
+            )
         else:
             try:
                 batch = _store_upload(
                     request,
                     upload=upload,
                     raw=raw,
-                    listing_type=listing_type,
+                    listing_type=form.cleaned_data["listing_type"],
                     headers=headers,
                     delimiter=delimiter,
                     encoding=encoding,
@@ -769,7 +845,69 @@ def import_create(request):
                 return redirect(
                     "directory_admin:import-detail", public_id=batch.public_id
                 )
-    return render(request, "directory/admin/import_form.html", {"form": form})
+    return render(request, "directory/admin/import_form.html", context)
+
+
+def _import_new_type(request, form, context, *, upload, raw, headers, delimiter, encoding):
+    """Two steps. Without ``action=confirm`` the file's header is read and the
+    proposed schema is shown; nothing is written. On confirmation the edited
+    proposal is validated and, only if clean, the type and the batch are
+    created."""
+    confirming = request.POST.get("action") == "confirm"
+    context["proposal_headers"] = json.dumps(headers)
+    if not confirming:
+        context["proposal"] = [
+            {**r, "include": True, "errors": []}
+            for r in csv_import.propose_schema(headers)
+        ]
+        context["proposal_types"] = csv_import.PROPOSAL_TYPES
+        return render(request, "directory/admin/import_form.html", context)
+
+    # The file input is empty after the preview round-trip, so the operator
+    # chooses it again; the proposal belongs to this exact header row.
+    if request.POST.get("proposal_headers") != json.dumps(headers):
+        form.add_error(
+            "file",
+            "This file's columns differ from the file that was previewed. "
+            "Choose the same file again, or preview this one first.",
+        )
+        return render(request, "directory/admin/import_form.html", context)
+
+    posted = _posted_proposal(request.POST, headers)
+    included = [r for r in posted if r["include"]]
+    row_errors = csv_import.check_proposal(included)
+    by_index = {r["index"]: e for r, e in zip(included, row_errors)}
+    context["proposal"] = [
+        {**r, "errors": by_index.get(r["index"], [])} for r in posted
+    ]
+    context["proposal_types"] = csv_import.PROPOSAL_TYPES
+    if any(row_errors):
+        messages.error(request, "Fix the highlighted fields; nothing was created.")
+        return render(request, "directory/admin/import_form.html", context)
+
+    try:
+        batch = _create_type_and_store(
+            request,
+            form,
+            csv_import.schema_from_proposal(included),
+            upload=upload,
+            raw=raw,
+            headers=headers,
+            delimiter=delimiter,
+            encoding=encoding,
+        )
+    except StorageConfigError as exc:
+        form.add_error(None, str(exc))
+    except (SchemaError, ValueError, IntegrityError) as exc:
+        form.add_error(None, str(exc))
+    else:
+        messages.success(
+            request,
+            "Created the listing type and uploaded the file. "
+            "Map the columns, then run the import.",
+        )
+        return redirect("directory_admin:import-detail", public_id=batch.public_id)
+    return render(request, "directory/admin/import_form.html", context)
 
 
 def _get_batch(request, public_id) -> ImportBatch:
