@@ -69,6 +69,17 @@
   <p>Default country for phone numbers: {{ batch.phone_default_country|default:"none" }}</p>
 {% endif %}
 {% if can_map %}
+  <p>
+    <label>
+      <input type="checkbox" name="generate_slug"{% if batch.generate_slug %} checked{% endif %}>
+      {{ generate_slug_label }}
+    </label>
+  </p>
+  <p class="muted">
+    Offered when no column is mapped to Slug. CSV import creates listings; to
+    change existing ones, edit them in admin, or map the ID or an explicit Slug
+    column. Re-importing the same file with this option errors on every row.
+  </p>
   <button type="submit">Save mapping</button>
 </form>
 <form method="post" action="{% url 'directory_admin:import-run' public_id=batch.public_id %}">
@@ -76,7 +87,7 @@
   <button type="submit"{% if not batch.column_mapping %} disabled{% endif %}>Run import</button>
 </form>
 {% else %}
-  <p class="muted">Mapping is locked once the import is queued.</p>
+  <p class="muted">Mapping is locked once the import is queued.{% if batch.generate_slug %} Slugs are generated from names; these rows create new listings only.{% endif %}</p>
 {% endif %}
 
 {% if preview %}

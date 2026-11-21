@@ -17,7 +17,10 @@ from django.utils import timezone
 
 from audit.models import CommandLog, OutboxEvent
 from directory.importing import ImportStats, import_once
-from directory.models import Category, ImportBatch, Listing, ListingType
+from directory.models import (
+    Category, ImportBatch, ImportBatchListing, Listing, ListingType,
+)
+from directory.services import RESERVED_SLUGS
 from directory.storage import get_tenant_storage
 from directory.suppression import fingerprint
 from directory.models import SuppressionKey
@@ -53,7 +56,8 @@ class _Base(TransactionTestCase):
         self.op = Operator.objects.create_user(email="e@acme.test", password="x")
 
     def _batch(self, body: bytes, *, mapping, started_by=None,
-               delimiter=",", encoding="utf-8-sig", headers=None):
+               delimiter=",", encoding="utf-8-sig", headers=None,
+               generate_slug=False):
         headers = headers if headers is not None else \
             body.decode(encoding).splitlines()[0].split(delimiter)
         key = get_tenant_storage(self.tenant).save(
@@ -65,6 +69,7 @@ class _Base(TransactionTestCase):
             original_filename="in.csv", detected_headers=headers,
             delimiter=delimiter, encoding=encoding, has_header=True,
             column_mapping=mapping, started_by=started_by,
+            generate_slug=generate_slug,
         )
 
     def _run(self, limit=50):
@@ -325,3 +330,101 @@ class ResumeTests(_Base):
             batch.notes,
             [{"row": 1, "note": "reprocessed after worker restart"}],
         )
+
+
+GEN = {"name": "name", "city": "location.locality"}
+
+
+def _provenance_rows(batch):
+    return ImportBatchListing.all_tenants.filter(batch=batch).count()
+
+
+class GeneratedSlugTests(_Base):
+    def _gen(self, body):
+        return self._batch(body, mapping=GEN, generate_slug=True)
+
+    def test_names_without_slug_column_create_listings_with_derived_slugs(self):
+        batch = self._gen(b"name,city\nAcme Plumbing,Chicago\nBeta & Co.,Peoria\n")
+        self._run()
+        batch.refresh_from_db()
+        self.assertEqual(batch.status, ImportBatch.Status.COMPLETED)
+        self.assertEqual(batch.created_count, 2)
+        self.assertEqual(batch.error_count, 0)
+        self.assertEqual(set(self._listings()), {"acme-plumbing", "beta-co"})
+
+    def test_collision_with_existing_listing_is_an_error_and_never_an_update(self):
+        existing = Listing.all_tenants.create(
+            tenant=self.tenant, listing_type=self.lt, slug="acme", name="Old Name",
+        )
+        batch = self._gen(b"name,city\nAcme,Chicago\n")
+        self._run()
+        batch.refresh_from_db()
+        existing.refresh_from_db()
+        self.assertEqual(existing.name, "Old Name")
+        self.assertEqual(existing.locality, "")
+        self.assertEqual(batch.created_count, 0)
+        self.assertEqual(batch.updated_count, 0)
+        self.assertEqual(batch.error_count, 1)
+        self.assertEqual(_provenance_rows(batch), 0)
+        err = batch.errors[0]
+        self.assertEqual(err["row"], 1)
+        msg = " ".join(err["errors"])
+        self.assertIn("'acme'", msg)
+        self.assertIn(existing.public_id, msg)
+        self.assertIn("edit that listing in admin", msg)
+
+    def test_collision_inside_the_file_first_creates_second_errors(self):
+        batch = self._gen(b"name,city\nAcme,A\nBeta,B\nacme!,C\n")
+        self._run()
+        batch.refresh_from_db()
+        self.assertEqual(batch.created_count, 2)
+        self.assertEqual(batch.error_count, 1)
+        self.assertEqual(batch.errors[0]["row"], 3)
+        self.assertIn("'acme'", " ".join(batch.errors[0]["errors"]))
+        self.assertEqual(set(self._listings()), {"acme", "beta"})  # no suffix
+        self.assertEqual(self._listings()["acme"].locality, "A")
+
+    def test_empty_derived_slug_is_a_row_error(self):
+        batch = self._gen(b"name,city\n!!!,A\nOk,B\n")
+        self._run()
+        batch.refresh_from_db()
+        self.assertEqual(batch.created_count, 1)
+        self.assertEqual(batch.error_count, 1)
+        self.assertEqual(batch.errors[0]["row"], 1)
+        self.assertEqual(set(self._listings()), {"ok"})
+
+    def test_reserved_derived_slug_is_a_row_error(self):
+        reserved = "Admin"  # derives "admin"; _adapters etc. cannot be derived
+        self.assertIn("admin", RESERVED_SLUGS)
+        batch = self._gen(f"name,city\n{reserved},A\n".encode())
+        self._run()
+        batch.refresh_from_db()
+        self.assertEqual(batch.created_count, 0)
+        self.assertEqual(batch.error_count, 1)
+        self.assertEqual(self._listings(), {})
+
+    def test_reimporting_the_same_file_errors_every_row(self):
+        body = b"name,city\nAcme,A\nBeta,B\n"
+        self._gen(body)
+        self._run()
+        second = self._gen(body)
+        self._run()
+        second.refresh_from_db()
+        self.assertEqual(second.created_count, 0)
+        self.assertEqual(second.updated_count, 0)
+        self.assertEqual(second.error_count, 2)
+        self.assertEqual(_provenance_rows(second), 0)
+
+    def test_explicit_slug_column_still_matches_and_updates(self):
+        Listing.all_tenants.create(
+            tenant=self.tenant, listing_type=self.lt, slug="acme", name="Old",
+        )
+        batch = self._batch(
+            b"name,slug\nNew Name,acme\n",
+            mapping={"name": "name", "slug": "slug"},
+        )
+        self._run()
+        batch.refresh_from_db()
+        self.assertEqual(batch.updated_count, 1)
+        self.assertEqual(batch.error_count, 0)
+        self.assertEqual(self._listings()["acme"].name, "New Name")

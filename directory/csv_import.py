@@ -41,6 +41,12 @@ DEFAULT_SEPARATOR = "|"
 # Longest separator the mapping form accepts.
 MAX_SEPARATOR_LENGTH = 5
 
+# Label for the mapping-step option that derives each row's slug from its name.
+GENERATE_SLUG_LABEL = (
+    "Generate slug from name \u2014 creates new listings only. A row whose "
+    "slug already exists is an error, never an update."
+)
+
 # The upsert targets a CSV column may be mapped to. Every entry is a key path
 # that ``directory.services._apply_payload`` / ``_apply_upsert`` actually reads
 # -- a drift test enforces it. ``tier``, ``status``, ``visibility`` and
@@ -151,13 +157,22 @@ def read_header(raw: bytes) -> "tuple[list[str], str, str]":
 
 
 def validate_mapping(
-    submitted: dict, *, headers: "list[str]", listing_type
+    submitted: dict,
+    *,
+    headers: "list[str]",
+    listing_type,
+    generate_slug: bool = False,
 ) -> dict:
     """Clean ``{csv header: target}``: drop ignored columns, reject an unknown
     column, an unknown target, or the same target on two columns. Require a
     match key (``id`` or ``slug``) and -- when not matching by ``id`` -- a
     ``name`` column, since ``slug`` alone cannot create (spec §7.1). Full
     per-row enforcement is the upsert's job in PR 2.
+
+    ``generate_slug`` stands in for the match key: the slug is derived from
+    ``name`` per row and the rows only create. It needs a ``name`` column and
+    excludes ``slug`` (an explicit slug wins) and ``id`` (a derived slug on an
+    id-matched row would rewrite the listing's slug).
     """
     allowed = {t for t, _ in allowed_targets(listing_type)}
     header_set = set(headers)
@@ -176,8 +191,24 @@ def validate_mapping(
         seen.add(target)
         cleaned[header] = target
 
+    if generate_slug:
+        if "slug" in seen:
+            raise MappingError(
+                "a column is mapped to the slug; turn off \"Generate slug from name\""
+            )
+        if "id" in seen:
+            raise MappingError(
+                "\"Generate slug from name\" only creates listings and cannot "
+                "be combined with a listing ID column"
+            )
+        if "name" not in seen:
+            raise MappingError("map a column to the name to generate slugs from")
+        return cleaned
     if not ({"id", "slug"} & seen):
-        raise MappingError("map a column to either the ID or the slug")
+        raise MappingError(
+            "map a column to either the ID or the slug, or choose "
+            "\"Generate slug from name\""
+        )
     if "id" not in seen and "name" not in seen:
         raise MappingError("map a column to the name (needed to create a listing)")
     return cleaned
