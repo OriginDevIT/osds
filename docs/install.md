@@ -65,8 +65,8 @@ logs `database unreachable after 30 attempts`, check `.env` first.
     docker compose up -d --build
 
 Four things run: `postgres`, `osds-app`, `osds-worker`, and the `osds-media`
-volume that stands in for object storage (local disk is the only storage
-backend in this release). The app migrates the database as the Postgres owner,
+volume that is the default media store (local disk). S3-compatible, Azure and
+GCP object storage are optional per-tenant backends (see "Storage"). The app migrates the database as the Postgres owner,
 then serves as the least-privilege `osds_app` role; the worker starts after the
 app reports healthy.
 
@@ -90,10 +90,14 @@ to `/setup/` until the wizard finishes. Paste the token, then:
    or multi-directory install.
 3. **Domain.** The hostname the directory is served on. See "DNS and domain
    verification".
-4. **Storage.** Choose **Local disk**. S3, Azure and GCP appear in the list but
-   are not implemented in this release; uploads on a tenant that selects one
-   fail with a deferred-feature error (decisions.md §4, "No object-storage
-   container at launch").
+4. **Storage.** Choose **Local disk**, or fill in the S3-compatible, Azure or
+   GCP fieldset. Saving a cloud backend first runs a probe (write, read, list
+   and delete a throwaway object with the credentials you entered); if the
+   probe fails nothing is saved and you retry with different settings or choose
+   Local disk. There is no automatic fallback. Credentials are stored encrypted
+   and never shown again. You can change them later under **Storage settings**
+   in the admin; `python manage.py check_storage [--tenant SLUG]` re-runs the
+   probe from the command line.
 5. **Mail (SMTP).** Enter your outgoing mail server, or **Skip** and configure
    it later. See "Mail".
 6. **Claim verification.** Which claim methods to enable. `manual` review is
@@ -308,7 +312,13 @@ is no stable upgrade promise between releases.
 
 ## What is not in the alpha
 
-- Object storage: S3, Azure and GCP are not implemented; media is local disk.
+- Switching a tenant's storage backend once it has media or imports is
+  blocked: files live in the current backend and the copy/migration tool is a
+  post-alpha item. Choose the backend before uploading anything. The SDK
+  packages for the cloud backends (`boto3`, `azure-storage-blob`,
+  `google-cloud-storage`) are not in the default image; a tenant that selects
+  one without its SDK is shown a misconfiguration banner and the save is
+  refused by the probe.
 - Featured slots, native reviews, phone OTP / postcard / Google Business Profile
   claim verification, AI agents, and Postgres row-level security.
 - Any data-source connector, now or later (CLAUDE.md invariant 4).
