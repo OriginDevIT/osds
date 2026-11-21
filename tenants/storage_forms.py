@@ -69,15 +69,22 @@ def _secret(label, *, textarea=False):
     return forms.CharField(label=label, required=False, widget=widget)
 
 
-def storage_backend_locked(tenant) -> bool:
-    """Whether media or import-batch rows exist, so the backend cannot change:
-    their stored keys live in the current backend and there is no copy tool yet."""
+def storage_backend_locked(tenant, target: "dict | None" = None) -> bool:
+    """Whether the backend cannot change: media or import-batch rows exist, so
+    their stored keys live in the current backend. The block is lifted for
+    ``target`` only when a completed storage copy to that exact target holds a
+    verified copy of every file the tenant has now (``directory.storage_copy``).
+    With no ``target`` it reports whether any change is blocked."""
     from directory.models import ImportBatch, MediaAsset
+    from directory.storage_copy import covered_by_verified_copy
 
-    return (
+    has_files = (
         MediaAsset.all_tenants.filter(tenant=tenant).exists()
         or ImportBatch.all_tenants.filter(tenant=tenant).exists()
     )
+    if not has_files:
+        return False
+    return not (target is not None and covered_by_verified_copy(tenant, target))
 
 
 class StorageForm(forms.Form):
@@ -147,11 +154,12 @@ class StorageForm(forms.Form):
         backend = cleaned.get("backend")
         if not backend:
             return cleaned
-        if self.tenant is not None and self.locked and backend != self.current_backend:
+        if self.tenant is not None and self.locked and self._backend_change_blocked(backend, cleaned):
             self.add_error(
                 "backend",
                 "The storage backend cannot be changed while media or imports "
-                "exist; their files live in the current backend.",
+                "exist, unless their files have been copied to the new backend "
+                "with the storage copy tool.",
             )
             return cleaned
         if backend == "local":
@@ -175,6 +183,16 @@ class StorageForm(forms.Form):
             self.add_error(None, f"{exc} Nothing was saved. Try again with "
                                  "different settings, or choose local disk storage.")
         return cleaned
+
+    def _backend_change_blocked(self, backend: str, cleaned: dict) -> bool:
+        """A change away from the current backend is blocked unless the target
+        the form describes has a verified copy of the tenant's files."""
+        if backend == self.current_backend:
+            return False
+        target = {"backend": backend}
+        for key, field in _CONFIG_FIELDS.get(backend, {}).items():
+            target[key] = (cleaned.get(field) or "").strip()
+        return storage_backend_locked(self.tenant, target)
 
     def _probe(self, backend: str) -> None:
         secrets = {}
