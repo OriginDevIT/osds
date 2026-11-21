@@ -19,7 +19,7 @@
   {% csrf_token %}
 {% endif %}
 <table>
-  <thead><tr><th>CSV column</th><th>Maps to</th></tr></thead>
+  <thead><tr><th>CSV column</th><th>Maps to</th><th>Separator</th></tr></thead>
   <tbody>
   {% for row in rows %}
     <tr>
@@ -37,12 +37,37 @@
           {{ row.selected|default:"— ignored —" }}
         {% endif %}
       </td>
+      <td>
+        {% if can_map %}
+          <input type="text" name="sep__{{ row.index }}" value="{{ row.separator }}" size="3" maxlength="5" aria-label="Separator for {{ row.header }}">
+        {% else %}
+          <code>{{ row.separator }}</code>
+        {% endif %}
+      </td>
     </tr>
   {% empty %}
-    <tr><td colspan="2" class="muted">No columns detected.</td></tr>
+    <tr><td colspan="3" class="muted">No columns detected.</td></tr>
   {% endfor %}
   </tbody>
 </table>
+<p class="muted">
+  The separator applies only to columns mapped to categories or to a
+  multi-select custom field. It is never detected; empty parts are dropped.
+</p>
+{% if can_map %}
+  <p>
+    <label>Default country for phone numbers
+      <select name="phone_country">
+        <option value="">— none: numbers without a leading + are row errors —</option>
+        {% for code in phone_countries %}
+          <option value="{{ code }}"{% if batch.phone_default_country == code %} selected{% endif %}>{{ code }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </p>
+{% else %}
+  <p>Default country for phone numbers: {{ batch.phone_default_country|default:"none" }}</p>
+{% endif %}
 {% if can_map %}
   <button type="submit">Save mapping</button>
 </form>
@@ -52,6 +77,25 @@
 </form>
 {% else %}
   <p class="muted">Mapping is locked once the import is queued.</p>
+{% endif %}
+
+{% if preview %}
+<h2>Preview (first {{ preview|length }} rows, saved mapping)</h2>
+<table>
+  <thead><tr><th>Row</th><th>After normalisation</th></tr></thead>
+  <tbody>
+  {% for r in preview %}
+    <tr>
+      <td>{{ r.n }}</td>
+      <td>
+        {% for label, value in r.items %}<div><strong>{{ label }}:</strong> {{ value }}</div>{% endfor %}
+        {% if r.error %}<div class="error">Would fail: {{ r.error }}</div>{% endif %}
+        {% if not r.items and not r.error %}<span class="muted">— nothing to normalise —</span>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
 {% endif %}
 
 <h2>Result</h2>

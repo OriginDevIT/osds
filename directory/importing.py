@@ -142,6 +142,33 @@ def _read_rows(batch) -> "list[list[str]]":
     return rows
 
 
+PREVIEW_ROWS = 5
+_PREVIEW_BYTES = 256 * 1024
+
+
+def preview_rows(batch, limit: int = PREVIEW_ROWS) -> "list[list[str]]":
+    """The first ``limit`` data rows, read from a bounded prefix of the stored
+    file so the mapping page never parses a whole upload. Returns ``[]`` when
+    the file cannot be read; the run itself reports that failure."""
+    try:
+        storage = get_tenant_storage(batch.tenant)
+        with storage.open(batch.stored_path, "rb") as fh:
+            raw = fh.read(_PREVIEW_BYTES + 1)
+    except (OSError, StorageConfigError):
+        return []
+    truncated = len(raw) > _PREVIEW_BYTES
+    text = raw[:_PREVIEW_BYTES].decode(batch.encoding, errors="replace")
+    try:
+        rows = list(csv.reader(io.StringIO(text), delimiter=batch.delimiter))
+    except csv.Error:
+        return []
+    if truncated and rows:
+        rows = rows[:-1]  # the last row may be cut mid-cell
+    if batch.has_header and rows:
+        rows = rows[1:]
+    return rows[:limit]
+
+
 # --- lifecycle events -----------------------------------------------------
 
 
@@ -243,7 +270,14 @@ def _process_row(batch, cells, headers, mapping, n) -> None:
     """One data row through ``upsert_listing``. Raises on any failure; the
     caller sorts expected (SchemaError / RejectedField / Suppressed) from
     fatal."""
-    payload = build_payload(cells, headers, mapping)
+    payload = build_payload(
+        cells,
+        headers,
+        mapping,
+        listing_type=batch.listing_type,
+        phone_country=batch.phone_default_country,
+        separators=batch.column_separators,
+    )
     result = upsert_listing(
         batch.tenant,
         listing_type=batch.listing_type,
