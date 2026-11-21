@@ -356,3 +356,41 @@ class ClaimLinkTests(_Base):
                 self.assertEqual(
                     self.get(f"/claim/{listing.public_id}/").status_code, 200
                 )
+
+
+class ExternalLinkTests(_Base):
+    """The listing website opens in a new tab with a safe, nofollow rel;
+    internal links carry neither ``target`` nor ``noopener``."""
+
+    SITE = "https://example.com/about"
+
+    def setUp(self):
+        super().setUp()
+        self.lt = self._type()
+        self.cat = self._cat(self.lt, "plumbers")
+        self.listing = self._listing(
+            self.lt, "acme-co", name="Acme Co", cats=[self.cat], website=self.SITE
+        )
+
+    def _anchors(self, html):
+        import re
+
+        return re.findall(r"<a\s[^>]*>", html)
+
+    def test_external_website_opens_in_new_tab_with_safe_rel(self):
+        html = self.get("/plumbers/acme-co").content.decode()
+        tags = [a for a in self._anchors(html) if f'href="{self.SITE}"' in a]
+        self.assertEqual(len(tags), 1)
+        self.assertIn('target="_blank"', tags[0])
+        self.assertIn('rel="noopener noreferrer nofollow"', tags[0])
+
+    def test_internal_links_have_no_target_or_noopener(self):
+        html = self.get("/plumbers/acme-co").content.decode()
+        internal = [
+            a for a in self._anchors(html)
+            if 'href="/' in a or 'href="?' in a
+        ]
+        self.assertTrue(internal)
+        for a in internal:
+            self.assertNotIn("target=", a)
+            self.assertNotIn("noopener", a)

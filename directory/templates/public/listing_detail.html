@@ -46,7 +46,7 @@
 <ul>
   {% if listing.phone_e164 %}<li>{{ listing.phone_e164 }}</li>{% endif %}
   {% if listing.email %}<li><a href="mailto:{{ listing.email }}">{{ listing.email }}</a></li>{% endif %}
-  {% if listing.website %}<li><a href="{{ listing.website }}" rel="nofollow">{{ listing.website }}</a></li>{% endif %}
+  {% if listing.website %}<li><a href="{{ listing.website }}" target="_blank" rel="noopener noreferrer nofollow">{{ listing.website }}</a></li>{% endif %}
 </ul>
 
 {% if public_fields %}
