@@ -316,10 +316,10 @@ is no stable upgrade promise between releases.
 - Switching a tenant's storage backend once it has media or imports is
   blocked: files live in the current backend and the copy/migration tool is a
   post-alpha item. Choose the backend before uploading anything. The S3
-  SDK (`boto3`) is in the image. The Azure and GCP SDKs
-  (`azure-storage-blob`, `google-cloud-storage`) are not yet: those two
-  backends are not implemented, and a tenant that selects one is shown a
-  misconfiguration banner and the save is refused by the probe.
+  SDK (`boto3`) and the Azure SDK (`azure-storage-blob`) are in the image. The
+  GCP SDK (`google-cloud-storage`) is not yet: that backend is not
+  implemented, and a tenant that selects it is shown a misconfiguration
+  banner and the save is refused by the probe.
 - Featured slots, native reviews, phone OTP / postcard / Google Business Profile
   claim verification, AI agents, and Postgres row-level security.
 - Any data-source connector, now or later (CLAUDE.md invariant 4).

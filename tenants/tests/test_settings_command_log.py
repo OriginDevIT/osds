@@ -137,6 +137,24 @@ class WizardSettingsTests(WizardBase):
                        "s3.factory.example.test"],
         )
 
+    def test_azure_step_with_the_real_factory_never_logs_account_container_or_key(self):
+        """The factory is not stubbed (only the network probe is), so the real
+        ``AzureStorage`` is built from the submitted values on the save path."""
+        self.do_domain(self.client)
+        before = len(settings_rows(self.tenant))
+        with mock.patch("tenants.storage_forms.check_storage"):
+            r = self.client.post("/setup/storage/", {
+                "backend": "azure", "azure_container": "factory-container",
+                "azure_account_name": "factoryacct", "azure_account_key": "factory-AZKEY-VALUE",
+            })
+        self.assertEqual(r.status_code, 302)
+        assert_one_save(
+            self, self.tenant, self.operator, page="storage", since=before,
+            fields=["backend", "bucket", "account_name", "account_key"],
+            forbidden=["factory-AZKEY-VALUE", "factory-container", "factoryacct",
+                       "blob.core.windows.net"],
+        )
+
     def test_azure_and_gcp_steps_never_log_credentials(self):
         self.do_domain(self.client)
         info = json.dumps({"private_key": "PRIVKEY-VALUE", "client_email": "svc@proj.example.test"})
