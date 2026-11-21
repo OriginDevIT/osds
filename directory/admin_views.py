@@ -668,10 +668,10 @@ def listing_media_remove(request, key, public_id, asset_public_id):
 
 # --- CSV import: upload and column mapping (spec §4.1.1, §7.1) -------------
 #
-# PR 1 only. No worker, no row processing, no import.* events. The upload
-# writes one ImportBatch row and a matching import.upload command-log pair
-# (§11.2); the file lands in tenant storage. "Run import" just moves the batch
-# to `pending` -- nothing consumes it yet.
+# The upload writes one ImportBatch row and a matching import.upload
+# command-log pair (§11.2); the file lands in tenant storage. "Run import"
+# moves the batch to `pending`; the worker picks it up from there
+# (directory/importing.py), so no row processing happens in a request.
 
 
 @_EDITOR
