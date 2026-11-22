@@ -124,7 +124,9 @@ class MultiValueImportTests(_Mixed):
     def test_semicolon_cell_with_pipe_separator_is_unknown_category(self):
         batch = self._go(b'name,slug,cat\nA,a1,a;b\n', {"cat": "categories"})
         self.assertEqual(batch.error_count, 1)
-        self.assertIn("a;b", str(batch.errors[0]))
+        # The cell is not split on ";", and the value resolves to the slug the
+        # categories step derives from it.
+        self.assertIn("unknown category: ab", str(batch.errors[0]))
 
     def test_multi_select_uses_its_own_separator(self):
         batch = self._go(b'name,slug,svc\nA,a1,a;b\n',
