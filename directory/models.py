@@ -23,6 +23,7 @@ from osds.ids import (
     listing_id,
     lt_id,
     media_id,
+    scp_id,
     usr_id,
 )
 
@@ -1111,3 +1112,92 @@ class SearchReindexJob(models.Model):
 
     def __str__(self) -> str:
         return f"{self.scope}:{self.scope_ref or '*'}"
+
+
+class StorageCopy(models.Model):
+    """One tenant's migration of stored files to a different storage backend.
+
+    The row holds the target's *non-secret* configuration only; credentials are
+    supplied on each run and never persisted here. ``in_progress`` until every
+    file is copied and verified and the tenant's backend setting has switched,
+    then ``completed``. A completed row is the record that lifts the Alpha block
+    on changing backends for that target.
+    """
+
+    class Status(models.TextChoices):
+        IN_PROGRESS = "in_progress", "In progress"
+        COMPLETED = "completed", "Completed"
+
+    tenant = models.ForeignKey(
+        "tenants.Tenant", on_delete=models.CASCADE, related_name="storage_copies"
+    )
+    public_id = models.CharField(
+        max_length=40, unique=True, editable=False, default=scp_id
+    )
+    status = models.CharField(
+        max_length=12, choices=Status.choices, default=Status.IN_PROGRESS
+    )
+    source_backend = models.CharField(max_length=20)
+    target_backend = models.CharField(max_length=20)
+    # Non-secret target settings (backend, bucket, region, ...), as saved to
+    # ``tenant.settings["storage"]`` when the copy completes.
+    target_config = models.JSONField(default=dict)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    objects = TenantScopedManager()
+    all_tenants = models.Manager()
+
+    class Meta:
+        db_table = "storage_copies"
+        indexes = [models.Index(fields=["tenant", "status"])]
+
+    def __str__(self) -> str:
+        return self.public_id
+
+
+class StorageCopyFile(models.Model):
+    """One key within a :class:`StorageCopy`: the resume record. ``copied``
+    means the object was written to the target and read back with the same size
+    and SHA-256; nothing else counts."""
+
+    class Kind(models.TextChoices):
+        MEDIA = "media", "Media asset"
+        IMPORT = "import", "Import file"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        COPIED = "copied", "Copied and verified"
+        FAILED = "failed", "Failed"
+
+    tenant = models.ForeignKey(
+        "tenants.Tenant", on_delete=models.CASCADE, related_name="storage_copy_files"
+    )
+    copy = models.ForeignKey(
+        StorageCopy, on_delete=models.CASCADE, related_name="files"
+    )
+    kind = models.CharField(max_length=10, choices=Kind.choices)
+    ref = models.CharField(max_length=40)  # public id of the MediaAsset / ImportBatch
+    key = models.CharField(max_length=500)
+    status = models.CharField(
+        max_length=10, choices=Status.choices, default=Status.PENDING
+    )
+    size = models.PositiveBigIntegerField(null=True, blank=True)
+    checksum_sha256 = models.CharField(max_length=64, blank=True)
+    # The target already held identical content, so nothing was written.
+    already_present = models.BooleanField(default=False)
+    error = models.CharField(max_length=500, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = TenantScopedManager()
+    all_tenants = models.Manager()
+
+    class Meta:
+        db_table = "storage_copy_files"
+        constraints = [
+            models.UniqueConstraint(fields=["copy", "key"], name="storage_copy_file_key_uniq")
+        ]
+        ordering = ["id"]
+
+    def __str__(self) -> str:
+        return f"{self.key} ({self.status})"

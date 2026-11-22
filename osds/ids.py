@@ -91,3 +91,7 @@ def imp_id() -> str:
 
 def media_id() -> str:
     return _prefixed("media_")
+
+
+def scp_id() -> str:
+    return _prefixed("scp_")

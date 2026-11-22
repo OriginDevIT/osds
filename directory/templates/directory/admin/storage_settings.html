@@ -6,9 +6,11 @@
 <p class="muted">Where uploaded images and import files are kept.</p>
 {% if form.locked %}
 <p class="muted">Media or imports already exist, so the storage backend cannot be
-changed for now: their files live in the current backend, and the tool to copy
-them to a new one is not built yet. You can still update the credentials and
-settings of the current backend.</p>
+changed here: their files live in the current backend. To move to a new backend,
+copy the files first with the <code>copy_storage</code> management command; the
+backend switches when every file is copied and verified, and the old files are
+left in place. You can still update the credentials and settings of the current
+backend.</p>
 {% endif %}
 <form method="post">
   {% csrf_token %}

@@ -31,6 +31,7 @@ _FACTORIES = [
     (ids.ent_id, "ent_"),
     (ids.imp_id, "imp_"),
     (ids.media_id, "media_"),
+    (ids.scp_id, "scp_"),
 ]
 
 
