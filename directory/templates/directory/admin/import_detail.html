@@ -82,6 +82,10 @@
   </p>
   <button type="submit">Save mapping</button>
 </form>
+{% if has_categories_column %}
+<p><a href="{% url 'directory_admin:import-categories' public_id=batch.public_id %}">Review categories</a>
+  <span class="muted">— see which category values already exist and which are missing.</span></p>
+{% endif %}
 <form method="post" action="{% url 'directory_admin:import-run' public_id=batch.public_id %}">
   {% csrf_token %}
   <button type="submit"{% if not batch.column_mapping %} disabled{% endif %}>Run import</button>

@@ -14,12 +14,12 @@ import json
 from django.contrib import messages
 from django.core.files.base import ContentFile
 from django.db import IntegrityError
-from django.http import FileResponse, Http404, HttpResponse
+from django.http import FileResponse, Http404, HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.crypto import get_random_string
 
 from audit.command_log import log_conclude, log_received, require_autocommit
-from directory import csv_import, importing, media, normalize, services
+from directory import csv_import, import_categories, importing, media, normalize, services
 from directory.access import tenant_admin_required
 from directory.admin_forms import (
     CategoryForm,
@@ -44,6 +44,7 @@ from directory.models import (
     MediaAsset,
     PathRedirect,
 )
+from directory.importing import ImportFileError
 from directory.storage import StorageConfigError, get_tenant_storage
 from tenants.models import StaffMembership
 
@@ -1005,6 +1006,8 @@ def import_detail(request, public_id):
             "generate_slug_label": csv_import.GENERATE_SLUG_LABEL,
             "preview": _import_preview(batch) if can_map and mapping else [],
             "can_map": can_map,
+            "has_categories_column": can_map
+            and "categories" in mapping.values(),
             "can_rollback": can_rollback,
             "rollback_window_passed": window_passed,
             # The batch itself is rollbackable; only the viewer's rank is short.
@@ -1083,3 +1086,50 @@ def import_run(request, public_id):
                 request, "Import queued — the importer will process this."
             )
     return redirect("directory_admin:import-detail", public_id=public_id)
+
+
+@_EDITOR
+def import_categories_review(request, public_id):
+    """Preview the ``categories`` values in the file against the batch type's
+    own categories. A POST from an admin creates the missing ones; nothing is
+    created otherwise, and rows naming an uncreated category still fail as an
+    unknown category."""
+    batch = _get_batch(request, public_id)
+    is_admin = request.membership.role >= StaffMembership.Role.ADMIN
+    open_for_edit = batch.status == ImportBatch.Status.MAPPING
+    has_column = "categories" in (batch.column_mapping or {}).values()
+    plan = None
+    if has_column:
+        try:
+            plan = import_categories.plan_for_batch(batch)
+        except (ImportFileError, StorageConfigError) as exc:
+            messages.error(request, f"Cannot read the uploaded file: {exc}")
+
+    if request.method == "POST":
+        if not is_admin:
+            return HttpResponseForbidden(
+                "Creating categories needs the admin role."
+            )
+        if plan is not None and open_for_edit:
+            created, failed = import_categories.create_missing(
+                batch.listing_type, plan, actor=request.user
+            )
+            if created:
+                messages.success(
+                    request, f"Created {len(created)} categories: " + ", ".join(created)
+                )
+            for slug, reason in failed:
+                messages.error(request, f"Not created: {slug} ({reason})")
+        return redirect("directory_admin:import-categories", public_id=public_id)
+
+    return render(
+        request,
+        "directory/admin/import_categories.html",
+        {
+            "batch": batch,
+            "plan": plan,
+            "has_column": has_column,
+            "can_create": is_admin and open_for_edit,
+            "needs_admin": open_for_edit and not is_admin,
+        },
+    )
