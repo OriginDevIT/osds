@@ -174,6 +174,25 @@ class WizardSettingsTests(WizardBase):
             for value in forbidden:
                 self.assertNotIn(value, blob)
 
+    def test_gcp_step_with_the_real_factory_never_logs_bucket_or_credentials(self):
+        from directory.tests.test_storage_gcp import _sa_json
+
+        self.do_domain(self.client)
+        before = len(settings_rows(self.tenant))
+        info = _sa_json("svc@gcp-leak.example.test")
+        with mock.patch("tenants.storage_forms.check_storage"):  # only the network probe
+            r = self.client.post("/setup/storage/", {
+                "backend": "gcp", "gcp_bucket": "gcp-bucket-leak",
+                "gcp_service_account_json": info,
+            })
+        self.assertEqual(r.status_code, 302)
+        assert_one_save(
+            self, self.tenant, self.operator, page="storage", since=before,
+            fields=["backend", "bucket", "service_account_json"],
+            forbidden=["gcp-bucket-leak", "gcp-leak.example.test", "BEGIN PRIVATE KEY",
+                       json.loads(info)["private_key"][40:80]],
+        )
+
     def test_skipping_mail(self):
         self.do_domain(self.client)
         self.client.post("/setup/storage/", {"backend": "local"})

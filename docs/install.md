@@ -168,6 +168,18 @@ for `/_internal/*`, serve `/.well-known/osds-challenge` over HTTP without
 redirecting it, and the on-demand certificate `ask` endpoint) are listed in the
 README under "Behind a reverse proxy".
 
+## GCP storage
+
+The GCP backend stores media in a Google Cloud Storage bucket using a service
+account key. Create a private bucket, create a service account with read,
+write, list and delete rights on it (for example the Storage Object Admin role
+on that bucket alone), create a JSON key for the account, and paste the bucket
+name and the whole JSON key into the GCP fieldset of the wizard or the Storage
+settings page. The key is stored encrypted and never shown again. OSDS uses
+only the stored key: it never falls back to the host's ambient Google
+credentials. `google-cloud-storage` is pinned in `requirements.txt`. The
+backend has been tested against a mocked client only, not against live GCS.
+
 ## Mail
 
 Mail is optional, but several things depend on it: email claim verification,
