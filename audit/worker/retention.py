@@ -140,3 +140,25 @@ def prune_access_log(*, now) -> TickResult:
     )
     done, _ = AccessLog.all_tenants.filter(id__in=ids).delete()
     return TickResult(done=done, more=len(ids) == RETENTION_CHUNK)
+
+
+# An expired session is inert -- the session backend refuses it -- but the row
+# stays until something deletes it. Kept a day past its end.
+SESSION_KEEP = timedelta(days=1)
+
+
+def prune_expired_sessions(*, now) -> TickResult:
+    """#88: delete operator session rows that expired more than a day ago.
+
+    Operator sessions are Django session rows, not tenant data, so there is no
+    tenant to scope by. The key is the primary key, so chunks are ordered by it;
+    bounded and idempotent like the sweeps above."""
+    from django.contrib.sessions.models import Session
+
+    keys = list(
+        Session.objects.filter(expire_date__lt=now - SESSION_KEEP)
+        .order_by("session_key")
+        .values_list("session_key", flat=True)[:RETENTION_CHUNK]
+    )
+    done, _ = Session.objects.filter(session_key__in=keys).delete()
+    return TickResult(done=done, more=len(keys) == RETENTION_CHUNK)
