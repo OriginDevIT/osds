@@ -9,7 +9,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('directory', '0013_lead_indexes'),
+        ('directory', '0014_import_phone_country_and_separators'),
         ('tenants', '0005_storage_access_key_to_secret'),
     ]
 
