@@ -1676,7 +1676,7 @@ Backends form a registry of factories in `directory/storage.py`, each keyed by n
 | `local` | Implemented. The default. |
 | `s3` | Implemented (`boto3`). Covers AWS S3 and S3-compatible services through an endpoint URL. |
 | `azure` | Implemented (`azure-storage-blob`). |
-| `gcp` | Implemented in code (`google-cloud-storage`), pending merge (#303). Until it merges, selecting it is refused by the probe. |
+| `gcp` | Implemented over `google-cloud-storage` (#303). |
 
 Each cloud SDK is a pinned runtime dependency added with its own backend change.
 
@@ -1684,7 +1684,7 @@ An opt-in `minio` compose service, behind the `minio` profile, gives an S3-compa
 
 Saving a cloud backend first runs a probe: write, read, list and delete a throwaway object with the supplied credentials. A failing probe saves nothing, and there is no automatic fallback to local disk. `manage.py check_storage` re-runs the probe from the command line.
 
-**Changing backends.** A backend switch is governed by a guard. Once a tenant has media or import batches, its stored files live in the current backend, so changing the backend is refused. The storage copy tool (`manage.py copy_storage`, #308, pending merge) is the only path that lifts the guard: it copies every stored file to the target, verifies each copy by size and SHA-256, never deletes the source, and switches the backend only when every file is verified. Until that tool merges, a tenant with media or imports cannot change backend, so the backend is chosen before the first upload.
+**Changing backends.** A backend switch is governed by a guard. Once a tenant has media or import batches, its stored files live in the current backend, so changing the backend is refused. The storage copy tool (`manage.py copy_storage`, #308) is the only path that lifts the guard: it copies every stored file to the target, verifies each copy by size and SHA-256, never deletes the source, and switches the backend only when every file is verified. Outside that tool, a tenant with media or imports cannot change backend, so the backend is chosen before the first upload.
 
 **Not shipped:** automatic migration between backends, a write freeze during a copy, and any storage backend beyond the four above.
 
