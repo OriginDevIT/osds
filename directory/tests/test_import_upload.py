@@ -135,6 +135,37 @@ class ValidateMappingTests(SimpleTestCase):
     def test_id_alone_is_allowed(self):
         self.assertEqual(self._validate({"URL slug": "id"}), {"URL slug": "id"})
 
+    def _validate_generate(self, submitted):
+        return csv_import.validate_mapping(
+            submitted,
+            headers=self.HEADERS,
+            listing_type=_FakeType(),
+            generate_slug=True,
+        )
+
+    def test_generate_slug_accepts_name_without_id_or_slug(self):
+        self.assertEqual(
+            self._validate_generate({"Business Name": "name"}),
+            {"Business Name": "name"},
+        )
+
+    def test_generate_slug_without_name_is_rejected(self):
+        with self.assertRaises(csv_import.MappingError):
+            self._validate_generate({"Phone": "contact.phone_e164"})
+
+    def test_generate_slug_with_a_slug_column_is_rejected(self):
+        with self.assertRaises(csv_import.MappingError):
+            self._validate_generate({"Business Name": "name", "URL slug": "slug"})
+
+    def test_generate_slug_with_an_id_column_is_rejected(self):
+        # A derived slug on an id-matched row would rewrite the slug.
+        with self.assertRaises(csv_import.MappingError):
+            self._validate_generate({"Business Name": "name", "URL slug": "id"})
+
+    def test_no_id_no_slug_no_name_no_generate_is_rejected(self):
+        with self.assertRaises(csv_import.MappingError):
+            self._validate({"Phone": "contact.phone_e164"})
+
 
 class SuggestMappingTests(SimpleTestCase):
     def _suggest(self, headers):
@@ -465,6 +496,37 @@ class ImportMappingViewTests(_Setup, TestCase):
             b.column_mapping,
             {"Name": "name", "Slug": "slug", "Phone": "contact.phone_e164"},
         )
+
+    def test_detail_labels_generate_slug_as_create_only(self):
+        b = self._batch()
+        resp = self._client(self.editor).get(
+            self._url("import-detail", public_id=b.public_id), HTTP_HOST=HOST
+        )
+        self.assertContains(resp, 'name="generate_slug"')
+        self.assertContains(resp, "Generate slug from name")
+        self.assertContains(resp, "creates new listings only")
+
+    def test_saving_generate_slug_persists_flag_and_mapping(self):
+        b = self._batch()
+        self._client(self.editor).post(
+            self._url("import-mapping", public_id=b.public_id),
+            {"map__0": "name", "generate_slug": "on"},
+            HTTP_HOST=HOST,
+        )
+        b.refresh_from_db()
+        self.assertTrue(b.generate_slug)
+        self.assertEqual(b.column_mapping, {"Name": "name"})
+
+    def test_generate_slug_with_slug_column_is_not_saved(self):
+        b = self._batch()
+        self._client(self.editor).post(
+            self._url("import-mapping", public_id=b.public_id),
+            {"map__0": "name", "map__1": "slug", "generate_slug": "on"},
+            HTTP_HOST=HOST,
+        )
+        b.refresh_from_db()
+        self.assertFalse(b.generate_slug)
+        self.assertEqual(b.column_mapping, {})
 
     def test_invalid_mapping_is_not_saved(self):
         b = self._batch()

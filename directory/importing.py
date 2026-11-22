@@ -32,8 +32,14 @@ from audit import events
 from audit.outbox import emit
 from directory.csv_import import ROWS_PER_PASS, build_payload
 from directory.field_schema import SchemaError
-from directory.models import ImportBatch, ImportBatchListing
-from directory.services import RejectedField, Suppressed, upsert_listing
+from directory import normalize
+from directory.models import ImportBatch, ImportBatchListing, Listing
+from directory.services import (
+    RESERVED_SLUGS,
+    RejectedField,
+    Suppressed,
+    upsert_listing,
+)
 from directory.storage import StorageConfigError, get_tenant_storage
 from osds.tenancy import tenant_context
 
@@ -278,22 +284,67 @@ def _process_row(batch, cells, headers, mapping, n) -> None:
         phone_country=batch.phone_default_country,
         separators=batch.column_separators,
     )
-    result = upsert_listing(
-        batch.tenant,
-        listing_type=batch.listing_type,
-        payload=payload,
-        actor=_actor(batch),
-        source="csv_import",
-        idempotency_key=f"csv:{batch.public_id}:row_{n}",
-        import_batch=batch,
-        suppression_check=True,
-    )
+    derived = batch.generate_slug
+    if derived:
+        payload["slug"] = _derive_slug(payload)
+    try:
+        result = upsert_listing(
+            batch.tenant,
+            listing_type=batch.listing_type,
+            payload=payload,
+            actor=_actor(batch),
+            source="csv_import",
+            idempotency_key=f"csv:{batch.public_id}:row_{n}",
+            import_batch=batch,
+            suppression_check=True,
+            # A derived slug is never a match key: a collision is an error.
+            must_create=derived,
+        )
+    except SchemaError as exc:
+        existing = _existing_for_slug(batch, payload["slug"]) if derived else None
+        if existing is None:
+            raise
+        raise SchemaError([_collision_message(payload["slug"], existing)]) from exc
     note = (
         {"row": n, "note": "reprocessed after worker restart"}
         if result.outcome == "replayed"
         else None
     )
     _bump(batch, n, note=note, **{_OUTCOME_COUNTER[result.outcome]: 1})
+
+
+def _derive_slug(payload) -> str:
+    """The slug for a "Generate slug from name" row, from the one shared
+    ``normalize.slug``. Empty and reserved results are errors; nothing is
+    substituted or suffixed."""
+    name = payload.get("name")
+    if not name:
+        raise SchemaError(["name is empty, so no slug can be generated"])
+    slug = normalize.slug(name)
+    if not slug:
+        raise SchemaError(
+            [f"name '{name}' has no characters usable in a slug"]
+        )
+    if slug in RESERVED_SLUGS:
+        raise SchemaError(
+            [f"name '{name}' generates the reserved slug '{slug}'"]
+        )
+    return slug
+
+
+def _existing_for_slug(batch, slug):
+    return Listing.objects.filter(
+        tenant=batch.tenant, listing_type=batch.listing_type, slug=slug
+    ).first()
+
+
+def _collision_message(slug, existing) -> str:
+    return (
+        f"generated slug '{slug}' already belongs to listing "
+        f"{existing.public_id}; Generate slug only creates new listings, so "
+        "edit that listing in admin, or re-import with the ID or an explicit "
+        "slug column mapped"
+    )
 
 
 def _row_error(n, exc) -> dict:

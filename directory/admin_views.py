@@ -1002,6 +1002,7 @@ def import_detail(request, public_id):
             "targets": csv_import.allowed_targets(batch.listing_type),
             "multi_targets": sorted(multi_targets),
             "phone_countries": sorted(normalize.PHONE_COUNTRIES),
+            "generate_slug_label": csv_import.GENERATE_SLUG_LABEL,
             "preview": _import_preview(batch) if can_map and mapping else [],
             "can_map": can_map,
             "can_rollback": can_rollback,
@@ -1033,11 +1034,13 @@ def import_mapping(request, public_id):
             header: request.POST.get(f"map__{i}", "")
             for i, header in enumerate(batch.detected_headers or [])
         }
+        generate_slug = request.POST.get("generate_slug") == "on"
         try:
             cleaned = csv_import.validate_mapping(
                 submitted,
                 headers=batch.detected_headers or [],
                 listing_type=batch.listing_type,
+                generate_slug=generate_slug,
             )
             separators = csv_import.clean_separators(
                 {
@@ -1054,11 +1057,13 @@ def import_mapping(request, public_id):
             messages.error(request, str(exc))
         else:
             batch.column_mapping = cleaned
+            batch.generate_slug = generate_slug
             batch.column_separators = separators
             batch.phone_default_country = phone_country
             batch.save(
                 update_fields=[
                     "column_mapping", "column_separators", "phone_default_country",
+                    "generate_slug",
                 ]
             )
             messages.success(request, "Column mapping saved.")
