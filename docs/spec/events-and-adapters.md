@@ -1628,7 +1628,7 @@ The exception is narrow, and a table qualifies for it only when all three hold:
 
 1. It records an **attempt**, not a state change. Attempts can fail before a tenant is resolvable; state changes cannot.
 2. Rows with a null `tenant_id` are **unreadable by the application role**. The tenant-scoped policy matches no null row, so `osds_app` never sees another party's malformed payload.
-3. Those rows are written **already concluded**, so the application never needs to read one back to update it. `UPDATE ... WHERE id` still consults the SELECT policy; a row the session cannot read is a row it cannot update.
+3. Those rows are written **already concluded**, so the application never needs to read one back to update it. `UPDATE ... WHERE id` still consults the SELECT policy; a row the session cannot read is a row it cannot update. The one extension is a command whose tenant is **unresolvable at receive** because the command creates it (`tenant.create`): its row is written unconcluded with a null `tenant_id` and concluded exactly once by the same process that opened it, holding the row it inserted. The policy must admit that conclusion for the opening session only; it never admits reading a null-tenant row back, and a null-tenant row not concluded by its opener stays unconcluded, the same "threw mid-apply" record as any other.
 
 **A new exception is a maintainer decision, recorded in `docs/decisions.md`.** The rule is general enough to be argued into, which is why claiming it is not self-service. Today `command_log` is the only table that holds it.
 
