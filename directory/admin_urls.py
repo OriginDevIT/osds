@@ -154,6 +154,11 @@ urlpatterns = [
         views.import_mapping,
         name="import-mapping",
     ),
+    path(
+        "imports/<str:public_id>/categories/",
+        views.import_categories_review,
+        name="import-categories",
+    ),
     path("imports/<str:public_id>/run/", views.import_run, name="import-run"),
     path(
         "imports/<str:public_id>/rollback/",

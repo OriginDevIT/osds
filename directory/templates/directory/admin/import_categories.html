@@ -1,0 +1,50 @@
+{% extends "directory/admin/base.html" %}
+{% block title %}Categories for import {{ batch.public_id }}{% endblock %}
+{% block content %}
+<h1>Categories in this import</h1>
+<p>Listing type: <strong>{{ batch.listing_type.key }}</strong>. Only this type's categories are compared and created.</p>
+
+{% if not has_column %}
+  <p class="muted">No categories column is mapped. Map one on the import page to review categories.</p>
+{% elif plan %}
+  <h2>Existing ({{ plan.existing|length }})</h2>
+  {% if plan.existing %}
+  <table>
+    <thead><tr><th>Value</th><th>Slug</th></tr></thead>
+    <tbody>{% for value, slug in plan.existing %}<tr><td>{{ value }}</td><td><code>{{ slug }}</code></td></tr>{% endfor %}</tbody>
+  </table>
+  {% else %}<p class="muted">None.</p>{% endif %}
+
+  <h2>Missing ({{ plan.missing|length }})</h2>
+  {% if plan.missing %}
+  <table>
+    <thead><tr><th>Value (becomes the name)</th><th>Slug</th></tr></thead>
+    <tbody>{% for value, slug in plan.missing %}<tr><td>{{ value }}</td><td><code>{{ slug }}</code></td></tr>{% endfor %}</tbody>
+  </table>
+  <p class="muted">Created categories are top level, named as written, with the default order.</p>
+  {% else %}<p class="muted">None.</p>{% endif %}
+
+  {% if plan.flagged %}
+  <h2>Cannot be created ({{ plan.flagged|length }})</h2>
+  <table>
+    <thead><tr><th>Value</th><th>Why</th></tr></thead>
+    <tbody>{% for value, reason in plan.flagged %}<tr><td>{{ value }}</td><td>{{ reason }}</td></tr>{% endfor %}</tbody>
+  </table>
+  <p class="muted">Rows naming these values fail as an unknown category. Fix the file or add the category by hand.</p>
+  {% endif %}
+
+  {% if plan.missing %}
+    {% if can_create %}
+    <form method="post">
+      {% csrf_token %}
+      <button type="submit" name="action" value="create">Create {{ plan.missing|length }} missing categories</button>
+    </form>
+    {% elif needs_admin %}
+    <p class="muted">Creating categories needs the admin role.</p>
+    {% endif %}
+    <p class="muted">Leave them uncreated and any row naming a missing category fails as an unknown category.</p>
+  {% endif %}
+{% endif %}
+
+<p><a href="{% url 'directory_admin:import-detail' public_id=batch.public_id %}">Back to the import</a></p>
+{% endblock %}

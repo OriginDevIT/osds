@@ -261,6 +261,36 @@ def split_cell(value: str, separator: str = DEFAULT_SEPARATOR) -> "list[str]":
     return [p.strip() for p in value.split(separator or DEFAULT_SEPARATOR) if p.strip()]
 
 
+def category_slug(value: str) -> str:
+    """The slug a category cell value resolves to. A value with no usable slug
+    is returned as written, so the row fails as an unknown category rather
+    than the value being dropped."""
+    return normalize.slug(value) or value
+
+
+def category_values(
+    rows,
+    headers: "list[str]",
+    column_mapping: dict,
+    separators: "dict | None" = None,
+) -> "list[str]":
+    """Distinct ``categories`` cell values across ``rows``, as written, in
+    first-seen order, split on the column's separator. Empty when no column is
+    mapped to ``categories``."""
+    header = next(
+        (h for h, t in column_mapping.items() if t == "categories"), None
+    )
+    if header is None:
+        return []
+    sep = (separators or {}).get(header, DEFAULT_SEPARATOR)
+    seen: "dict[str, None]" = {}
+    for cells in rows:
+        cell = (dict(zip(headers, cells)).get(header) or "").strip()
+        for part in split_cell(cell, sep):
+            seen.setdefault(part)
+    return list(seen)
+
+
 def build_payload(
     cells,
     headers: "list[str]",
@@ -294,7 +324,7 @@ def build_payload(
             if not parts:
                 continue
             if target == "categories":
-                payload["categories"] = parts
+                payload["categories"] = [category_slug(p) for p in parts]
             else:
                 payload.setdefault("custom_fields", {})[target.split(".", 1)[1]] = parts
         elif target == "contact.phone_e164":
