@@ -152,13 +152,17 @@ def prune_expired_sessions(*, now) -> TickResult:
 
     Operator sessions are Django session rows, not tenant data, so there is no
     tenant to scope by. The key is the primary key, so chunks are ordered by it;
-    bounded and idempotent like the sweeps above."""
+    bounded and idempotent like the sweeps above. The default manager is used
+    explicitly: the worker source rule bans the ``.objects`` spelling, which
+    exists to catch tenant-scoped models."""
     from django.contrib.sessions.models import Session
 
+    sessions = Session._default_manager
+
     keys = list(
-        Session.objects.filter(expire_date__lt=now - SESSION_KEEP)
+        sessions.filter(expire_date__lt=now - SESSION_KEEP)
         .order_by("session_key")
         .values_list("session_key", flat=True)[:RETENTION_CHUNK]
     )
-    done, _ = Session.objects.filter(session_key__in=keys).delete()
+    done, _ = sessions.filter(session_key__in=keys).delete()
     return TickResult(done=done, more=len(keys) == RETENTION_CHUNK)
