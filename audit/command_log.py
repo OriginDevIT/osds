@@ -19,6 +19,7 @@ sibling event-log writer.
 
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 from typing import Any
 
@@ -27,6 +28,8 @@ from django.utils import timezone
 
 from audit.models import CommandLog
 from directory.normalize import jsonable
+
+logger = logging.getLogger("osds.command_log")
 
 
 class MustNotBeInTransaction(RuntimeError):
@@ -119,6 +122,39 @@ def log_conclude(
         row.payload = jsonable(payload)
         fields.append("payload")
     row.save(update_fields=fields)
+
+
+def log_conclude_applied(
+    row: CommandLog,
+    *,
+    result_event_id: "str | None" = None,
+    problem: "dict | None" = None,
+    payload: Any = _KEEP,
+) -> None:
+    """Conclude a row ``applied`` after the command committed, never raising.
+
+    The state change and its outbox event are already durable, so a failure of
+    this bookkeeping write must not make the caller think the command failed.
+    The failure is logged at ERROR (logger ``osds.command_log``, carrying the
+    row's primary key and command) and the row stays at ``outcome`` null with
+    ``concluded_at`` null -- the key a reconciler closes it on. A retry with
+    the same idempotency key resolves to the original result.
+    """
+    try:
+        log_conclude(
+            row,
+            outcome=CommandLog.Outcome.APPLIED,
+            result_event_id=result_event_id,
+            problem=problem,
+            payload=payload,
+        )
+    except Exception:
+        logger.exception(
+            "command_log conclude failed after apply; row left unconcluded "
+            "(command_log_id=%s command=%s)",
+            row.pk,
+            row.command,
+        )
 
 
 SETTINGS_UPDATE = "settings.update"

@@ -27,6 +27,7 @@ from audit.command_log import (
     settings_command,
     MustNotBeInTransaction,
     log_conclude,
+    log_conclude_applied,
     log_received,
     log_replay,
     require_autocommit,
@@ -901,9 +902,8 @@ def upsert_listing(
     # Any other exception: the row keeps outcome=NULL, concluded_at=NULL --
     # that is the "threw mid-apply" record (spec §11.2). Propagate.
 
-    log_conclude(
+    log_conclude_applied(
         row,
-        outcome="applied",
         result_event_id=result.event_id,  # None for an unchanged write (ruling 5)
     )
     return result
@@ -1081,7 +1081,7 @@ def rollback_import_batch(batch: ImportBatch, *, operator) -> str:
             log_row, outcome="rejected", problem={exc.reason: exc.message}
         )
         raise
-    log_conclude(log_row, outcome="applied", result_event_id=event_id)
+    log_conclude_applied(log_row, result_event_id=event_id)
     return event_id
 
 
@@ -1417,7 +1417,7 @@ def submit_claim(
     # Any other exception: the row keeps outcome=NULL (spec §11.2's "threw
     # mid-apply" record). Propagate.
 
-    log_conclude(row, outcome="applied", result_event_id=event_id)
+    log_conclude_applied(row, result_event_id=event_id)
     return claim
 
 
@@ -1887,7 +1887,7 @@ def start_claim_verification(
     if result in ("cooldown", "cap"):
         log_conclude(row, outcome="rejected", problem={"reason": result})
         raise VerificationRefused(result)
-    log_conclude(row, outcome="applied", result_event_id=result_event_id)
+    log_conclude_applied(row, result_event_id=result_event_id)
     return claim
 
 
@@ -2051,5 +2051,5 @@ def verify_claim_code(
     except VerificationRefused as exc:
         log_conclude(row, outcome="rejected", problem={"reason": exc.reason})
         raise
-    log_conclude(row, outcome="applied", result_event_id=result_event_id)
+    log_conclude_applied(row, result_event_id=result_event_id)
     return claim, correct
