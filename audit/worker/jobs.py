@@ -26,6 +26,7 @@ from directory import jobs as directory_jobs
 
 REINDEX_EVERY = timedelta(seconds=30)
 RETENTION_EVERY = timedelta(hours=24)
+SESSION_PRUNE_EVERY = timedelta(hours=1)
 RATE_LIMIT_PRUNE_EVERY = timedelta(hours=1)
 OWNER_AUTH_PRUNE_EVERY = timedelta(hours=1)
 ENTITLEMENT_TRANSITIONS_EVERY = timedelta(minutes=5)
@@ -79,6 +80,12 @@ def build_tick_registry(*, out: IO[str]) -> TickRegistry:
         "access_log_retention",
         retention.prune_access_log,
         every=RETENTION_EVERY,
+    )
+    # Operator sessions past their expiry (#88).
+    registry.register(
+        "expired_session_prune",
+        retention.prune_expired_sessions,
+        every=SESSION_PRUNE_EVERY,
     )
     registry.register(
         "rate_limit_prune",

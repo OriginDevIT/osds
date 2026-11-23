@@ -386,3 +386,54 @@ class RegistrationTests(TestCase):
             stats = registry.run_due(now=NOW)
         self.assertEqual(stats.failures, [])
         self.assertTrue(spy.called)
+
+
+class ExpiredSessionPruneTests(TestCase):
+    """Operator sessions live in ``django_session``; an expired row is inert but
+    stays until this job removes it (#88)."""
+
+    def _session(self, key, expire_date):
+        from django.contrib.sessions.models import Session
+
+        return Session.objects.create(
+            session_key=key, session_data="x", expire_date=expire_date
+        )
+
+    def _keys(self):
+        from django.contrib.sessions.models import Session
+
+        return set(Session.objects.values_list("session_key", flat=True))
+
+    def test_deletes_sessions_expired_more_than_a_day_ago_and_keeps_the_rest(self):
+        self._session("long_dead", NOW - 40 * DAY)
+        self._session("just_dead", NOW - timedelta(days=1, seconds=1))
+        self._session("at_edge", NOW - timedelta(days=1))
+        self._session("recent_dead", NOW - timedelta(hours=2))
+        self._session("live", NOW + timedelta(hours=3))
+        result = retention.prune_expired_sessions(now=NOW)
+        self.assertEqual(result.done, 2)
+        self.assertFalse(result.more)
+        self.assertEqual(self._keys(), {"at_edge", "recent_dead", "live"})
+
+    def test_is_idempotent(self):
+        self._session("long_dead", NOW - 40 * DAY)
+        retention.prune_expired_sessions(now=NOW)
+        self.assertEqual(retention.prune_expired_sessions(now=NOW).done, 0)
+
+    def test_is_bounded_and_reports_backlog(self):
+        for n in range(3):
+            self._session(f"dead{n}", NOW - 40 * DAY)
+        with mock.patch.object(retention, "RETENTION_CHUNK", 2):
+            first = retention.prune_expired_sessions(now=NOW)
+            second = retention.prune_expired_sessions(now=NOW)
+        self.assertEqual((first.done, first.more), (2, True))
+        self.assertEqual((second.done, second.more), (1, False))
+        self.assertEqual(self._keys(), set())
+
+    def test_is_registered_on_the_worker(self):
+        import io
+
+        from audit.worker.jobs import build_tick_registry
+
+        names = [j.name for j in build_tick_registry(out=io.StringIO()).jobs]
+        self.assertIn("expired_session_prune", names)
