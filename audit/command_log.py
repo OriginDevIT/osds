@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from django.db import transaction
@@ -88,6 +89,28 @@ def log_received(
 
 
 _KEEP = object()
+
+_applying_row: ContextVar["int | None"] = ContextVar("command_log_applying", default=None)
+
+
+@contextmanager
+def applying(row: CommandLog):
+    """Mark the command apply that runs inside this block as ``row``'s.
+
+    Every event ``emit`` writes inside it carries the row's primary key in
+    ``OutboxEvent.command_log_id``. That is the link the reconciler reads to
+    prove a command's event is durable when the row's own conclude write was
+    lost. Wrap only the apply call, never the conclude.
+    """
+    token = _applying_row.set(row.pk)
+    try:
+        yield
+    finally:
+        _applying_row.reset(token)
+
+
+def current_command_log_id() -> "int | None":
+    return _applying_row.get()
 
 
 def log_conclude(
