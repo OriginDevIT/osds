@@ -1664,8 +1664,29 @@ Target: a semi-technical operator who can rent a server but should never edit YA
 osds-app       (web + admin + API)
 osds-worker    (outbox consumer, scheduled jobs, adapter runtime)
 postgres       (bundled; overridable via DATABASE_URL)
-minio          (bundled S3-compatible storage; overridable via S3_* vars)
+object storage (the `osds-media` named volume by default; a per-tenant cloud backend by configuration)
 ```
+
+**Object storage.** Storage is per-tenant and resolved at runtime from tenant configuration, not from process settings. The default is local disk on the `osds-media` named volume, mounted at `OSDS_MEDIA_ROOT` in both `osds-app` and `osds-worker`. A plain `docker compose up` therefore runs four containers and needs no bucket, account or credentials. There is no bundled object-storage container; an operator who wants a cloud backend points a tenant at one through the wizard's Storage step or the admin Storage settings page.
+
+Backends form a registry of factories in `directory/storage.py`, each keyed by name and applying the tenant's key prefix so one tenant's keys can never resolve into another's tree. Credentials are stored keys held as encrypted tenant secrets, never an ambient cloud identity. Status of each backend:
+
+| Backend | Status |
+| --- | --- |
+| `local` | Implemented. The default. |
+| `s3` | Implemented (`boto3`). Covers AWS S3 and S3-compatible services through an endpoint URL. |
+| `azure` | Implemented (`azure-storage-blob`). |
+| `gcp` | Implemented over `google-cloud-storage` (#303). |
+
+Each cloud SDK is a pinned runtime dependency added with its own backend change.
+
+An opt-in `minio` compose service, behind the `minio` profile, gives an S3-compatible endpoint for exercising the `s3` backend without a cloud account. It is a development aid, not part of the deployment model, and is not started by default.
+
+Saving a cloud backend first runs a probe: write, read, list and delete a throwaway object with the supplied credentials. A failing probe saves nothing, and there is no automatic fallback to local disk. `manage.py check_storage` re-runs the probe from the command line.
+
+**Changing backends.** A backend switch is governed by a guard. Once a tenant has media or import batches, its stored files live in the current backend, so changing the backend is refused. The storage copy tool (`manage.py copy_storage`, #308) is the only path that lifts the guard: it copies every stored file to the target, verifies each copy by size and SHA-256, never deletes the source, and switches the backend only when every file is verified. Outside that tool, a tenant with media or imports cannot change backend, so the backend is chosen before the first upload.
+
+**Not shipped:** automatic migration between backends, a write freeze during a copy, and any storage backend beyond the four above.
 
 **Distribution:** `docker-compose.yml` as the reference path; one-click templates for Railway, Render and Coolify; marketplace images where genuinely one-click; Helm chart later if anyone asks.
 
