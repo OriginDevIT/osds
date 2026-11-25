@@ -1282,7 +1282,7 @@ Secrets never appear in `config`, never appear in event payloads, and are redact
 
 - At-least-once, dedupe on `event.id`.
 - Ordering guaranteed per `subject`, not globally.
-- Retry: exponential, jittered, `1s → 2s → 4s → … → 1h`, 12 attempts.
+- Retry: 12 attempts. Attempt 1 is the initial delivery, made on the first drain pass. The delay before the retry that follows completed attempt `n` is `min(2**(n-1), 3600)` seconds with full jitter (a uniform draw from 0 to that value), so the first retry follows about 1s later. 3600s (1h) is a cap on a single delay, not a term of the sequence: eleven delays, doubling from 1s to 1024s, are reached before exhaustion and the cap is never hit. The total retry window is therefore at most about 34 minutes (2047s), and about 17 minutes on average under jitter.
 - Exhaustion lands in the tenant DLQ with the full envelope, replayable from the admin UI.
 - Handler timeout 30s.
 - `failed` with `permanent: true` skips retries.
