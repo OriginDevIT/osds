@@ -1,0 +1,48 @@
+# Development and test database only. Never use this file for an install.
+#
+# It runs a single throwaway Postgres whose durability flags are turned off:
+# fsync, synchronous_commit and full_page_writes all cost disk round-trips that
+# buy nothing for a database that is recreated at will, and the test suite
+# creates and drops tables constantly. With them on, the full suite took
+# 1300-1700s locally; with them off it runs in under a minute. A crash or power
+# loss can corrupt this database. That is acceptable here and nowhere else.
+#
+#   docker compose -f docker-compose.dev.yml up -d
+#   DATABASE_URL=postgres://postgres:postgres@localhost:5432/osds_test
+#
+# Set OSDS_DEV_PG_PORT to publish on a different host port if 5432 is taken.
+# The credentials are throwaway development values and the port binds to
+# loopback only.
+
+services:
+  postgres-dev:
+    image: postgres:16
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - work_mem=32MB
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: osds_test
+    ports:
+      - "127.0.0.1:${OSDS_DEV_PG_PORT:-5432}:5432"
+    volumes:
+      - osds-dev-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "osds_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  osds-dev-pgdata:

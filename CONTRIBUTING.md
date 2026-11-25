@@ -28,6 +28,18 @@ Commits must be signed off under the Developer Certificate of Origin:
 
     git commit -s -m "feat: your change"
 
+## Local test database
+`docker-compose.dev.yml` runs a Postgres for development and tests:
+
+    docker compose -f docker-compose.dev.yml up -d
+
+then point `DATABASE_URL` at `postgres://postgres:postgres@localhost:5432/osds_test`.
+It runs with `fsync`, `synchronous_commit` and `full_page_writes` off, which makes the
+full suite run in about a minute instead of tens of minutes. Those flags trade crash
+safety for speed, so this database can be corrupted by a crash and is for development
+and tests only. Never use that file, or those flags, for an install; `docker-compose.yml`
+keeps the defaults.
+
 ## Before opening a PR
 
     pnpm typecheck && pnpm lint && pnpm test
