@@ -19,7 +19,7 @@ from functools import partial
 from typing import IO
 
 from audit.worker.loop import TICK_PERIOD
-from audit.worker import retention
+from audit.worker import reconcile, retention
 from audit.worker.tick import TickRegistry
 from billing import jobs as billing_jobs
 from directory import jobs as directory_jobs
@@ -31,6 +31,7 @@ RATE_LIMIT_PRUNE_EVERY = timedelta(hours=1)
 OWNER_AUTH_PRUNE_EVERY = timedelta(hours=1)
 ENTITLEMENT_TRANSITIONS_EVERY = timedelta(minutes=5)
 RENEWAL_NOTICES_EVERY = timedelta(hours=1)
+COMMAND_LOG_RECONCILE_EVERY = timedelta(minutes=5)
 
 
 def _heartbeat(out: IO[str], *, now) -> None:
@@ -86,6 +87,13 @@ def build_tick_registry(*, out: IO[str]) -> TickRegistry:
         "expired_session_prune",
         retention.prune_expired_sessions,
         every=SESSION_PRUNE_EVERY,
+    )
+    # Close command-log rows whose conclude write was lost after a durable
+    # apply (spec §11.2, #97).
+    registry.register(
+        "command_log_reconcile",
+        reconcile.reconcile_command_log,
+        every=COMMAND_LOG_RECONCILE_EVERY,
     )
     registry.register(
         "rate_limit_prune",

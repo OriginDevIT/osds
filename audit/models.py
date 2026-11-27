@@ -85,6 +85,13 @@ class OutboxEvent(models.Model):
     # ``event_payload_retention`` job, which stamps ``payload_nulled_at``. The
     # column is NOT NULL: the envelope always carries a ``data`` object.
     data = models.JSONField(default=dict, blank=True)
+    # The ``CommandLog`` row (primary key) of the command that emitted this
+    # event, set by ``emit`` from the ambient ``audit.command_log.applying``
+    # scope. Not a foreign key: the command log is written outside the command
+    # transaction and is not a parent of the event. Its one reader is the
+    # command-log reconciler, which uses it to prove a command's event is
+    # durable. Null for events emitted outside a logged command.
+    command_log_id = models.BigIntegerField(null=True, blank=True)
 
     status = models.CharField(
         max_length=10, choices=Status.choices, default=Status.PENDING
@@ -106,6 +113,7 @@ class OutboxEvent(models.Model):
             models.Index(fields=["status", "id"]),
             models.Index(fields=["subject"]),
             models.Index(fields=["type"]),
+            models.Index(fields=["command_log_id"]),
         ]
 
     def __str__(self) -> str:

@@ -37,6 +37,7 @@ def emit(
     if event_type not in ALL_EVENT_TYPES:
         raise ValueError(f"unknown event type: {event_type!r}")
 
+    from audit.command_log import current_command_log_id
     from audit.models import OutboxEvent
 
     event = OutboxEvent.all_tenants.create(
@@ -49,6 +50,7 @@ def emit(
         origin=origin or "",
         trace_id=trace_id or "",
         data=data or {},
+        command_log_id=current_command_log_id(),
     )
     transaction.on_commit(_notify_outbox)
     return event

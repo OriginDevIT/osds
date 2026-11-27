@@ -27,6 +27,7 @@ from audit.command_log import (
     settings_command,
     MustNotBeInTransaction,
     log_conclude,
+    applying,
     log_conclude_applied,
     log_received,
     log_replay,
@@ -876,20 +877,21 @@ def upsert_listing(
     )
 
     try:
-        result = _apply_upsert(
-            tenant,
-            listing_type=listing_type,
-            payload=payload,
-            actor=actor,
-            source=source,
-            trace_id=trace_id,
-            origin=origin,
-            enforce_required=enforce_required,
-            import_batch=import_batch,
-            submitted_by=submitted_by,
-            must_create=must_create,
-            suppression_check=suppression_check,
-        )
+        with applying(row):
+            result = _apply_upsert(
+                tenant,
+                listing_type=listing_type,
+                payload=payload,
+                actor=actor,
+                source=source,
+                trace_id=trace_id,
+                origin=origin,
+                enforce_required=enforce_required,
+                import_batch=import_batch,
+                submitted_by=submitted_by,
+                must_create=must_create,
+                suppression_check=suppression_check,
+            )
     except Suppressed as exc:
         log_conclude(row, outcome="rejected", problem={"suppressed": exc.key_hash})
         raise
@@ -1075,7 +1077,8 @@ def rollback_import_batch(batch: ImportBatch, *, operator) -> str:
         payload={"batch_id": batch.public_id},
     )
     try:
-        event_id = _do_rollback(batch, actor=actor, operator=operator)
+        with applying(log_row):
+            event_id = _do_rollback(batch, actor=actor, operator=operator)
     except RollbackRefused as exc:
         log_conclude(
             log_row, outcome="rejected", problem={exc.reason: exc.message}
@@ -1399,15 +1402,16 @@ def submit_claim(
         payload=payload,
     )
     try:
-        claim, event_id = _apply_submit_claim(
-            tenant,
-            listing=listing,
-            method=method,
-            claimant=normalized_claimant,
-            consent=consent,
-            ip=ip,
-            claim_public_id=claim_public_id,
-        )
+        with applying(row):
+            claim, event_id = _apply_submit_claim(
+                tenant,
+                listing=listing,
+                method=method,
+                claimant=normalized_claimant,
+                consent=consent,
+                ip=ip,
+                claim_public_id=claim_public_id,
+            )
     except ConsentRequired as exc:
         log_conclude(row, outcome="rejected", problem={"missing_consent": exc.channel})
         raise
@@ -1880,7 +1884,8 @@ def start_claim_verification(
         payload={"claim_id": claim.public_id},
     )
     try:
-        claim, result, result_event_id = _apply_start_verification(tenant, claim=claim)
+        with applying(row):
+            claim, result, result_event_id = _apply_start_verification(tenant, claim=claim)
     except VerificationRefused as exc:
         log_conclude(row, outcome="rejected", problem={"reason": exc.reason})
         raise
@@ -2045,9 +2050,10 @@ def verify_claim_code(
         payload={"claim_id": claim.public_id},
     )
     try:
-        claim, correct, result_event_id = _apply_verify_claim_code(
-            tenant, claim=claim, code=code
-        )
+        with applying(row):
+            claim, correct, result_event_id = _apply_verify_claim_code(
+                tenant, claim=claim, code=code
+            )
     except VerificationRefused as exc:
         log_conclude(row, outcome="rejected", problem={"reason": exc.reason})
         raise
